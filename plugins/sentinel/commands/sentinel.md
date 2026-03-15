@@ -1,6 +1,6 @@
 ---
 description: Automated QA sweep — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
-argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--list] [--severity <level>]
+argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 ---
 
@@ -14,11 +14,13 @@ Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
 - The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `hello`.
-- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
 - If `--severity` appears, take the next word as the severity filter value. Valid values: `critical`, `error`, `warning`, `info`. Store as `severityFilter`. If not present, set `severityFilter = null`.
+
+- Set `reuseManifest = true` if `--reuse-manifest` appears, otherwise `false`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
@@ -52,15 +54,19 @@ Actions:
   clean       Remove old sweep runs, keeping the N most recent (default: 5)
 
 Flags:
-  --sandbox   Enable high/critical actions with per-action approval (dev only)
-  --dry-run   Generate manifest and show test plan without executing sweeps
-  --list      List all previous sweep runs (use with report subcommand)
-  --severity  Filter report output by minimum severity (critical, error, warning, info)
+  --sandbox          Enable high/critical actions with per-action approval (dev only)
+  --dry-run          Generate manifest and show test plan without executing sweeps
+  --reuse-manifest   Skip manifest generation, reuse the manifest from the latest run
+                     Useful when re-running after fixing issues — saves time.
+                     Also prompted interactively when a recent manifest is detected.
+  --list             List all previous sweep runs (use with report subcommand)
+  --severity         Filter report output by minimum severity (critical, error, warning, info)
 
 Examples:
   /sentinel setup                    # First-time check
   /sentinel sweep                    # Full QA sweep
   /sentinel api --dry-run            # Preview what would be tested
+  /sentinel api --reuse-manifest     # Re-run API checks without regenerating manifest
   /sentinel report --severity error  # Show only errors and critical issues
   /sentinel diff                     # Compare latest run vs previous
   /sentinel trends                   # View pass-rate trend across runs
@@ -69,6 +75,8 @@ Examples:
 
 Tip: Start with '/sentinel api' (no browser needed) to verify endpoints,
      then graduate to '/sentinel sweep' for full browser + API coverage.
+     After fixing issues, use '--reuse-manifest' to re-test without waiting
+     for manifest regeneration.
 ```
 
 ---
@@ -154,8 +162,38 @@ Manifest generated: {runDir}/sentinel-manifest.json
 
 Execute the following steps in order:
 
-**Step api-1: Generate manifest.**
+**Step api-1: Generate or reuse manifest.**
 
+Before generating a new manifest, check whether an existing one can be reused.
+
+**If `reuseManifest` is `true` (flag passed):**
+Look for the most recent manifest by checking `{settings.reportDir}/latest/sentinel-manifest.json`. If it exists, copy it to `{runDir}/sentinel-manifest.json` using the Bash tool:
+```bash
+cp {settings.reportDir}/latest/sentinel-manifest.json {runDir}/sentinel-manifest.json
+```
+Print: `"Reusing manifest from latest run."` and skip to the dry-run check.
+
+If the latest manifest does not exist, print a warning: `"No existing manifest found — generating a new one."` and proceed with manifest generation below.
+
+**If `reuseManifest` is `false` (no flag):**
+Check whether `{settings.reportDir}/latest/sentinel-manifest.json` exists. If it does, prompt the user:
+
+```
+A manifest from a previous run was found ({settings.reportDir}/latest/sentinel-manifest.json).
+
+  [1] Reuse existing manifest (faster — skip codebase analysis)
+  [2] Generate a new manifest (re-analyze the codebase)
+
+Choose [1/2]:
+```
+
+Wait for the user's response:
+- If the user chooses `1`: copy the existing manifest to `{runDir}/sentinel-manifest.json` and skip to the dry-run check.
+- If the user chooses `2`: proceed with manifest generation below.
+
+If no existing manifest is found, proceed directly with generation (no prompt).
+
+**Manifest generation (when needed):**
 Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
@@ -205,8 +243,38 @@ Set `browserFindingsData = null`. Merge findings and generate the report followi
 
 Execute the following steps in order:
 
-**Step sweep-1: Generate manifest.**
+**Step sweep-1: Generate or reuse manifest.**
 
+Before generating a new manifest, check whether an existing one can be reused.
+
+**If `reuseManifest` is `true` (flag passed):**
+Look for the most recent manifest by checking `{settings.reportDir}/latest/sentinel-manifest.json`. If it exists, copy it to `{runDir}/sentinel-manifest.json` using the Bash tool:
+```bash
+cp {settings.reportDir}/latest/sentinel-manifest.json {runDir}/sentinel-manifest.json
+```
+Print: `"Reusing manifest from latest run."` and skip to the dry-run check.
+
+If the latest manifest does not exist, print a warning: `"No existing manifest found — generating a new one."` and proceed with manifest generation below.
+
+**If `reuseManifest` is `false` (no flag):**
+Check whether `{settings.reportDir}/latest/sentinel-manifest.json` exists. If it does, prompt the user:
+
+```
+A manifest from a previous run was found ({settings.reportDir}/latest/sentinel-manifest.json).
+
+  [1] Reuse existing manifest (faster — skip codebase analysis)
+  [2] Generate a new manifest (re-analyze the codebase)
+
+Choose [1/2]:
+```
+
+Wait for the user's response:
+- If the user chooses `1`: copy the existing manifest to `{runDir}/sentinel-manifest.json` and skip to the dry-run check.
+- If the user chooses `2`: proceed with manifest generation below.
+
+If no existing manifest is found, proceed directly with generation (no prompt).
+
+**Manifest generation (when needed):**
 Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
@@ -570,7 +638,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
   - `manifest` — Generate and inspect the manifest without sweeping
   - `hello` — Quick greeting + availability check
   - `hello ID` — This full profile
-**Flags**: `--sandbox`, `--dry-run`, `--list`, `--severity`
+**Flags**: `--sandbox`, `--dry-run`, `--reuse-manifest`, `--list`, `--severity`
 **Architecture**: Orchestrator + 3 agents (manifest-generator, api-sweeper, browser-sweeper) + setup skill
 **Framework support (v1)**: Vue 3 + FastAPI + Pydantic v2 + SQLAlchemy + JWT
 **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

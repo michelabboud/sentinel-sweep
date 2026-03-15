@@ -93,6 +93,7 @@ docker-compose up -d
 | `/sentinel sweep --dry-run` | Generate manifest and show test plan without executing sweeps |
 | `/sentinel api` | API-only sweep — endpoint health, RBAC, CRUD flows, schema contracts |
 | `/sentinel api --dry-run` | Show what would be tested without executing |
+| `/sentinel api --reuse-manifest` | Reuse manifest from the last run (skip codebase analysis) |
 | `/sentinel report` | View the most recent sweep report |
 | `/sentinel report --list` | List all past sweep runs |
 | `/sentinel report --severity error` | Filter report to show only errors and critical issues |

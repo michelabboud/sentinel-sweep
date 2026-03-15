@@ -27,6 +27,7 @@ All notable changes to Sentinel are documented in this file.
 - **Example report** — sample sweep.md in `docs/example-report/` showing realistic output
 - **Marketplace.json in plugin mirror** — `plugins/sentinel/.claude-plugin/marketplace.json` now included
 - **Command/skill parity test** — CI now verifies `commands/sentinel.md` body matches `skills/sentinel/SKILL.md`
+- **`--reuse-manifest` flag** — skip manifest regeneration by reusing the manifest from the latest run; also available as an interactive prompt when a previous manifest is detected
 
 ### Changed
 - Manifest path passed via dispatch prompt instead of hardcoded CWD lookup
