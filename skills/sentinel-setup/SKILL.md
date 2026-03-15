@@ -7,6 +7,34 @@ author: Michel Abboud
 license: Apache-2.0
 ---
 
+## Hello Protocol
+
+If `$ARGUMENTS` is `hello ID`, respond with:
+
+```
+**Name**: Sentinel Setup v1.1.0
+**Description**: Set up and configure Sentinel QA plugin — checks Playwright, detects frameworks, verifies services, and configures settings
+**How to invoke**: `/sentinel setup`
+**Checks performed**:
+  - Playwright installation and version
+  - Frontend framework detection (Vue, React, Angular, Svelte)
+  - Backend framework detection (FastAPI, Express, Django, Flask)
+  - Dev server reachability (frontend + API)
+  - Tailwind breakpoint auto-detection
+  - Settings configuration review
+**Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0
+```
+
+If `$ARGUMENTS` is `hello` (without `ID`), respond with:
+
+```
+👋 Hello! I'm **Sentinel Setup** v1.1.0. Environment detection, Playwright check, framework detection, and settings configuration. Use `/sentinel setup hello ID` for the full guide.
+```
+
+If `$ARGUMENTS` is `hello` or `hello ID`, stop after responding — do not proceed to the sections below.
+
+---
+
 ## Section 1: Playwright Check
 
 Run `npx playwright --version` via the Bash tool.

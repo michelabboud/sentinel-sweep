@@ -19,13 +19,13 @@ You are the Sentinel QA orchestrator. Your job is to parse the user's arguments,
 Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
-- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`.
+- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `hello`.
 - Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
 
-If `$ARGUMENTS` is empty, or the first word is not one of the five valid subcommands, print this exact usage block and stop:
+If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
 Sentinel — Automated QA Sweep
@@ -332,6 +332,37 @@ Print a table with columns: Run, Critical, Error, Warning, Info. Right-align the
 **Issue Delta (consecutive runs):**
 
 For each adjacent pair of runs (older to newer), compute the per-severity delta. Print a table with columns: Transition, Critical, Error, Warning, Info. Prefix positive values with `+`, negative with `-`, and show zero as `0`. Skip this section if only 1 run exists.
+
+---
+
+### Subcommand: `hello`
+
+If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
+
+```
+**Name**: Sentinel v1.1.0
+**Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
+**How to invoke**: `/sentinel <command> [flags]`
+**Available commands**:
+  - `setup` — Check environment, install Playwright, detect framework, configure settings
+  - `sweep` — Full browser + API sweep (parallel sweepers, run-scoped output)
+  - `api` — API-only sweep (endpoint health, RBAC, CRUD flows, schema contracts)
+  - `report` — View the most recent sweep report (`--list` to see all runs)
+  - `manifest` — Generate and inspect the manifest without sweeping
+  - `trends` — Show pass-rate and finding trends across recent runs
+  - `hello` — Quick greeting + availability check
+  - `hello ID` — This full profile
+**Flags**: `--sandbox`, `--dry-run`, `--list`
+**Architecture**: Orchestrator + 3 agents (manifest-generator, api-sweeper, browser-sweeper) + setup skill
+**Framework support (v1)**: Vue 3 + FastAPI + Pydantic v2 + SQLAlchemy + JWT
+**Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0
+```
+
+Otherwise (just `hello` with no `ID`), respond with the short greeting:
+
+```
+👋 Hello! I'm **Sentinel** v1.1.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel hello ID` for the full guide.
+```
 
 ---
 
