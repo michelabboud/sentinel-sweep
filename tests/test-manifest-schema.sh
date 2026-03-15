@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-manifest-schema.sh — Validates findings JSON fixtures against the schema contract
-# documented in Section 5 of the orchestrator skill (skills/sentinel/SKILL.md)
+# documented in Section 5 of the orchestrator skill (skills/run/SKILL.md)
 set -euo pipefail
 
 RED='\033[0;31m'

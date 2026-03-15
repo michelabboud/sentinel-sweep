@@ -27,7 +27,7 @@ echo ""
 echo "-- Required root files --"
 
 REQUIRED_ROOT_FILES=(
-  "skills/sentinel/SKILL.md"
+  "skills/run/SKILL.md"
   "skills/sentinel-setup/SKILL.md"
   "agents/manifest-generator.md"
   "agents/api-sweeper.md"
@@ -49,7 +49,7 @@ echo ""
 echo "-- Plugin mirror directory (plugins/sentinel/) --"
 
 REQUIRED_MIRROR_FILES=(
-  "plugins/sentinel/skills/sentinel/SKILL.md"
+  "plugins/sentinel/skills/run/SKILL.md"
   "plugins/sentinel/skills/sentinel-setup/SKILL.md"
   "plugins/sentinel/agents/manifest-generator.md"
   "plugins/sentinel/agents/api-sweeper.md"
@@ -73,12 +73,12 @@ echo ""
 echo "-- Command/Skill body parity --"
 
 CMD_BODY=$(sed -n '/^You are the Sentinel/,$p' "$PROJECT_ROOT/commands/sentinel.md")
-SKILL_BODY=$(sed -n '/^You are the Sentinel/,$p' "$PROJECT_ROOT/skills/sentinel/SKILL.md")
+SKILL_BODY=$(sed -n '/^You are the Sentinel/,$p' "$PROJECT_ROOT/skills/run/SKILL.md")
 
 if [[ "$CMD_BODY" == "$SKILL_BODY" ]]; then
-  pass "commands/sentinel.md body matches skills/sentinel/SKILL.md body"
+  pass "commands/sentinel.md body matches skills/run/SKILL.md body"
 else
-  fail "commands/sentinel.md and skills/sentinel/SKILL.md bodies have drifted"
+  fail "commands/sentinel.md and skills/run/SKILL.md bodies have drifted"
 fi
 
 # --- Marketplace.json in mirror ---

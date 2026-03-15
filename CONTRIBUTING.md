@@ -26,7 +26,7 @@ Thanks for your interest in contributing to Sentinel! This guide covers how to s
 ```
 sentinel-sweep/
   commands/sentinel.md           # Legacy command (must stay in sync with skill)
-  skills/sentinel/SKILL.md       # Main orchestrator (Skills 2.0)
+  skills/run/SKILL.md       # Main orchestrator (Skills 2.0)
   skills/sentinel-setup/SKILL.md # Environment setup skill
   agents/                        # Sweeper and manifest agents
   plugins/sentinel/              # Installable mirror (must match root)
@@ -41,7 +41,7 @@ sentinel-sweep/
 
 The orchestrator logic lives in **two** files that must stay identical:
 - `commands/sentinel.md` (legacy command format)
-- `skills/sentinel/SKILL.md` (Skills 2.0 format)
+- `skills/run/SKILL.md` (Skills 2.0 format)
 
 Only the YAML frontmatter differs. After editing one, copy the body to the other. The CI test `test-structure.sh` verifies parity.
 
@@ -51,7 +51,7 @@ The `plugins/sentinel/` directory is the installable copy. After any change to r
 
 ```bash
 cp agents/*.md plugins/sentinel/agents/
-cp skills/sentinel/SKILL.md plugins/sentinel/skills/sentinel/SKILL.md
+cp skills/run/SKILL.md plugins/sentinel/skills/run/SKILL.md
 cp skills/sentinel-setup/SKILL.md plugins/sentinel/skills/sentinel-setup/SKILL.md
 cp settings.json plugins/sentinel/settings.json
 cp README.md plugins/sentinel/README.md

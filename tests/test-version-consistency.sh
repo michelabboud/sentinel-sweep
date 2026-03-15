@@ -78,20 +78,20 @@ else
   VERSIONS["root marketplace.json"]="__missing__"
 fi
 
-# 3. skills/sentinel/SKILL.md frontmatter
-f="$PROJECT_ROOT/skills/sentinel/SKILL.md"
+# 3. skills/run/SKILL.md frontmatter
+f="$PROJECT_ROOT/skills/run/SKILL.md"
 if [[ -f "$f" ]]; then
   v=$(frontmatter_version "$f")
   if [[ -n "$v" ]]; then
     VERSIONS["root SKILL.md"]="$v"
-    pass "root skills/sentinel/SKILL.md: version $v"
+    pass "root skills/run/SKILL.md: version $v"
   else
     VERSIONS["root SKILL.md"]="__missing__"
-    fail "root skills/sentinel/SKILL.md: no version in frontmatter"
+    fail "root skills/run/SKILL.md: no version in frontmatter"
   fi
 else
   VERSIONS["root SKILL.md"]="__missing__"
-  fail "root skills/sentinel/SKILL.md: file not found"
+  fail "root skills/run/SKILL.md: file not found"
 fi
 
 # 4. plugins/sentinel/.claude-plugin/plugin.json
@@ -105,20 +105,20 @@ else
   VERSIONS["mirror plugin.json"]="__missing__"
 fi
 
-# 5. plugins/sentinel/skills/sentinel/SKILL.md frontmatter
-f="$PROJECT_ROOT/plugins/sentinel/skills/sentinel/SKILL.md"
+# 5. plugins/sentinel/skills/run/SKILL.md frontmatter
+f="$PROJECT_ROOT/plugins/sentinel/skills/run/SKILL.md"
 if [[ -f "$f" ]]; then
   v=$(frontmatter_version "$f")
   if [[ -n "$v" ]]; then
     VERSIONS["mirror SKILL.md"]="$v"
-    pass "mirror skills/sentinel/SKILL.md: version $v"
+    pass "mirror skills/run/SKILL.md: version $v"
   else
     VERSIONS["mirror SKILL.md"]="__missing__"
-    fail "mirror skills/sentinel/SKILL.md: no version in frontmatter"
+    fail "mirror skills/run/SKILL.md: no version in frontmatter"
   fi
 else
   VERSIONS["mirror SKILL.md"]="__missing__"
-  fail "mirror skills/sentinel/SKILL.md: file not found"
+  fail "mirror skills/run/SKILL.md: file not found"
 fi
 
 # 6. CHANGELOG.md latest header

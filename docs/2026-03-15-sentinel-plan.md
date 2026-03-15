@@ -54,7 +54,7 @@ mkdir -p .claude-plugin commands agents skills/sentinel-setup
   "description": "Automated QA sweep plugin — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications",
   "author": {
     "name": "Michel Abboud",
-    "email": "michel@devport.cc"
+    "email": "info@maicore.dev"
   }
 }
 ```

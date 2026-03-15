@@ -49,7 +49,7 @@ sentinel-sweep/
 ├── .gitignore                          # Ignores sentinel-reports/, node_modules/
 │
 ├── commands/
-│   └── sentinel.md                     # Legacy command (mirrors skills/sentinel/)
+│   └── sentinel.md                     # Legacy command (mirrors skills/run/)
 │
 ├── skills/
 │   ├── sentinel/SKILL.md               # Main orchestrator (Skills 2.0)
@@ -78,7 +78,7 @@ sentinel-sweep/
 
 ## Component Details
 
-### Orchestrator (`skills/sentinel/SKILL.md`)
+### Orchestrator (`skills/run/SKILL.md`)
 
 The main entry point. Handles:
 1. Argument parsing (`sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`)

@@ -2,16 +2,16 @@
   "name": "sentinel-marketplace",
   "owner": {
     "name": "Michel Abboud",
-    "email": "michel@devport.cc"
+    "email": "info@maicore.dev"
   },
   "plugins": [
     {
       "name": "sentinel",
-      "description": "Automated QA sweep plugin — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys",
+      "description": "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to configure",
       "version": "1.2.0",
       "author": {
         "name": "Michel Abboud",
-        "email": "michel@devport.cc"
+        "email": "info@maicore.dev"
       },
       "source": "./plugins/sentinel",
       "category": "testing"

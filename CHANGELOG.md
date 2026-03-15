@@ -16,7 +16,7 @@ All notable changes to Sentinel are documented in this file.
 
 ### Added
 - **Run-scoped output directories** — each sweep writes to `sentinel-reports/{ISO-timestamp}/` with a `latest` symlink, preventing parallel run collisions
-- **Skills 2.0 migration** — added `skills/sentinel/SKILL.md` and `skills/sentinel-setup/SKILL.md` with enriched frontmatter (tags, triggers, author, repository, license)
+- **Skills 2.0 migration** — added `skills/run/SKILL.md` and `skills/sentinel-setup/SKILL.md` with enriched frontmatter (tags, triggers, author, repository, license)
 - **Hello Protocol** — all agents, skills, and the orchestrator implement the standard greeting handshake (`hello` / `hello <name> ID`)
 - **Parallel sweeper dispatch** — browser and API sweepers launch simultaneously in `/sentinel sweep`
 - **`--dry-run` flag** — generate manifest and show test plan without executing sweeps
@@ -36,7 +36,7 @@ All notable changes to Sentinel are documented in this file.
 - **`CONTRIBUTING.md`** — contributor guide covering setup, development, testing, and PR workflow
 - **Example report** — sample sweep.md in `docs/example-report/` showing realistic output
 - **Marketplace.json in plugin mirror** — `plugins/sentinel/.claude-plugin/marketplace.json` now included
-- **Command/skill parity test** — CI now verifies `commands/sentinel.md` body matches `skills/sentinel/SKILL.md`
+- **Command/skill parity test** — CI now verifies `commands/sentinel.md` body matches `skills/run/SKILL.md`
 
 ### Changed
 - Manifest path passed via dispatch prompt instead of hardcoded CWD lookup

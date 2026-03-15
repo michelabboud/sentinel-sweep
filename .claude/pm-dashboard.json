@@ -43,7 +43,7 @@
       "score": 9,
       "status": "excellent",
       "topFinding": "Skill and command are now in sync — both have --dry-run, --list flags, parallel dispatch, and trends subcommand. Skill has richer frontmatter (tags, author, repository, license). Code quality across all agents and skills is excellent: clear section numbering, precise instructions, comprehensive edge cases.",
-      "recommendation": "Consider removing the legacy commands/sentinel.md since skills/sentinel/SKILL.md is the primary entry point and has richer metadata. Or document the dual-path strategy explicitly.",
+      "recommendation": "Consider removing the legacy commands/sentinel.md since skills/run/SKILL.md is the primary entry point and has richer metadata. Or document the dual-path strategy explicitly.",
       "riskIfIgnored": "Two files that must stay in sync is a maintenance burden, though CI mirror parity checks mitigate this."
     },
     "architecture": {
@@ -250,7 +250,7 @@
     },
     {
       "id": "t14",
-      "title": "Decide whether to keep or remove legacy commands/sentinel.md now that skills/sentinel/SKILL.md is in sync",
+      "title": "Decide whether to keep or remove legacy commands/sentinel.md now that skills/run/SKILL.md is in sync",
       "status": "todo",
       "priority": 14,
       "impact": "low",
@@ -296,7 +296,7 @@
   "technicalDebt": [
     {
       "id": "d1",
-      "item": "RESOLVED — Legacy commands/sentinel.md now synced with skills/sentinel/SKILL.md. Both have all features.",
+      "item": "RESOLVED — Legacy commands/sentinel.md now synced with skills/run/SKILL.md. Both have all features.",
       "category": "code",
       "impact": "low",
       "effort": "hours",

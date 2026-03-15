@@ -31,7 +31,7 @@ Sentinel v1.2.0 — Automated QA Sweep for Web Applications
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
 
-Usage: /sentinel <command> [flags]
+Usage: /sentinel:run <command> [flags]
 
 Getting Started:
   setup       Check environment, install Playwright, detect frameworks, configure
@@ -77,21 +77,21 @@ Other Flags:
   --severity         Filter report output by minimum severity (critical, error, warning, info)
 
 Examples:
-  /sentinel setup                    # First-time check
-  /sentinel sweep                    # Full QA sweep (safe + medium actions)
-  /sentinel sweep --safe-only        # Read-only sweep — nothing gets modified
-  /sentinel sweep --risk-level high  # Also test DELETE endpoints (no approval needed)
-  /sentinel sweep --sandbox          # Test everything, with per-action approval
-  /sentinel api --dry-run            # Preview what would be tested
-  /sentinel api --reuse-manifest     # Re-run API checks without regenerating manifest
-  /sentinel report --severity error  # Show only errors and critical issues
-  /sentinel diff                     # Compare latest run vs previous
-  /sentinel trends                   # View pass-rate trend across runs
-  /sentinel clean 3                  # Keep only the 3 most recent runs
+  /sentinel:run setup                    # First-time check
+  /sentinel:run sweep                    # Full QA sweep (safe + medium actions)
+  /sentinel:run sweep --safe-only        # Read-only sweep — nothing gets modified
+  /sentinel:run sweep --risk-level high  # Also test DELETE endpoints (no approval needed)
+  /sentinel:run sweep --sandbox          # Test everything, with per-action approval
+  /sentinel:run api --dry-run            # Preview what would be tested
+  /sentinel:run api --reuse-manifest     # Re-run API checks without regenerating manifest
+  /sentinel:run report --severity error  # Show only errors and critical issues
+  /sentinel:run diff                     # Compare latest run vs previous
+  /sentinel:run trends                   # View pass-rate trend across runs
+  /sentinel:run clean 3                  # Keep only the 3 most recent runs
 
-Tip: Start with '/sentinel api --safe-only' for a zero-risk health check,
-     then '/sentinel api' for standard coverage (safe + medium), then
-     '/sentinel sweep' for full browser + API. Use '--sandbox' only when
+Tip: Start with '/sentinel:run api --safe-only' for a zero-risk health check,
+     then '/sentinel:run api' for standard coverage (safe + medium), then
+     '/sentinel:run sweep' for full browser + API. Use '--sandbox' only when
      you need to test destructive operations on a dev server.
 ```
 
@@ -382,7 +382,7 @@ Print this warning and skip the browser sweep:
 
 ```
 Warning: Playwright MCP not available — falling back to API-only mode.
-Run /sentinel setup to install.
+Run /sentinel:run setup to install.
 ```
 
 Then dispatch ONLY the api-sweeper agent with the same prompt as above.
@@ -418,7 +418,7 @@ ls -1d {settings.reportDir}/????-??-??T??-??-??Z 2>/dev/null | sort -r
 If no directories are found, print:
 
 ```
-No runs found. Run /sentinel sweep or /sentinel api first.
+No runs found. Run /sentinel:run sweep or /sentinel:run api first.
 ```
 
 Otherwise, print the list of run directories (most recent first).
@@ -448,7 +448,7 @@ Take the first (topmost) result. If found, use the Read tool to read the identif
 If no reports are found in either format, print:
 
 ```
-No reports found. Run /sentinel sweep or /sentinel api first.
+No reports found. Run /sentinel:run sweep or /sentinel:run api first.
 ```
 
 ---
@@ -458,7 +458,7 @@ No reports found. Run /sentinel sweep or /sentinel api first.
 Read `{settings.reportDir}/sweep-history.json` using the Read tool. If the file does not exist or contains no runs, print:
 
 ```
-No sweep history found. Run /sentinel sweep or /sentinel api first.
+No sweep history found. Run /sentinel:run sweep or /sentinel:run api first.
 ```
 
 Otherwise, parse the `runs` array and display the following sections. Use the last 5 entries (or fewer if less than 5 exist), ordered most-recent first.
@@ -485,15 +485,15 @@ Compare two sweep runs to show what's new, what's fixed, and what regressed.
 
 Parse `$ARGUMENTS` for run IDs after the `diff` keyword. There are three cases:
 
-1. **No run IDs provided** (`/sentinel diff`): Compare the two most recent runs. Use the Bash tool:
+1. **No run IDs provided** (`/sentinel:run diff`): Compare the two most recent runs. Use the Bash tool:
    ```bash
    ls -1d {settings.reportDir}/????-??-??T??-??-??Z 2>/dev/null | sort -r | head -2
    ```
-   The first result is the "current" run, the second is the "previous" run. If fewer than 2 runs exist, print: `"Need at least 2 runs to diff. Run /sentinel sweep or /sentinel api first."` and stop.
+   The first result is the "current" run, the second is the "previous" run. If fewer than 2 runs exist, print: `"Need at least 2 runs to diff. Run /sentinel:run sweep or /sentinel:run api first."` and stop.
 
-2. **One run ID provided** (`/sentinel diff 2026-03-15T14-30-00Z`): Compare the specified run against its predecessor. Find the run that precedes it chronologically.
+2. **One run ID provided** (`/sentinel:run diff 2026-03-15T14-30-00Z`): Compare the specified run against its predecessor. Find the run that precedes it chronologically.
 
-3. **Two run IDs provided** (`/sentinel diff <older> <newer>`): Compare the two specified runs directly.
+3. **Two run IDs provided** (`/sentinel:run diff <older> <newer>`): Compare the two specified runs directly.
 
 Store as `olderRun` and `newerRun`.
 
@@ -554,7 +554,7 @@ Read findings from the `latest` symlink:
 - `{settings.reportDir}/latest/api-findings.json`
 - `{settings.reportDir}/latest/browser-findings.json`
 
-Merge into a single findings array. If no findings exist, print: `"No findings to fix. Run /sentinel sweep or /sentinel api first."` and stop.
+Merge into a single findings array. If no findings exist, print: `"No findings to fix. Run /sentinel:run sweep or /sentinel:run api first."` and stop.
 
 **Step fix-2: Categorize fixable findings.**
 
@@ -608,7 +608,7 @@ After applying fixes, print a summary:
 Applied {appliedCount} fixes:
   - {description of each fix applied}
 
-Re-run /sentinel api to verify the fixes resolved the issues.
+Re-run /sentinel:run api to verify the fixes resolved the issues.
 ```
 
 ---
@@ -670,7 +670,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 ```
 **Name**: Sentinel v1.2.0
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
-**How to invoke**: `/sentinel <command> [flags]`
+**How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
   - `setup` — Check environment, install Playwright, detect framework, configure settings
   - `sweep` — Full browser + API sweep (parallel sweepers, run-scoped output)
@@ -692,7 +692,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.2.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.2.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---
