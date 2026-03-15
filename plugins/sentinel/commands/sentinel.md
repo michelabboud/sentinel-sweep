@@ -1,6 +1,6 @@
 ---
 description: Automated QA sweep — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
-argument-hint: <sweep|api|report|manifest|setup> [--sandbox]
+argument-hint: <sweep|api|report|manifest|setup> [--sandbox] [--dry-run] [--list]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 ---
 
@@ -14,8 +14,10 @@ Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
 - The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`.
-- Any word starting with `--` is a flag. The only supported flag is `--sandbox`.
-- Set a boolean `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`.
+- Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
+- Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
+- Set `listMode = true` if `--list` appears, otherwise `false`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the five valid subcommands, print this exact usage block and stop:
 
@@ -33,6 +35,8 @@ Commands:
 
 Flags:
   --sandbox   Enable high/critical actions with per-action approval (dev only)
+  --dry-run   Generate manifest and show test plan without executing sweeps
+  --list      List all previous sweep runs (use with report subcommand)
 ```
 
 ---
@@ -64,7 +68,27 @@ Merge the file contents with these defaults for any missing keys. The file value
 }
 ```
 
-Store the merged result as `settings` for use in subsequent steps. The `reportDir` value from settings is the output directory for all reports.
+Store the merged result as `settings` for use in subsequent steps. The `reportDir` value from settings is the base output directory for all reports.
+
+---
+
+## Step 2b: Generate Run ID
+
+Use the Bash tool to generate a filesystem-safe ISO timestamp as the run identifier:
+
+```bash
+date -u +"%Y-%m-%dT%H-%M-%SZ"
+```
+
+Store this value as `RUN_ID`. Set `runDir = {settings.reportDir}/{RUN_ID}`.
+
+Use the Bash tool to create the run directory:
+
+```bash
+mkdir -p {runDir}
+```
+
+All output for this sweep/api run will go into `runDir`.
 
 ---
 
@@ -84,12 +108,12 @@ Invoke the `sentinel:sentinel-setup` skill using the Skill tool. Pass no additio
 
 Use the Agent tool to dispatch the manifest-generator agent. Use this exact prompt:
 
-> Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to sentinel-manifest.json in the project root.
+> Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
 
 After the agent completes, print:
 
 ```
-Manifest generated: sentinel-manifest.json
+Manifest generated: {runDir}/sentinel-manifest.json
 ```
 
 ---
@@ -102,7 +126,17 @@ Execute the following steps in order:
 
 Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
-> Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to sentinel-manifest.json in the project root.
+> Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
+
+**Dry-run check:** If `dryRunMode` is `true`, skip all sweeper dispatches. Instead:
+1. Read the manifest that was just generated
+2. Print a summary of what WOULD be tested:
+   - Number of routes by risk level
+   - Number of endpoints by risk level
+   - CRUD flows that would be exercised
+   - Which roles would be tested
+   - Which actions would be skipped due to risk policy
+3. Stop — do not proceed to sweeping or report generation.
 
 **Step api-2: Run API sweep.**
 
@@ -110,20 +144,20 @@ Use the Agent tool to dispatch the api-sweeper agent. Construct the prompt as fo
 
 > Run an API-only sentinel sweep.
 >
-> Manifest path: sentinel-manifest.json
+> Manifest path: {runDir}/sentinel-manifest.json
 >
 > Settings:
 > - Risk policy: {settings.riskPolicy as JSON}
 > - Response timeout: {settings.responseTimeout}ms
-> - Report directory: {settings.reportDir}
+> - Report directory: {runDir}
 >
 > Sandbox mode: {sandboxMode}
 >
-> Write all findings to {settings.reportDir}/.api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
+> Write all findings to {runDir}/api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
 **Step api-3: Collect findings.**
 
-Use the Read tool to read `{settings.reportDir}/.api-findings.json`. Store the parsed content as `apiFindingsData`. If the file does not exist or cannot be read, set `apiFindingsData` to `null` and print a warning:
+Use the Read tool to read `{runDir}/api-findings.json`. Store the parsed content as `apiFindingsData`. If the file does not exist or cannot be read, set `apiFindingsData` to `null` and print a warning:
 
 ```
 Warning: api-sweeper did not produce findings. Report will be empty.
@@ -143,70 +177,82 @@ Execute the following steps in order:
 
 Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
-> Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to sentinel-manifest.json in the project root.
+> Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
+
+**Dry-run check:** If `dryRunMode` is `true`, skip all sweeper dispatches. Instead:
+1. Read the manifest that was just generated
+2. Print a summary of what WOULD be tested:
+   - Number of routes by risk level
+   - Number of endpoints by risk level
+   - CRUD flows that would be exercised
+   - Which roles would be tested
+   - Which actions would be skipped due to risk policy
+3. Stop — do not proceed to sweeping or report generation.
 
 **Step sweep-2: Check Playwright availability.**
 
 Attempt to detect whether Playwright MCP browser tools are available. Do this by checking whether you have access to a tool named `browser_navigate` or `mcp__plugin_playwright_playwright__browser_navigate` (or any tool whose name contains `browser_navigate`). Set `playwrightAvailable = true` if such a tool exists, otherwise `false`.
 
-**Step sweep-3: Run browser sweep (conditional).**
+**Step sweep-3: Run sweeps in parallel.**
 
 If `playwrightAvailable` is `true`:
+Use the Agent tool to dispatch BOTH agents in a single message (parallel execution):
 
-Use the Agent tool to dispatch the browser-sweeper agent. Construct the prompt as follows:
+1. The browser-sweeper agent with this prompt:
 
 > Run a browser sentinel sweep using Playwright.
 >
-> Manifest path: sentinel-manifest.json
+> Manifest path: {runDir}/sentinel-manifest.json
 >
 > Settings:
 > - Breakpoints: {settings.breakpoints}
 > - Risk policy: {settings.riskPolicy as JSON}
 > - Response timeout: {settings.responseTimeout}ms
 > - Screenshot on error: {settings.screenshotOnError}
-> - Report directory: {settings.reportDir}
+> - Report directory: {runDir}
 > - Browser: {settings.browser as JSON}
 > - Empty container selectors: {settings.emptyContainerSelectors as JSON, or default ["[data-sentinel-content]", "main", ".card-body"] if not set}
 >
 > Sandbox mode: {sandboxMode}
 >
-> Write all findings to {settings.reportDir}/.browser-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
+> Write all findings to {runDir}/browser-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
-If `playwrightAvailable` is `false`, print this warning and skip the browser sweep:
+2. The api-sweeper agent with this prompt:
+
+> Run an API-only sentinel sweep.
+>
+> Manifest path: {runDir}/sentinel-manifest.json
+>
+> Settings:
+> - Risk policy: {settings.riskPolicy as JSON}
+> - Response timeout: {settings.responseTimeout}ms
+> - Report directory: {runDir}
+>
+> Sandbox mode: {sandboxMode}
+>
+> Write all findings to {runDir}/api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
+
+If `playwrightAvailable` is `false`:
+Print this warning and skip the browser sweep:
 
 ```
 Warning: Playwright MCP not available — falling back to API-only mode.
 Run /sentinel setup to install.
 ```
 
-**Step sweep-4: Run API sweep.**
+Then dispatch ONLY the api-sweeper agent with the same prompt as above.
 
-Use the Agent tool to dispatch the api-sweeper agent with this prompt:
+**Step sweep-4: Collect and merge findings.**
 
-> Run an API-only sentinel sweep.
->
-> Manifest path: sentinel-manifest.json
->
-> Settings:
-> - Risk policy: {settings.riskPolicy as JSON}
-> - Response timeout: {settings.responseTimeout}ms
-> - Report directory: {settings.reportDir}
->
-> Sandbox mode: {sandboxMode}
->
-> Write all findings to {settings.reportDir}/.api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
+Use the Read tool to read `{runDir}/api-findings.json`. Store as `apiFindingsData`, or `null` if missing.
 
-**Step sweep-5: Collect and merge findings.**
-
-Use the Read tool to read `{settings.reportDir}/.api-findings.json`. Store as `apiFindingsData`, or `null` if missing.
-
-If `playwrightAvailable` was `true`, use the Read tool to read `{settings.reportDir}/.browser-findings.json`. Store as `browserFindingsData`, or `null` if missing.
+If `playwrightAvailable` was `true`, use the Read tool to read `{runDir}/browser-findings.json`. Store as `browserFindingsData`, or `null` if missing.
 
 Otherwise set `browserFindingsData = null`.
 
 **Deduplication:** Combine the `findings` arrays from both files into a single list. Two findings are considered duplicates if they share the same `endpoint`, `role`, and `message` values. When a duplicate exists, keep the one with the higher severity (critical > error > warning > info).
 
-**Step sweep-6: Generate report.**
+**Step sweep-5: Generate report.**
 
 Generate the report following the instructions in **Section 4: Report Generation** below.
 
@@ -214,21 +260,47 @@ Generate the report following the instructions in **Section 4: Report Generation
 
 ### Subcommand: `report`
 
-Use the Bash tool to list the contents of `{settings.reportDir}/`:
+Check whether the user passed a `--list` flag in the arguments.
+
+**If `--list` is present:**
+
+Use the Bash tool to list all run directories:
+
+```bash
+ls -1d {settings.reportDir}/????-??-??T??-??-??Z 2>/dev/null | sort -r
+```
+
+If no directories are found, print:
+
+```
+No runs found. Run /sentinel sweep or /sentinel api first.
+```
+
+Otherwise, print the list of run directories (most recent first).
+
+**If `--list` is NOT present:**
+
+First, try the new run-scoped format by reading from the `latest` symlink:
+
+```bash
+cat {settings.reportDir}/latest/sweep.md 2>/dev/null
+```
+
+If `{settings.reportDir}/latest/sweep.md` exists, use the Read tool to read that file and print its full contents to the terminal.
+
+If the `latest` symlink does not exist or does not contain `sweep.md`, fall back to the old flat format:
 
 ```bash
 ls {settings.reportDir}/*.md 2>/dev/null | sort -r
 ```
 
-Take the first (topmost) result — this is the most recent report file (ISO date prefix ensures alphabetical descending order equals chronological descending order).
+Take the first (topmost) result. If found, use the Read tool to read the identified file and print its full contents.
 
-If no `.md` files are found, print:
+If no reports are found in either format, print:
 
 ```
 No reports found. Run /sentinel sweep or /sentinel api first.
 ```
-
-Otherwise, use the Read tool to read the identified file and print its full contents to the terminal.
 
 ---
 
@@ -254,12 +326,12 @@ From the merged findings array and the metadata blocks in the findings files, co
 - `skippedActions`: Findings where `severity` is `info` and `category` is not set, OR any entry in the manifest's `riskPolicy.alwaysSkip` list not exercised, OR findings explicitly tagged as skipped by the sweeper agents.
 - `sandboxActions`: Findings or log entries where `category` is `"sandbox"` (written by sweeper agents during sandbox execution).
 
-### Step R-2: Ensure report directory exists
+### Step R-2: Ensure run directory exists
 
-Use the Bash tool to create the report directory if it does not already exist:
+The run directory `{runDir}` was already created in Step 2b. If for any reason it does not exist, create it:
 
 ```bash
-mkdir -p {settings.reportDir}
+mkdir -p {runDir}
 ```
 
 ### Step R-3: Print terminal summary
@@ -284,7 +356,7 @@ Print the following block, substituting computed values:
   1. [{SEVERITY}] {category}: {message}
   ... (up to 5 issues, each on its own numbered line, sorted by severity descending)
 
-  Full report: {settings.reportDir}/{YYYY-MM-DD}-sweep.md
+  Full report: {runDir}/sweep.md
 ```
 
 If `topIssues` is empty (no findings at all), replace the top issues block with:
@@ -295,7 +367,7 @@ If `topIssues` is empty (no findings at all), replace the top issues block with:
 
 ### Step R-4: Write markdown report
 
-Determine the report filename: `{settings.reportDir}/{YYYY-MM-DD}-sweep.md` where `YYYY-MM-DD` is today's date.
+The report filename is `{runDir}/sweep.md` (the date is already encoded in the run directory name).
 
 Use the Write tool to write the markdown report to that path. The report must contain the following sections in this order:
 
@@ -410,8 +482,8 @@ For each action that was executed in sandbox mode (approved by user during sweep
 Then add a general note:
 
 ```
-> To restore demo data after sandbox execution, run the project's seed scripts
-> (e.g. `docker-compose exec api python -m app.seed.seed_data` for SmartSessions).
+> To restore demo data after sandbox execution, run your project's seed scripts
+> (e.g. `docker-compose exec api python -m seed` or your equivalent seed command).
 ```
 
 If no sandbox actions were executed, write: `_No sandbox actions were executed._`
@@ -447,6 +519,16 @@ A prioritized checklist of all actionable findings (critical, error, warning —
 Group order: Critical first, then Error, then Warning. Within each group, no specific ordering is required.
 
 If there are no actionable findings, write: `_No action items. All checks passed._`
+
+### Step R-5: Create latest symlink
+
+After writing the report, create a `latest` symlink pointing to the current run directory:
+
+```bash
+ln -sfn {RUN_ID} {settings.reportDir}/latest
+```
+
+This uses the relative `RUN_ID` (not the full path) so the symlink is portable.
 
 ---
 
@@ -486,5 +568,5 @@ Both sweeper agents write their findings to JSON files. When reading these files
 - `endpoint` and `route` may both be null for findings that apply globally.
 - `screenshot` paths are relative to the project root.
 - Sweeper agents may add extra fields; ignore unknown fields when reading.
-- API sweeper writes to: `{settings.reportDir}/.api-findings.json`
-- Browser sweeper writes to: `{settings.reportDir}/.browser-findings.json`
+- API sweeper writes to: `{runDir}/api-findings.json`
+- Browser sweeper writes to: `{runDir}/browser-findings.json`

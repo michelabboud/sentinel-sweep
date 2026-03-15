@@ -1,6 +1,10 @@
 ---
 name: sentinel-setup
-description: Set up and configure Sentinel QA plugin. Use when user says "sentinel setup", "configure sentinel", "check sentinel dependencies", or when sentinel needs environment verification before sweeping.
+version: 1.0.0
+description: "Set up and configure Sentinel QA plugin — run /sentinel setup to check Playwright, detect frameworks, verify services, and configure settings. Use when you say 'sentinel setup', 'configure sentinel', 'check sentinel dependencies', 'install playwright', 'check QA environment'."
+context: fork
+author: Michel Abboud
+license: Apache-2.0
 ---
 
 ## Section 1: Playwright Check

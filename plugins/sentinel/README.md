@@ -62,7 +62,7 @@ Settings are in `settings.json` at the plugin root. All fields have sensible def
 
 ## Manifest
 
-Running `/sentinel manifest` analyzes your codebase and produces `sentinel-manifest.json` in your project root. This file describes every frontend route, backend endpoint, Pydantic schema, auth configuration, and CRUD flow. All sweeps are driven by this manifest.
+Running `/sentinel manifest` analyzes your codebase and produces `sentinel-manifest.json` in a run-scoped directory under `sentinel-reports/`. During sweeps, the manifest is written to `sentinel-reports/{RUN_ID}/sentinel-manifest.json`. This file describes every frontend route, backend endpoint, Pydantic schema, auth configuration, and CRUD flow. All sweeps are driven by this manifest.
 
 The manifest is auto-regenerated before every sweep to stay fresh. You can also inspect and manually override entries:
 
@@ -98,12 +98,30 @@ Risk scores are computed from HTTP method, auth requirements, keyword detection,
 
 ## Report Format
 
+Each sweep produces a **run-scoped output directory** under `sentinel-reports/` using a filesystem-safe ISO timestamp as the run ID (e.g., `2026-03-15T14-30-00Z`). A `latest` symlink always points to the most recent run.
+
+```
+sentinel-reports/
+├── latest -> 2026-03-15T14-30-00Z
+├── 2026-03-15T14-30-00Z/
+│   ├── sentinel-manifest.json
+│   ├── api-findings.json
+│   ├── browser-findings.json
+│   ├── sweep.md
+│   └── screenshots/
+├── 2026-03-14T09-15-00Z/
+│   └── ...
+```
+
 After a sweep, Sentinel produces:
 
-1. **Terminal summary** — finding counts by severity, top 5 issues, report file path
-2. **Markdown report** (`sentinel-reports/YYYY-MM-DD-sweep.md`) — full findings organized by severity, RBAC matrix, skipped actions, checkbox task list
-3. **Findings JSON** — machine-readable findings in `sentinel-reports/.api-findings.json` and `.browser-findings.json`
-4. **Screenshots** — saved to `sentinel-reports/screenshots/` when layout issues are detected
+1. **Terminal summary** -- finding counts by severity, top 5 issues, report file path
+2. **Markdown report** (`sentinel-reports/{RUN_ID}/sweep.md`) -- full findings organized by severity, RBAC matrix, skipped actions, checkbox task list
+3. **Findings JSON** -- machine-readable findings in `sentinel-reports/{RUN_ID}/api-findings.json` and `browser-findings.json`
+4. **Screenshots** -- saved to `sentinel-reports/{RUN_ID}/screenshots/` when layout issues are detected
+5. **Latest symlink** -- `sentinel-reports/latest` always points to the most recent run directory
+
+Use `/sentinel report` to view the latest report, or `/sentinel report --list` to see all runs.
 
 ## Framework Support
 

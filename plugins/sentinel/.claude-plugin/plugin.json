@@ -5,5 +5,8 @@
   "author": {
     "name": "Michel Abboud",
     "email": "michel@devport.cc"
-  }
+  },
+  "repository": "https://github.com/michelabboud/sentinel-plugin",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/michelabboud/sentinel-plugin#readme"
 }

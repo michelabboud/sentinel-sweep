@@ -1,7 +1,13 @@
 ---
-description: Automated QA sweep — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
-argument-hint: <sweep|api|report|manifest|setup> [--sandbox] [--dry-run] [--list]
+name: sentinel
+version: 1.0.0
+description: "Automated QA sweep for web apps — run /sentinel sweep for full browser+API QA, /sentinel api for endpoint-only testing, /sentinel setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
+argument-hint: <sweep|api|report|manifest|setup> [--sandbox]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
+author: Michel Abboud
+repository: https://github.com/michelabboud/sentinel-plugin
+license: Apache-2.0
+tags: [qa, testing, sweep, playwright, api, rbac, accessibility, i18n, layout]
 ---
 
 You are the Sentinel QA orchestrator. Your job is to parse the user's arguments, load settings, and route to the correct subcommand. Follow every instruction in this file precisely and in order.
@@ -14,10 +20,8 @@ Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
 - The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`.
-- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`.
-- Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
-- Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
-- Set `listMode = true` if `--list` appears, otherwise `false`.
+- Any word starting with `--` is a flag. The only supported flag is `--sandbox`.
+- Set a boolean `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the five valid subcommands, print this exact usage block and stop:
 
@@ -35,8 +39,6 @@ Commands:
 
 Flags:
   --sandbox   Enable high/critical actions with per-action approval (dev only)
-  --dry-run   Generate manifest and show test plan without executing sweeps
-  --list      List all previous sweep runs (use with report subcommand)
 ```
 
 ---
@@ -128,16 +130,6 @@ Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
 
-**Dry-run check:** If `dryRunMode` is `true`, skip all sweeper dispatches. Instead:
-1. Read the manifest that was just generated
-2. Print a summary of what WOULD be tested:
-   - Number of routes by risk level
-   - Number of endpoints by risk level
-   - CRUD flows that would be exercised
-   - Which roles would be tested
-   - Which actions would be skipped due to risk policy
-3. Stop — do not proceed to sweeping or report generation.
-
 **Step api-2: Run API sweep.**
 
 Use the Agent tool to dispatch the api-sweeper agent. Construct the prompt as follows — fill in the bracketed values from `settings` and from `sandboxMode`:
@@ -179,26 +171,15 @@ Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
 
-**Dry-run check:** If `dryRunMode` is `true`, skip all sweeper dispatches. Instead:
-1. Read the manifest that was just generated
-2. Print a summary of what WOULD be tested:
-   - Number of routes by risk level
-   - Number of endpoints by risk level
-   - CRUD flows that would be exercised
-   - Which roles would be tested
-   - Which actions would be skipped due to risk policy
-3. Stop — do not proceed to sweeping or report generation.
-
 **Step sweep-2: Check Playwright availability.**
 
 Attempt to detect whether Playwright MCP browser tools are available. Do this by checking whether you have access to a tool named `browser_navigate` or `mcp__plugin_playwright_playwright__browser_navigate` (or any tool whose name contains `browser_navigate`). Set `playwrightAvailable = true` if such a tool exists, otherwise `false`.
 
-**Step sweep-3: Run sweeps in parallel.**
+**Step sweep-3: Run browser sweep (conditional).**
 
 If `playwrightAvailable` is `true`:
-Use the Agent tool to dispatch BOTH agents in a single message (parallel execution):
 
-1. The browser-sweeper agent with this prompt:
+Use the Agent tool to dispatch the browser-sweeper agent. Construct the prompt as follows:
 
 > Run a browser sentinel sweep using Playwright.
 >
@@ -217,7 +198,16 @@ Use the Agent tool to dispatch BOTH agents in a single message (parallel executi
 >
 > Write all findings to {runDir}/browser-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
-2. The api-sweeper agent with this prompt:
+If `playwrightAvailable` is `false`, print this warning and skip the browser sweep:
+
+```
+Warning: Playwright MCP not available — falling back to API-only mode.
+Run /sentinel setup to install.
+```
+
+**Step sweep-4: Run API sweep.**
+
+Use the Agent tool to dispatch the api-sweeper agent with this prompt:
 
 > Run an API-only sentinel sweep.
 >
@@ -232,17 +222,7 @@ Use the Agent tool to dispatch BOTH agents in a single message (parallel executi
 >
 > Write all findings to {runDir}/api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
-If `playwrightAvailable` is `false`:
-Print this warning and skip the browser sweep:
-
-```
-Warning: Playwright MCP not available — falling back to API-only mode.
-Run /sentinel setup to install.
-```
-
-Then dispatch ONLY the api-sweeper agent with the same prompt as above.
-
-**Step sweep-4: Collect and merge findings.**
+**Step sweep-5: Collect and merge findings.**
 
 Use the Read tool to read `{runDir}/api-findings.json`. Store as `apiFindingsData`, or `null` if missing.
 
@@ -252,7 +232,7 @@ Otherwise set `browserFindingsData = null`.
 
 **Deduplication:** Combine the `findings` arrays from both files into a single list. Two findings are considered duplicates if they share the same `endpoint`, `role`, and `message` values. When a duplicate exists, keep the one with the higher severity (critical > error > warning > info).
 
-**Step sweep-5: Generate report.**
+**Step sweep-6: Generate report.**
 
 Generate the report following the instructions in **Section 4: Report Generation** below.
 
@@ -482,8 +462,8 @@ For each action that was executed in sandbox mode (approved by user during sweep
 Then add a general note:
 
 ```
-> To restore demo data after sandbox execution, run your project's seed scripts
-> (e.g. `docker-compose exec api python -m seed` or your equivalent seed command).
+> To restore demo data after sandbox execution, run the project's seed scripts
+> (e.g. `docker-compose exec api python -m app.seed.seed_data` for SmartSessions).
 ```
 
 If no sandbox actions were executed, write: `_No sandbox actions were executed._`
