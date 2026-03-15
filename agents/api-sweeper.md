@@ -224,7 +224,7 @@ When sandbox mode is active and an endpoint exceeds the risk policy:
 **For HIGH risk endpoints (riskScore 51-75), print:**
 
 ```
-WARNING -- HIGH RISK action detected:
+WARNING — HIGH RISK action detected:
 
   Route: {method} {path}
   Description: {description}
