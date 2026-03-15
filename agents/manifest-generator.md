@@ -81,6 +81,11 @@ Determine authentication method:
 2. Use Grep to search for `session`, `cookie`, `csrf_token` patterns in auth-related files. If found without JWT evidence → `"session"`.
 3. If neither is found → `"none"`.
 
+**Important v1 limitation:** If the detected auth method is NOT `"jwt"`, print a warning to the user:
+> "⚠ Warning: Auth method detected as '{method}'. Sentinel v1 supports JWT authentication only. Session cookies, CSRF tokens, and OAuth browser flows are not supported. API sweeps requiring authentication may not work correctly."
+
+Continue with manifest generation regardless — the manifest is still useful for unauthenticated route/endpoint discovery.
+
 #### Login Endpoint
 
 Find the login endpoint:
@@ -171,6 +176,12 @@ For routes with `{param}` placeholders in their path, generate a `params` object
 The general pattern: for a parameter `{param}` at position N in the path, look at the path segment at position N-1. That segment name (pluralized resource) becomes the lookup target. If there are parent parameters, include them in the lookup path.
 
 For routes without parameters, set `params` to `null`.
+
+**Fallback for unresolvable parameters:** If you cannot determine a lookup endpoint for a parameter (e.g., the resource has no GET list endpoint, or the path structure is ambiguous), use a `static:` placeholder instead:
+- `{ "id": "static:00000000-0000-0000-0000-000000000001" }` — a nil-like UUID placeholder
+- The sweep engine will use this value directly. It may fail at runtime, which produces an Info-level finding ("skipped — parameter not resolvable").
+
+Note: `env:` parameter values (e.g., `"env:SEED_ADMIN_ID"`) cannot be auto-detected. They must be added manually by the user. The merge strategy preserves manual edits.
 
 ### Initial Risk and Description
 
@@ -514,6 +525,17 @@ Read `settings.json` from the Sentinel plugin directory (the directory containin
 ```
 
 Settings values override manifest defaults for `riskPolicy` and `breakpoints`.
+
+### Tailwind Breakpoint Detection
+
+If settings.json uses the default breakpoints `[375, 768, 1280]` (i.e., the user hasn't customized them), attempt to auto-detect from Tailwind:
+
+1. Use Glob to find `**/tailwind.config.js` or `**/tailwind.config.ts` (exclude `node_modules`).
+2. If found, read the file and look for `theme.screens` or `theme.extend.screens` — extract numeric pixel values from entries like `'sm': '640px'`.
+3. Also use Grep to search CSS files for `@theme` blocks containing `--breakpoint-` custom properties (TailwindCSS v4 style).
+4. If custom breakpoints are found, use them instead of the defaults. Prioritize mobile-first widths.
+
+**Priority order:** settings.json override > Tailwind auto-detection > hardcoded defaults `[375, 768, 1280]`.
 
 ### Build Final Manifest
 
