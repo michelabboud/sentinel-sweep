@@ -367,7 +367,6 @@ This section tells the agent how to detect what framework the target app uses:
 - Read `requirements.txt` or `pyproject.toml` for FastAPI/Django/Flask
 - Set `app.framework.frontend` and `app.framework.backend`
 
-~30-40 lines.
 
 - [ ] **Step 3: Write the manifest generation instructions — App Configuration section**
 
@@ -380,7 +379,6 @@ Tells the agent how to extract:
 - `auth.roles` from CLAUDE.md seed credentials section
 - `auth.roleHierarchy` from role enum or CLAUDE.md RBAC description
 
-~40-50 lines.
 
 - [ ] **Step 4: Write the manifest generation instructions — Route Extraction section (Vue 3 focus)**
 
@@ -392,7 +390,6 @@ Tells the agent how to parse Vue 3 router:
 - For parameterized routes: generate `params` object with `lookup:` syntax based on the resource name (e.g., `/groups/:id` → `lookup:groups[0].id`)
 - Set initial `riskLevel` to "safe" for all routes (risk scoring comes later)
 
-~40-50 lines.
 
 - [ ] **Step 5: Write the manifest generation instructions — Endpoint Extraction section (FastAPI focus)**
 
@@ -402,10 +399,9 @@ Tells the agent how to parse FastAPI endpoints:
 - Extract: HTTP method, path (with prefix from router), dependencies (auth decorators like `Depends(require_admin)`)
 - Map auth dependencies to `requiredRole`
 - Extract `response_model` for `responseSchema` reference
-- Detect `?confirm=true` patterns in endpoint code
-- For parameterized endpoints: generate `params` with lookup syntax
-
-~50-60 lines.
+- Detect `?confirm=true` patterns: look for `confirm: bool = Query(False)` or `confirm: bool = Query(...)` in endpoint function signatures. If found, set `requiresConfirm: true`
+- For parameterized endpoints: generate `params` object with lookup syntax. Example: for `GET /groups/{id}/members/{mid}`, generate `{ "id": "lookup:groups[0].id", "mid": "lookup:groups[0].members[0].id" }`
+- Derive `sideEffects` for high/critical endpoints: read SQLAlchemy model relationships (`relationship(...)` with `cascade=`). For DELETE endpoints, list affected models. Example: `["Removes member record", "Cascades to attendance_records"]`. If no cascade info found, use the endpoint description.
 
 - [ ] **Step 6: Write the manifest generation instructions — Schema Extraction section**
 
@@ -418,7 +414,6 @@ Tells the agent how to parse Pydantic models:
 - Record source file:line for each schema
 - Note in agent instructions: skip models with deep inheritance chains or `computed_field` — flag them for manual override
 
-~40-50 lines.
 
 - [ ] **Step 7: Write the manifest generation instructions — Risk Scoring section**
 
@@ -430,7 +425,6 @@ Tells the agent how to calculate risk scores:
 - For high/critical: require `description` and `sideEffects` fields
 - Read model relationships for cascade detection (cascade="all, delete-orphan" in SQLAlchemy)
 
-~30-40 lines.
 
 - [ ] **Step 8: Write the manifest generation instructions — CRUD Flow Detection section**
 
@@ -442,7 +436,6 @@ Tells the agent how to auto-detect CRUD flows:
 - Risk level: max risk level of any step in the flow
 - Partial flows are valid (not all CRUD verbs needed)
 
-~20-25 lines.
 
 - [ ] **Step 9: Write the manifest generation instructions — Merge Strategy and Output section**
 
@@ -451,11 +444,12 @@ Tells the agent how to handle existing manifests:
 - Preserve any entries with `"manual": true`
 - Overwrite all auto-generated entries
 - Add `generatedAt` timestamp (ISO 8601)
-- Write final JSON to `sentinel-manifest.json` in the target project root
-- Apply `riskPolicy` from settings.json (settings override manifest defaults)
+- Write final JSON to `sentinel-manifest.json` in the current working directory (the target project root — the sentinel command dispatches the agent from the user's project directory)
+- Include `generatedAt` field with ISO 8601 timestamp (e.g. `"2026-03-15T10:30:00Z"`)
+- Include `breakpoints` field from settings or defaults `[375, 768, 1280]`
+- Include `riskPolicy` from settings.json (settings override manifest defaults)
+- Preserve `schemaOverride` entries from existing manifest (alongside `"manual": true` entries)
 - Pretty-print with 2-space indentation
-
-~20-25 lines.
 
 - [ ] **Step 10: Commit manifest-generator agent**
 
@@ -494,7 +488,6 @@ Tells the agent how to authenticate:
 - If login fails for a role: record Critical finding, skip that role's tests
 - For unauthenticated tests: no token
 
-~25-30 lines.
 
 - [ ] **Step 3: Write the API sweep instructions — Parameter Resolution section**
 
@@ -505,38 +498,35 @@ Tells the agent how to resolve parameters before requests:
 - Handle failures: skip route if lookup returns empty, use static fallback if available, log Info finding
 - Cache resolved values (don't re-fetch for every endpoint)
 
-~25-30 lines.
 
 - [ ] **Step 4: Write the API sweep instructions — Layer 1: Endpoint Health section**
 
-Tells the agent how to test each endpoint:
-- For each endpoint in manifest, for each role (including unauthenticated):
-  - Check risk policy: skip if endpoint's riskLevel exceeds `riskPolicy.maxRiskLevel` (unless in `alwaysAllow`)
-  - Skip if in `alwaysSkip`
-  - For `--sandbox` mode with high/critical: show warning with description and side effects, ask for confirmation
-  - Make the HTTP request with appropriate auth header
-  - Check: authorized role should get 200/201; unauthorized role should get 401/403; unauthenticated should get 401/403
-  - Check: response is valid JSON (not HTML)
-  - Check: response time < `responseTimeout`
-  - Check: error responses don't contain stack traces or SQL
-  - Record findings with severity
+Tells the agent how to test each endpoint. Use curl patterns from **Appendix A3**. Use risk policy matching from **Appendix A4**. Use sandbox prompts from **Appendix A5**.
 
-~40-50 lines.
+- For each endpoint in manifest, for each role (including unauthenticated):
+  - Apply risk policy matching (Appendix A4): skip, allow, or prompt
+  - Make HTTP request using curl patterns from Appendix A3 with appropriate auth header
+  - Check: authorized role should get 200/201; unauthorized role should get 401/403; unauthenticated should get 401/403
+  - Check: response is valid JSON (not HTML) — `echo "$body" | python3 -c "import sys,json;json.load(sys.stdin)" 2>/dev/null`
+  - Check: response time < `responseTimeout` (from `-w "%{time_total}"` output, multiply by 1000 for ms comparison)
+  - Check: error responses don't contain stack traces (`Traceback`, `at Object.`, `at Module.`) or SQL (`SELECT`, `INSERT`, `FROM`)
+  - Record findings using schema from **Appendix A1**
 
 - [ ] **Step 5: Write the API sweep instructions — Layer 2: CRUD Flows section**
 
-Tells the agent how to execute CRUD flows:
-- For each `crudFlow` in manifest (filtered by risk policy):
-  - POST: create resource with minimal valid payload, capture ID from response
-  - GET by ID: verify 200, verify data matches what was sent
-  - PATCH: modify one field, verify 200
-  - GET by ID: verify update persisted
-  - DELETE: if risk allows, verify 200/204
-  - GET by ID: verify 404 or soft-delete response
-  - Also test: invalid input → 400/422 (not 500), missing required fields → descriptive error
-- Record findings per step
+Tells the agent how to execute CRUD flows. Use curl patterns from **Appendix A3**.
 
-~35-40 lines.
+- For each `crudFlow` in manifest (filtered by risk policy per Appendix A4):
+  - **Payload generation**: derive minimal valid payload from `manifest.schemas` — use required fields only. Use test values: strings like `"Sentinel Test {timestamp}"`, numbers like `1`, booleans like `true`. The payload will be cleaned up (via DELETE or left for manual cleanup).
+  - POST: create resource with minimal valid payload, capture `id` from JSON response
+  - GET by ID: verify 200, verify at least the fields sent in POST are present
+  - PATCH: modify one string field (e.g. append " Updated"), verify 200
+  - GET by ID: verify the patched field persisted
+  - DELETE: if risk policy allows, verify 200/204
+  - GET by ID after DELETE: verify 404 or soft-delete response (200 with `deleted_at` set)
+  - **Invalid input test**: POST with empty body → expect 400/422 (not 500)
+  - **Duplicate test**: if POST succeeded, try same POST again → expect 409 if resource has unique constraints (check if schema has unique-looking fields like `email`, `name`). If no unique constraint detected, skip this test.
+- Record findings per step using schema from **Appendix A1**
 
 - [ ] **Step 6: Write the API sweep instructions — Layer 3: Schema Contract Testing section**
 
@@ -552,25 +542,16 @@ Tells the agent how to validate response schemas:
     - Nested object mismatch → Error
   - Record findings with field name, expected type, actual type
 
-~30-35 lines.
 
 - [ ] **Step 7: Write the API sweep instructions — Output Format section**
 
-Tells the agent how to return findings:
-- Return a JSON array of findings, each with:
-  - `severity`: "critical" | "error" | "warning" | "info"
-  - `category`: "health" | "rbac" | "crud" | "schema" | "security"
-  - `endpoint`: "METHOD /path"
-  - `role`: which role was being tested
-  - `message`: human-readable description
-  - `expected`: what was expected
-  - `actual`: what was received
-  - `fileRef`: file:line if applicable
-  - `fixSuggestion`: optional fix hint
-- Also return metadata: endpoints tested count, roles tested, duration
-- Write findings to a temp file for the command to collect
+Write findings using the canonical schema from **Appendix A1**. Write to the path defined in **Appendix A2** (`sentinel-reports/.api-findings.json`).
 
-~25-30 lines.
+- Create `sentinel-reports/` directory if it doesn't exist
+- Write the complete findings JSON (metadata + findings array) to `sentinel-reports/.api-findings.json`
+- Set `metadata.mode` to `"api"`
+- Set `breakpoint` and `screenshot` to `null` for all API findings
+- Print a brief summary to the user: "{N} findings ({critical} critical, {error} errors, {warning} warnings)"
 
 - [ ] **Step 8: Commit api-sweeper agent**
 
@@ -595,91 +576,78 @@ git commit -m "feat: api-sweeper agent — endpoint health, RBAC, CRUD flows, sc
 name: browser-sweeper
 description: Use this agent to perform browser-based QA sweeps using Playwright MCP. Navigates routes as each role, captures console errors, network failures, layout issues, and responsive problems. Reads sentinel-manifest.json for configuration. <example>Context: User runs /sentinel sweep\nassistant: "Dispatching browser-sweeper for visual QA"\n<commentary>Full sweep triggers browser testing.</commentary></example>
 model: sonnet
-tools: ["Read", "Write", "Bash", "Glob", "Grep", "mcp__plugin_playwright_playwright__browser_navigate", "mcp__plugin_playwright_playwright__browser_snapshot", "mcp__plugin_playwright_playwright__browser_take_screenshot", "mcp__plugin_playwright_playwright__browser_console_messages", "mcp__plugin_playwright_playwright__browser_network_requests", "mcp__plugin_playwright_playwright__browser_evaluate", "mcp__plugin_playwright_playwright__browser_resize", "mcp__plugin_playwright_playwright__browser_click", "mcp__plugin_playwright_playwright__browser_fill_form", "mcp__plugin_playwright_playwright__browser_close"]
+tools: ["Read", "Write", "Bash", "Glob", "Grep", "mcp__plugin_playwright_playwright__browser_navigate", "mcp__plugin_playwright_playwright__browser_navigate_back", "mcp__plugin_playwright_playwright__browser_snapshot", "mcp__plugin_playwright_playwright__browser_take_screenshot", "mcp__plugin_playwright_playwright__browser_console_messages", "mcp__plugin_playwright_playwright__browser_network_requests", "mcp__plugin_playwright_playwright__browser_evaluate", "mcp__plugin_playwright_playwright__browser_resize", "mcp__plugin_playwright_playwright__browser_click", "mcp__plugin_playwright_playwright__browser_fill_form", "mcp__plugin_playwright_playwright__browser_wait_for", "mcp__plugin_playwright_playwright__browser_close"]
 ---
 ```
 
 - [ ] **Step 2: Write the browser sweep instructions — Login Flow section**
 
-Tells the agent how to authenticate in the browser:
-- Read `sentinel-manifest.json` for auth config and roles
-- For each role (in hierarchy order):
-  - Navigate to login page
-  - Fill email/password fields
-  - Submit login form
-  - Wait for redirect/navigation
-  - If login fails (still on login page or error visible): record Critical finding, skip this role
-  - Verify auth by checking page content or localStorage for token
-- For unauthenticated: skip login, navigate directly
+Use the login form selector strategy from **Appendix A7**.
 
-~30-35 lines.
+- Read `sentinel-manifest.json` for `auth.roles`, `auth.loginEndpoint`, and `auth.roleHierarchy`
+- For each role (in hierarchy order from manifest):
+  - Follow the login flow from Appendix A7: navigate → fill form → submit → verify
+  - If login fails: record Critical finding using schema from Appendix A1 (category="health", message="Login failed for role {role}"), skip all routes for this role
+- For unauthenticated: skip login, navigate to routes directly
 
 - [ ] **Step 3: Write the browser sweep instructions — Route Navigation and Console Capture section**
 
-Tells the agent what to check on each route:
 - For each role, for each route accessible to this role:
-  - Resolve parameters (same lookup syntax as API sweeper)
-  - Navigate to the route URL
-  - Wait for network idle (no pending requests)
-  - Capture console messages: look for `console.error`, unhandled promise rejections, and missing i18n key warnings (pattern: `[intlify]` or `Not found` in console)
-  - Capture network requests: look for 4xx/5xx responses, failed requests
-  - Record findings with route, role, message text, and severity
-
-~35-40 lines.
+  - Resolve parameters (same lookup syntax as API sweeper — `lookup:`, `static:`, `env:`)
+  - Navigate using `browser_navigate` to `{baseUrl}{resolvedPath}`
+  - Wait using `browser_wait_for` with `{ "state": "networkidle" }` (Playwright's network idle state — no requests for 500ms)
+  - Capture console messages via `browser_console_messages`:
+    - Any message with level `error` → finding with severity=error, category=console
+    - Messages matching `/\[intlify\]/i` or `"Not found"` pattern → severity=warning, category=i18n, message="Missing i18n key: {extracted key}"
+    - Unhandled promise rejection → severity=error, category=console
+  - Capture network requests via `browser_network_requests`:
+    - Any response with status 4xx/5xx → severity=warning (for 4xx) or error (for 5xx), category=network
+    - Failed requests (no response) → severity=error, category=network
+  - Record all findings using schema from **Appendix A1**, with `route` field set to the current route path
 
 - [ ] **Step 4: Write the browser sweep instructions — Layout Checks section**
 
-Tells the agent how to perform DOM inspection at each breakpoint:
+Include ALL 8 layout check JavaScript snippets from **Appendix A6** in the agent instructions. Each check is run via `browser_evaluate` at every breakpoint.
 
-For each check from the spec, provide the exact JavaScript to evaluate via `browser_evaluate`:
-
-1. **Horizontal overflow**: `document.body.scrollWidth > window.innerWidth`
-2. **Broken images**: `[...document.querySelectorAll('img')].filter(i => i.complete && i.naturalWidth === 0).map(i => i.src)`
-3. **Invisible buttons**: `[...document.querySelectorAll('button, a, [role=button]')].filter(el => el.offsetWidth === 0 || el.getBoundingClientRect().right < 0).map(el => el.textContent.trim())`
-4. **Text truncation**: `[...document.querySelectorAll('h1,h2,h3,h4,h5,h6,button,a')].filter(el => el.scrollWidth > el.clientWidth).map(el => ({text: el.textContent.trim(), tag: el.tagName}))`
-5. **Empty containers**: use selectors from settings `emptyContainerSelectors`, check `el.children.length === 0 && el.textContent.trim() === ''`
-6. **Overlapping interactive elements**: get bounding rects of all buttons/links, check for intersections
-
-~50-60 lines.
+For each check result:
+- If the check returns a non-empty/truthy result → create a finding using Appendix A1 schema
+- Severity mappings: Horizontal overflow=warning, Overlapping elements=warning, Hidden content=warning, Broken images=error, Empty containers=info, Text truncation=warning, Nav collapse=warning, Invisible buttons=error
+- Category for all layout checks: `"layout"`
+- Set `breakpoint` field to the current viewport width
 
 - [ ] **Step 5: Write the browser sweep instructions — RBAC Negative Testing section**
 
-Tells the agent how to verify unauthorized access is blocked:
-- Using roleHierarchy from manifest: for each role, determine which routes should be inaccessible
-- Navigate to each inaccessible route
-- Check: should see redirect to login page, or 403 content, or empty authorized content
-- Flag as Critical if the route content is visible to an unauthorized role
-- For unauthenticated: all `requiresAuth` routes should redirect to login
+Use the RBAC detection strategy from **Appendix A8**.
 
-~25-30 lines.
+- Using `auth.roleHierarchy` from manifest: for each role, compute which routes should be inaccessible based on `requiredRole` ordering
+  - Example: if roleHierarchy is `["admin","manager","user"]` and a route requires "admin", then "manager", "user", and unauthenticated should NOT access it
+- Navigate to each inaccessible route
+- Apply the 4-step detection from Appendix A8 (URL redirect → HTTP status → content check → positive content check)
+- Flag as Critical (category="rbac") if positive content is visible to an unauthorized role
+- For unauthenticated: all routes with `requiredRole` set should redirect or return 401/403
 
 - [ ] **Step 6: Write the browser sweep instructions — Responsive Testing section**
 
-Tells the agent how to test at multiple breakpoints:
-- Read breakpoints from manifest (or settings fallback)
+- Read breakpoints from `manifest.breakpoints` (defaults: `[375, 768, 1280]`)
 - For each breakpoint:
-  - Resize browser to breakpoint width
-  - Re-navigate to each route (or re-check current route)
-  - Run all layout checks again
-  - If issues found: take screenshot
-  - Name screenshots: `{role}-{route-slug}-{breakpoint}-{timestamp}.png`
-  - Save to `sentinel-reports/screenshots/`
+  - Resize browser via `browser_resize` to `{ "width": {breakpoint}, "height": 900 }`
+  - For each route (same set as Step 3): navigate and run all 8 layout checks from Appendix A6
+  - If any check returns findings: take screenshot via `browser_take_screenshot`
+  - Screenshot naming: `{role}-{route-slug}-{breakpoint}-{YYYYMMDD}.png` (slug = route path with `/` replaced by `-`)
+  - Save to `{reportDir}/screenshots/` (read `reportDir` from settings, default `sentinel-reports`)
+  - Create screenshots directory if it doesn't exist
 
-~25-30 lines.
+- [ ] **Step 7: Write the browser sweep instructions — Output section**
 
-- [ ] **Step 7: Write the browser sweep instructions — Screenshot and Output section**
+Write findings using the canonical schema from **Appendix A1**. Write to the path defined in **Appendix A2** (`sentinel-reports/.browser-findings.json`).
 
-Tells the agent when and how to capture screenshots:
-- Screenshot on any error or warning found
-- Use `browser_take_screenshot` tool
-- Save to `{reportDir}/screenshots/`
-- Reference in findings with relative path
-
-Output format: same JSON findings array as api-sweeper, with additional fields:
-- `breakpoint`: viewport width when issue was found
-- `screenshot`: relative path to screenshot file
-
-~20-25 lines.
+- Create `sentinel-reports/` directory if it doesn't exist
+- Write the complete findings JSON (metadata + findings array) to `sentinel-reports/.browser-findings.json`
+- Set `metadata.mode` to `"browser"`
+- Set `metadata.routesTested` to the count of routes navigated
+- For each finding: set `breakpoint` to viewport width (or `null` for desktop-only findings) and `screenshot` to relative path (or `null` if no screenshot)
+- Close the browser via `browser_close`
+- Print a brief summary: "{N} findings across {routesTested} routes at {breakpoints} breakpoints"
 
 - [ ] **Step 8: Commit browser-sweeper agent**
 
@@ -713,7 +681,6 @@ Sections:
 11. **Known Limitations** — from spec (JWT only, i18n coverage, schema parsing)
 12. **License** — Apache-2.0
 
-~150-200 lines.
 
 - [ ] **Step 2: Commit README**
 
@@ -791,6 +758,280 @@ Iterate on agent prompts based on real-world behavior. Common issues:
 git add -A
 git commit -m "fix: integration refinements from SmartSessions validation"
 ```
+
+---
+
+## Appendix A: Shared Definitions
+
+These definitions are referenced by multiple tasks. Include them verbatim in the relevant agent files.
+
+### A1: Canonical Findings JSON Schema
+
+Both api-sweeper and browser-sweeper MUST produce findings in this exact format. The sentinel command merges and deduplicates by `endpoint + role + message`.
+
+```json
+{
+  "metadata": {
+    "mode": "api | browser",
+    "rolesTests": ["admin", "manager", "user", "unauthenticated"],
+    "endpointsTested": 84,
+    "routesTested": 0,
+    "startedAt": "2026-03-15T10:00:00Z",
+    "finishedAt": "2026-03-15T10:01:30Z"
+  },
+  "findings": [
+    {
+      "severity": "critical | error | warning | info",
+      "category": "health | rbac | crud | schema | security | console | layout | i18n | network",
+      "endpoint": "GET /api/v1/users",
+      "route": "/admin/users",
+      "role": "manager",
+      "message": "RBAC violation: /admin/settings accessible as manager",
+      "expected": "401 or 403",
+      "actual": "200",
+      "fileRef": "api/v1/endpoints/global_settings.py:45",
+      "fixSuggestion": "Add require_admin dependency to the settings endpoint",
+      "breakpoint": null,
+      "screenshot": null
+    }
+  ]
+}
+```
+
+Browser-sweeper findings include `breakpoint` (viewport width, e.g. `375`) and `screenshot` (relative path, e.g. `sentinel-reports/screenshots/manager-payments-375-20260315.png`). API-sweeper sets both to `null`.
+
+### A2: Findings File Paths
+
+Agents write findings to deterministic paths in the project root. The sentinel command reads these after each agent completes.
+
+| Agent | Output file |
+|-------|------------|
+| api-sweeper | `sentinel-reports/.api-findings.json` |
+| browser-sweeper | `sentinel-reports/.browser-findings.json` |
+
+The sentinel command:
+1. Creates `sentinel-reports/` if it doesn't exist
+2. Reads `.api-findings.json` and/or `.browser-findings.json`
+3. Merges findings arrays, deduplicates by `endpoint + role + message`
+4. Generates the final report
+
+### A3: Curl Command Patterns
+
+The api-sweeper uses these curl patterns (via Bash tool). All patterns include timeout handling.
+
+**Login (get JWT token):**
+```bash
+curl -s -X POST {apiBaseUrl}{loginEndpoint} \
+  -H "Content-Type: application/json" \
+  -d '{"email": "{email}", "password": "{password}"}' \
+  --max-time {responseTimeout/1000}
+```
+Extract token: parse JSON response for `access_token` field.
+
+**GET request (authenticated):**
+```bash
+curl -s -w "\n%{http_code}\n%{time_total}" \
+  -H "Authorization: Bearer {token}" \
+  -H "Accept: application/json" \
+  {apiBaseUrl}{path} \
+  --max-time {responseTimeout/1000}
+```
+Parse: last line = response time (seconds), second-to-last = HTTP status code, rest = body.
+
+**POST request (authenticated):**
+```bash
+curl -s -w "\n%{http_code}\n%{time_total}" \
+  -X POST \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{payload}' \
+  {apiBaseUrl}{path} \
+  --max-time {responseTimeout/1000}
+```
+
+**Unauthenticated request (no token):**
+```bash
+curl -s -w "\n%{http_code}" \
+  -H "Accept: application/json" \
+  {apiBaseUrl}{path} \
+  --max-time {responseTimeout/1000}
+```
+
+**Timeout handling:** If curl exits with code 28, record a finding: severity=error, category=health, message="Request timed out after {timeout}ms".
+
+### A4: Risk Policy Matching Logic
+
+Both sweeper agents apply risk policy before executing each action:
+
+```
+For each endpoint/route:
+  entry_key = "{method} {path}" for endpoints, or "{path}" for routes
+
+  1. If entry_key is in riskPolicy.alwaysSkip → SKIP (log as "Skipped")
+  2. If entry_key is in riskPolicy.alwaysAllow → EXECUTE regardless of risk level
+  3. If riskLevel > riskPolicy.maxRiskLevel:
+     a. If --sandbox flag AND pre-flight checks pass → prompt for confirmation
+     b. Else → SKIP (log in "Skipped Actions" report section)
+  4. Else → EXECUTE
+
+  Matching: exact string comparison of entry_key against list entries.
+```
+
+Risk policy is already resolved in the manifest (manifest-generator applies settings.json overrides). Sweepers read `manifest.riskPolicy` directly — no additional override logic needed.
+
+### A5: Sandbox Mode Confirmation Prompts
+
+When `--sandbox` is active and a high/critical action is reached, display this exact format:
+
+**For HIGH risk (51-75):**
+```
+WARNING — HIGH RISK action detected:
+
+  Route: {method} {path}
+  Description: {description}
+  Risk Score: {riskScore}/100
+  Risk Factors: {comma-separated factors}
+  Side Effects: {sideEffects joined with ", "}
+
+  Execute this action? [y/n]
+```
+
+**For CRITICAL risk (76-100):**
+```
+CRITICAL action detected:
+
+  Route: {method} {path}
+  Description: {description}
+  Risk Score: {riskScore}/100
+  Risk Factors: {comma-separated factors}
+  Side Effects:
+    - {sideEffect1}
+    - {sideEffect2}
+    ...
+
+  Execute this action? [y/n]
+```
+
+### A6: All Layout Check JavaScript Snippets
+
+The browser-sweeper evaluates these via `browser_evaluate` at each breakpoint. All 8 checks from the spec:
+
+**1. Horizontal overflow (Warning):**
+```javascript
+document.body.scrollWidth > window.innerWidth
+```
+
+**2. Overlapping interactive elements (Warning):**
+```javascript
+(() => {
+  const els = [...document.querySelectorAll('button, a, [role=button], input, select, textarea')];
+  const rects = els.map(el => ({ el, r: el.getBoundingClientRect() }));
+  const overlaps = [];
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i].r, b = rects[j].r;
+      if (a.width > 0 && b.width > 0 &&
+          !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom)) {
+        overlaps.push([rects[i].el.textContent.trim().slice(0,30), rects[j].el.textContent.trim().slice(0,30)]);
+      }
+    }
+  }
+  return overlaps;
+})()
+```
+
+**3. Content hidden behind other elements (Warning):**
+```javascript
+(() => {
+  const els = [...document.querySelectorAll('button, a, [role=button]')];
+  const hidden = [];
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    const top = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2);
+    if (top && top !== el && !el.contains(top) && !top.contains(el)) {
+      hidden.push({ text: el.textContent.trim().slice(0,30), coveredBy: top.tagName });
+    }
+  }
+  return hidden;
+})()
+```
+
+**4. Broken images (Error):**
+```javascript
+[...document.querySelectorAll('img')].filter(i => i.complete && i.naturalWidth === 0).map(i => i.src)
+```
+
+**5. Empty containers (Info):**
+```javascript
+// Selectors from settings.emptyContainerSelectors
+((selectors) => {
+  return selectors.flatMap(s =>
+    [...document.querySelectorAll(s)]
+      .filter(el => el.children.length === 0 && el.textContent.trim() === '')
+      .map(el => ({ selector: s, id: el.id || el.className }))
+  );
+})(['{selectors_from_settings}'])
+```
+
+**6. Text truncation (Warning):**
+```javascript
+[...document.querySelectorAll('h1,h2,h3,h4,h5,h6,button,a,.truncate')]
+  .filter(el => el.scrollWidth > el.clientWidth)
+  .map(el => ({ text: el.textContent.trim().slice(0,50), tag: el.tagName }))
+```
+
+**7. Missing responsive nav collapse (Warning):**
+```javascript
+(() => {
+  const nav = document.querySelector('nav');
+  if (!nav) return null;
+  const navRect = nav.getBoundingClientRect();
+  const items = [...nav.querySelectorAll('a, button')];
+  const overflowing = items.filter(el => {
+    const r = el.getBoundingClientRect();
+    return r.right > navRect.right || r.left < navRect.left;
+  });
+  return overflowing.length > 0 ? overflowing.map(el => el.textContent.trim()) : null;
+})()
+```
+
+**8. Invisible buttons (Error):**
+```javascript
+[...document.querySelectorAll('button, a, [role=button]')]
+  .filter(el => {
+    const r = el.getBoundingClientRect();
+    return el.offsetWidth === 0 || el.offsetHeight === 0 ||
+           r.right < 0 || r.bottom < 0 ||
+           r.left > window.innerWidth || r.top > window.innerHeight;
+  })
+  .map(el => el.textContent.trim())
+```
+
+### A7: Login Form Selector Strategy
+
+The browser-sweeper uses this fallback chain for login:
+
+1. Navigate to the app's login route (typically `/login` or `/auth/login` — read from manifest routes where `path` contains "login")
+2. Fill form using `browser_fill_form` tool with field mapping:
+   - Email: try selectors in order: `input[name=email]`, `input[type=email]`, `input[id*=email]`
+   - Password: try `input[name=password]`, `input[type=password]`, `input[id*=password]`
+3. Submit: try `button[type=submit]`, then `form button`, then `button:has-text("Login")` or `button:has-text("Sign in")`
+4. Wait for navigation (URL change or network idle)
+5. Verify success: check if URL changed away from login page, OR check `browser_evaluate` for `localStorage.getItem('token')` or `localStorage.getItem('access_token')`
+6. If still on login page after 5 seconds: record Critical finding "Login failed for role {role}"
+
+### A8: RBAC Negative Testing Detection
+
+After navigating to a restricted route as an unauthorized role, the agent determines unauthorized access by:
+
+1. **URL redirect check**: If the URL changed to a login page or different route → access correctly denied (PASS)
+2. **HTTP status in network requests**: If the page's API calls returned 401/403 → access correctly denied (PASS)
+3. **Content check via `browser_snapshot`**: Take a snapshot. If the page shows login form, "Access Denied", "Forbidden", or is mostly empty → PASS
+4. **Positive content check**: If the snapshot shows data tables, forms, or substantive content that matches what an authorized role would see → FAIL (Critical RBAC violation)
+
+The key heuristic: if `browser_snapshot` shows interactive content (tables, forms, buttons with data) when it shouldn't, that's a Critical RBAC violation.
 
 ---
 
