@@ -76,7 +76,7 @@ Based on the subcommand parsed in Step 1, follow the matching section below. Exe
 
 ### Subcommand: `setup`
 
-Invoke the `sentinel-setup` skill using the Skill tool. Pass no additional arguments. The skill handles all environment detection, Playwright installation checking, and configuration guidance.
+Invoke the `sentinel:sentinel-setup` skill using the Skill tool. Pass no additional arguments. The skill handles all environment detection, Playwright installation checking, and configuration guidance.
 
 ---
 
