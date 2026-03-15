@@ -8,7 +8,7 @@
     {
       "name": "sentinel",
       "description": "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to configure",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "author": {
         "name": "Michel Abboud",
         "email": "info@maicore.dev"
