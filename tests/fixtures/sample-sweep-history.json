@@ -1,0 +1,18 @@
+{
+  "runs": [
+    {
+      "runId": "2026-03-14T08-00-00Z",
+      "startedAt": "2026-03-14T08:00:00Z",
+      "finishedAt": "2026-03-14T08:05:30Z",
+      "modes": ["api"],
+      "totalFindings": 3,
+      "bySeverity": {
+        "critical": 1,
+        "error": 1,
+        "warning": 1,
+        "info": 0
+      },
+      "reportDir": "sentinel-reports/2026-03-14T08-00-00Z"
+    }
+  ]
+}

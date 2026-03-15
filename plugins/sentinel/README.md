@@ -387,6 +387,27 @@ Sentinel is a Claude Code plugin built from 5 components:
 
 ---
 
+## Security Considerations
+
+### Manifest credentials
+
+The manifest's `auth.roles` section may contain test credentials (usernames, passwords, tokens) auto-detected from `CLAUDE.md`, seed files, or environment variables. These credentials are written to `sentinel-manifest.json` inside `sentinel-reports/`.
+
+**Recommendations:**
+- Add `sentinel-reports/` to `.gitignore` (already included by default)
+- Never commit `sentinel-manifest.json` to version control
+- Use dedicated test/dev credentials — never production secrets
+- Review the manifest before sharing sweep reports externally
+
+### Sandbox mode safety
+
+Sandbox mode (`--sandbox`) executes destructive actions (DELETE, bulk operations) against your dev server. Pre-flight checks verify you're not targeting production, but always:
+- Confirm `APP_ENV` is not `production`
+- Verify your database is a dev/test instance
+- Have a seed script ready to restore data after sandbox runs
+
+---
+
 ## Known Limitations
 
 | Limitation | Workaround |

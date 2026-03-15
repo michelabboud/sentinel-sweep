@@ -21,6 +21,7 @@ TESTS=(
   "test-manifest-schema.sh"
   "test-mirror-parity.sh"
   "test-version-consistency.sh"
+  "test-runtime-behavior.sh"
 )
 
 echo -e "${BOLD}========================================${NC}"

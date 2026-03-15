@@ -1,0 +1,26 @@
+{
+  "metadata": {
+    "mode": "api",
+    "rolesTested": ["admin"],
+    "endpointsTested": 1,
+    "routesTested": 0,
+    "startedAt": "2026-03-15T10:00:00Z",
+    "finishedAt": "2026-03-15T10:00:30Z"
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "category": "health",
+      "endpoint": "GET /api/users",
+      "route": null,
+      "role": "admin",
+      "message": "Server error (500) on GET /api/users as admin",
+      "expected": "200",
+      "actual": "500",
+      "fileRef": null,
+      "fixSuggestion": "Check server logs for unhandled exception",
+      "breakpoint": null,
+      "screenshot": null
+    }
+  ]
+}

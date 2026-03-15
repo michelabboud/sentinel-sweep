@@ -12,169 +12,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1. JSON validation
-      - name: Validate JSON files
+      # Run the full integration test suite
+      # Covers: structure, frontmatter, schema, mirror parity, version consistency
+      - name: Run integration tests
+        run: ./tests/run-all.sh
+
+      # JSON validation (catches files outside tests/ scope)
+      - name: Validate all JSON files
         run: |
-          echo "=== JSON Validation ==="
           errors=0
           while IFS= read -r f; do
             if ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
               echo "FAIL: $f"
               errors=$((errors + 1))
-            else
-              echo "  ok: $f"
             fi
-          done < <(find . -name '*.json' -not -path './.git/*')
-
+          done < <(find . -name '*.json' -not -path './.git/*' -not -path './tests/*')
           if [ "$errors" -gt 0 ]; then
             echo "::error::$errors JSON file(s) failed validation"
             exit 1
           fi
-          echo "All JSON files are valid."
+          echo "All JSON files valid."
 
-      # 2. Plugin mirror parity
-      - name: Verify plugin mirror parity
-        run: |
-          echo "=== Plugin Mirror Parity ==="
-          errors=0
-          mirror="plugins/sentinel"
-
-          # Directory pairs: mirror path -> root path
-          check_dir() {
-            local mirror_dir="$1" root_dir="$2"
-            echo "--- $mirror_dir vs $root_dir ---"
-            # Check every file in mirror exists and matches root
-            while IFS= read -r mf; do
-              rf="${root_dir}/${mf#"$mirror_dir/"}"
-              if [ ! -f "$rf" ]; then
-                echo "FAIL: $mf exists in mirror but $rf missing at root"
-                errors=$((errors + 1))
-              elif ! diff -q "$mf" "$rf" > /dev/null 2>&1; then
-                echo "FAIL: $mf differs from $rf"
-                diff --unified=3 "$rf" "$mf" | head -20
-                errors=$((errors + 1))
-              else
-                echo "  ok: $mf"
-              fi
-            done < <(find "$mirror_dir" -type f 2>/dev/null)
-            # Check every file in root exists in mirror
-            while IFS= read -r rf; do
-              mf="${mirror_dir}/${rf#"$root_dir/"}"
-              if [ ! -f "$mf" ]; then
-                echo "FAIL: $rf exists at root but $mf missing in mirror"
-                errors=$((errors + 1))
-              fi
-            done < <(find "$root_dir" -type f 2>/dev/null)
-          }
-
-          check_dir "$mirror/agents"  "agents"
-          check_dir "$mirror/skills"  "skills"
-          check_dir "$mirror/commands" "commands"
-
-          # Individual file pairs
-          for name in settings.json LICENSE README.md; do
-            echo "--- $mirror/$name vs $name ---"
-            if [ ! -f "$mirror/$name" ]; then
-              echo "FAIL: $mirror/$name missing"
-              errors=$((errors + 1))
-            elif [ ! -f "$name" ]; then
-              echo "FAIL: $name missing"
-              errors=$((errors + 1))
-            elif ! diff -q "$mirror/$name" "$name" > /dev/null 2>&1; then
-              echo "FAIL: $mirror/$name differs from $name"
-              diff --unified=3 "$name" "$mirror/$name" | head -20
-              errors=$((errors + 1))
-            else
-              echo "  ok: $name"
-            fi
-          done
-
-          if [ "$errors" -gt 0 ]; then
-            echo "::error::$errors mirror parity failure(s)"
-            exit 1
-          fi
-          echo "Plugin mirror is in sync."
-
-      # 3. YAML frontmatter validation
+      # YAML frontmatter validation
       - name: Validate YAML frontmatter
         run: |
-          echo "=== YAML Frontmatter Validation ==="
           errors=0
-
-          check_frontmatter() {
-            local f="$1"
-            # Extract text between first --- and second ---
-            if ! head -1 "$f" | grep -q '^---$'; then
-              echo "FAIL: $f — missing opening ---"
-              errors=$((errors + 1))
-              return
-            fi
-            # Find closing --- line number (skip line 1)
-            close_line=$(awk 'NR>1 && /^---$/ { print NR; exit }' "$f")
-            if [ -z "$close_line" ]; then
-              echo "FAIL: $f — missing closing ---"
-              errors=$((errors + 1))
-              return
-            fi
-            # Extract frontmatter and validate with python yaml
-            frontmatter=$(sed -n "2,$((close_line - 1))p" "$f")
-            if ! echo "$frontmatter" | python3 -c "import yaml, sys; yaml.safe_load(sys.stdin)" 2>/dev/null; then
-              echo "FAIL: $f — invalid YAML frontmatter"
-              errors=$((errors + 1))
-            else
-              echo "  ok: $f"
-            fi
-          }
-
           for dir in agents skills; do
             while IFS= read -r f; do
-              check_frontmatter "$f"
+              if ! head -1 "$f" | grep -q '^---$'; then
+                echo "FAIL: $f — missing opening ---"
+                errors=$((errors + 1))
+                continue
+              fi
+              close_line=$(awk 'NR>1 && /^---$/ { print NR; exit }' "$f")
+              if [ -z "$close_line" ]; then
+                echo "FAIL: $f — missing closing ---"
+                errors=$((errors + 1))
+                continue
+              fi
+              frontmatter=$(sed -n "2,$((close_line - 1))p" "$f")
+              if ! echo "$frontmatter" | python3 -c "import yaml, sys; yaml.safe_load(sys.stdin)" 2>/dev/null; then
+                echo "FAIL: $f — invalid YAML"
+                errors=$((errors + 1))
+              fi
             done < <(find "$dir" -name '*.md' -type f 2>/dev/null)
           done
-
           if [ "$errors" -gt 0 ]; then
             echo "::error::$errors file(s) with invalid YAML frontmatter"
             exit 1
           fi
-          echo "All frontmatter is valid."
-
-      # 4. Version consistency
-      - name: Check version consistency
-        run: |
-          echo "=== Version Consistency ==="
-
-          # plugin.json version
-          v_plugin=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
-          echo "plugin.json:      $v_plugin"
-
-          # marketplace.json version
-          v_market=$(python3 -c "import json; print(json.load(open('.claude-plugin/marketplace.json'))['plugins'][0]['version'])")
-          echo "marketplace.json: $v_market"
-
-          # skills/sentinel/SKILL.md frontmatter version
-          v_skill=$(awk '/^---$/{n++; next} n==1 && /^version:/{print $2; exit}' skills/sentinel/SKILL.md)
-          echo "SKILL.md:         $v_skill"
-
-          # CHANGELOG.md latest version header (first ## [x.y.z] line)
-          v_changelog=$(grep -m1 -oP '(?<=## \[)[0-9]+\.[0-9]+\.[0-9]+(?=\])' CHANGELOG.md)
-          echo "CHANGELOG.md:     $v_changelog"
-
-          errors=0
-          if [ "$v_plugin" != "$v_market" ]; then
-            echo "::error::plugin.json ($v_plugin) != marketplace.json ($v_market)"
-            errors=$((errors + 1))
-          fi
-          if [ "$v_plugin" != "$v_skill" ]; then
-            echo "::error::plugin.json ($v_plugin) != SKILL.md ($v_skill)"
-            errors=$((errors + 1))
-          fi
-          if [ "$v_plugin" != "$v_changelog" ]; then
-            echo "::error::plugin.json ($v_plugin) != CHANGELOG.md ($v_changelog)"
-            errors=$((errors + 1))
-          fi
-
-          if [ "$errors" -gt 0 ]; then
-            echo "Version mismatch detected across $errors pair(s)"
-            exit 1
-          fi
-          echo "All versions match: $v_plugin"
+          echo "All frontmatter valid."

@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sentinel-manifest.schema.json",
+  "title": "Sentinel Manifest",
+  "description": "Schema for sentinel-manifest.json produced by the manifest-generator agent. Describes frontend routes, backend endpoints, Pydantic schemas, CRUD flows, auth config, and risk policy for a target application.",
+  "type": "object",
+  "required": ["generatedAt", "app", "auth", "routes", "endpoints", "crudFlows", "schemas"],
+  "properties": {
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of when the manifest was generated."
+    },
+    "app": {
+      "type": "object",
+      "description": "Application metadata.",
+      "required": ["name", "framework", "baseUrl", "apiBaseUrl"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Application name derived from package.json, pyproject.toml, or directory name."
+        },
+        "framework": {
+          "type": "object",
+          "required": ["frontend", "backend"],
+          "properties": {
+            "frontend": {
+              "type": "string",
+              "enum": ["vue", "react", "svelte", "angular", "none"],
+              "description": "Detected frontend framework."
+            },
+            "backend": {
+              "type": "string",
+              "enum": ["fastapi", "express", "django", "flask", "none"],
+              "description": "Detected backend framework."
+            }
+          },
+          "additionalProperties": false
+        },
+        "baseUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "Frontend base URL (e.g. http://localhost:3000)."
+        },
+        "apiBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "API base URL (e.g. http://localhost:8000)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "type": "object",
+      "description": "Authentication configuration including login endpoint, roles, credentials, and role hierarchy.",
+      "required": ["method", "loginEndpoint", "roleHierarchy", "roles"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["jwt", "session", "none"],
+          "description": "Detected authentication method."
+        },
+        "loginEndpoint": {
+          "type": ["string", "null"],
+          "description": "Full path to the login endpoint (e.g. /api/v1/auth/login). Null if no login endpoint found."
+        },
+        "roleHierarchy": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Ordered list of roles from most access to least (e.g. [\"admin\", \"manager\", \"user\"])."
+        },
+        "roles": {
+          "type": "object",
+          "description": "Test credentials keyed by role name.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["email", "password"],
+            "properties": {
+              "email": { "type": "string", "format": "email" },
+              "password": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "routes": {
+      "type": "array",
+      "description": "Frontend routes extracted from the router file.",
+      "items": {
+        "$ref": "#/$defs/route"
+      }
+    },
+    "endpoints": {
+      "type": "array",
+      "description": "Backend API endpoints extracted from endpoint files.",
+      "items": {
+        "$ref": "#/$defs/endpoint"
+      }
+    },
+    "crudFlows": {
+      "type": "array",
+      "description": "Detected CRUD lifecycle flows grouping related endpoints.",
+      "items": {
+        "$ref": "#/$defs/crudFlow"
+      }
+    },
+    "schemas": {
+      "type": "object",
+      "description": "Pydantic model definitions keyed by class name.",
+      "additionalProperties": {
+        "$ref": "#/$defs/schemaDefinition"
+      }
+    },
+    "breakpoints": {
+      "type": "array",
+      "description": "Viewport widths in pixels for responsive testing.",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "riskPolicy": {
+      "$ref": "#/$defs/riskPolicy"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "riskLevel": {
+      "type": "string",
+      "enum": ["safe", "medium", "high", "critical"],
+      "description": "Computed risk classification based on risk score thresholds: 0-25 safe, 26-50 medium, 51-75 high, 76-100 critical."
+    },
+    "riskScore": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Numeric risk score from 0 to 100."
+    },
+    "paramValue": {
+      "type": "string",
+      "description": "Parameter resolution expression. Formats: lookup:<resource>[N].field, static:<value>, env:<VAR_NAME>.",
+      "pattern": "^(lookup:|static:|env:).+"
+    },
+    "route": {
+      "type": "object",
+      "description": "A frontend route entry.",
+      "required": ["path", "view", "requiredRole", "riskLevel", "riskScore", "params"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Route path with {param} placeholders for dynamic segments."
+        },
+        "view": {
+          "type": "string",
+          "description": "Vue component name (filename without extension)."
+        },
+        "requiredRole": {
+          "type": ["string", "null"],
+          "description": "Minimum role required to access this route. Null for public routes."
+        },
+        "riskLevel": { "$ref": "#/$defs/riskLevel" },
+        "riskScore": { "$ref": "#/$defs/riskScore" },
+        "params": {
+          "type": ["object", "null"],
+          "description": "Parameter lookup expressions for dynamic segments. Null if no parameters.",
+          "additionalProperties": { "$ref": "#/$defs/paramValue" }
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Human-readable description. Populated for high/critical routes."
+        },
+        "manual": {
+          "type": "boolean",
+          "description": "True if this entry was manually added by the user and should be preserved during regeneration.",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "endpoint": {
+      "type": "object",
+      "description": "A backend API endpoint entry.",
+      "required": ["method", "path", "requiredRole", "riskLevel", "riskScore", "responseSchema", "description", "sideEffects", "requiresConfirm", "params"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          "description": "HTTP method."
+        },
+        "path": {
+          "type": "string",
+          "description": "Full API path including version prefix and {param} placeholders."
+        },
+        "requiredRole": {
+          "type": ["string", "null"],
+          "description": "Minimum role required. Null for public endpoints."
+        },
+        "riskLevel": { "$ref": "#/$defs/riskLevel" },
+        "riskScore": { "$ref": "#/$defs/riskScore" },
+        "responseSchema": {
+          "type": ["string", "null"],
+          "description": "Name of the Pydantic response model class. Null if none specified."
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Human-readable description from docstring or generated from function name."
+        },
+        "sideEffects": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of side effect descriptions for high/critical endpoints (e.g. cascade deletes)."
+        },
+        "requiresConfirm": {
+          "type": "boolean",
+          "description": "True if the endpoint requires a confirm query parameter."
+        },
+        "params": {
+          "type": ["object", "null"],
+          "description": "Parameter lookup expressions for path parameters. Null if no parameters.",
+          "additionalProperties": { "$ref": "#/$defs/paramValue" }
+        },
+        "manual": {
+          "type": "boolean",
+          "description": "True if this entry was manually added by the user and should be preserved during regeneration.",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "crudFlow": {
+      "type": "object",
+      "description": "A CRUD lifecycle flow grouping related endpoints.",
+      "required": ["name", "steps", "riskLevel", "manual"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Flow name in the format {resource}-lifecycle (e.g. users-lifecycle)."
+        },
+        "steps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 2,
+          "description": "Ordered list of METHOD /path strings representing the CRUD operations."
+        },
+        "riskLevel": { "$ref": "#/$defs/riskLevel" },
+        "manual": {
+          "type": "boolean",
+          "description": "False for auto-generated flows, true for user-defined flows."
+        }
+      },
+      "additionalProperties": false
+    },
+    "schemaDefinition": {
+      "type": "object",
+      "description": "A Pydantic model definition with field metadata.",
+      "required": ["source", "fields"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Source file and line number (e.g. user.py:15)."
+        },
+        "fields": {
+          "type": "object",
+          "description": "Field definitions keyed by field name.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type", "required", "nullable"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["string", "number", "boolean", "array", "object"],
+                "description": "JSON-equivalent type of the Pydantic field."
+              },
+              "required": {
+                "type": "boolean",
+                "description": "True if the field has no default value."
+              },
+              "nullable": {
+                "type": "boolean",
+                "description": "True if the field accepts None/null."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional note about model complexity (e.g. extra fields allowed, computed fields)."
+        },
+        "schemaOverride": {
+          "type": "object",
+          "description": "User-provided schema override preserved across regeneration."
+        }
+      },
+      "additionalProperties": false
+    },
+    "riskPolicy": {
+      "type": "object",
+      "description": "Risk policy controlling which actions are executed during sweeps.",
+      "required": ["maxRiskLevel", "alwaysSkip", "alwaysAllow"],
+      "properties": {
+        "maxRiskLevel": {
+          "$ref": "#/$defs/riskLevel",
+          "description": "Maximum risk level that will be executed without sandbox approval."
+        },
+        "alwaysSkip": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of METHOD /path patterns to always skip."
+        },
+        "alwaysAllow": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of METHOD /path patterns to always allow regardless of risk level."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

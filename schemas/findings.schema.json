@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "findings.schema.json",
+  "title": "Sentinel Findings",
+  "description": "Schema for api-findings.json and browser-findings.json produced by the api-sweeper and browser-sweeper agents. Contains sweep metadata and an array of findings.",
+  "type": "object",
+  "required": ["metadata", "findings"],
+  "additionalProperties": true,
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "description": "Sweep execution metadata.",
+      "required": ["mode", "rolesTested"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["api", "browser"],
+          "description": "Sweep mode: api for API-only sweeps, browser for browser sweeps."
+        },
+        "rolesTested": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of roles exercised during the sweep."
+        },
+        "endpointsTested": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of API endpoints tested."
+        },
+        "routesTested": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of browser routes tested."
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the sweep started."
+        },
+        "finishedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the sweep finished."
+        }
+      },
+      "additionalProperties": true
+    },
+    "findings": {
+      "type": "array",
+      "description": "Array of individual findings discovered during the sweep.",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "description": "A single finding from the sweep.",
+      "required": ["severity", "category", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "error", "warning", "info"],
+          "description": "Finding severity level."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["health", "rbac", "crud", "schema", "security", "console", "layout", "i18n", "network"],
+          "description": "Finding category indicating the type of check that produced it."
+        },
+        "endpoint": {
+          "type": ["string", "null"],
+          "description": "API endpoint in METHOD /path format (e.g. GET /api/v1/users). Null for non-endpoint findings."
+        },
+        "route": {
+          "type": ["string", "null"],
+          "description": "Frontend route path (e.g. /admin/users). Null for non-route findings."
+        },
+        "role": {
+          "type": ["string", "null"],
+          "description": "Role that triggered the finding (e.g. admin, manager, user, unauthenticated)."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the finding."
+        },
+        "expected": {
+          "type": ["string", "null"],
+          "description": "What was expected. Null if not applicable."
+        },
+        "actual": {
+          "type": ["string", "null"],
+          "description": "What was actually observed. Null if not applicable."
+        },
+        "fileRef": {
+          "type": ["string", "null"],
+          "description": "Source file and line reference (e.g. endpoints/users.py:45). Null if unknown."
+        },
+        "fixSuggestion": {
+          "type": ["string", "null"],
+          "description": "Suggested fix for the finding. Null if none."
+        },
+        "breakpoint": {
+          "type": ["integer", "null"],
+          "description": "Viewport width in pixels that triggered the finding. Null for non-layout findings.",
+          "minimum": 1
+        },
+        "screenshot": {
+          "type": ["string", "null"],
+          "description": "Relative path to a screenshot file. Null if no screenshot was captured."
+        }
+      }
+    }
+  }
+}

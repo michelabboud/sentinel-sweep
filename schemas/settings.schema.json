@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "settings.schema.json",
+  "title": "Sentinel Settings",
+  "description": "Schema for settings.json that configures Sentinel sweep behavior including risk policy, browser settings, breakpoints, and report output.",
+  "type": "object",
+  "properties": {
+    "riskPolicy": {
+      "type": "object",
+      "description": "Controls which actions are executed based on risk level.",
+      "properties": {
+        "maxRiskLevel": {
+          "type": "string",
+          "enum": ["safe", "medium", "high", "critical"],
+          "default": "medium",
+          "description": "Maximum risk level that will be executed without sandbox approval."
+        },
+        "alwaysSkip": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "List of METHOD /path patterns to always skip regardless of risk level."
+        },
+        "alwaysAllow": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "List of METHOD /path patterns to always allow regardless of risk level."
+        }
+      },
+      "additionalProperties": false
+    },
+    "breakpoints": {
+      "type": "array",
+      "description": "Viewport widths in pixels for responsive layout testing.",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "default": [375, 768, 1280]
+    },
+    "responseTimeout": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5000,
+      "description": "Maximum response time in milliseconds before a request is considered slow."
+    },
+    "screenshotOnError": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to capture screenshots when errors are detected during browser sweeps."
+    },
+    "reportDir": {
+      "type": "string",
+      "default": "sentinel-reports",
+      "description": "Base output directory for sweep reports and run directories."
+    },
+    "browser": {
+      "type": "object",
+      "description": "Browser configuration for Playwright-based sweeps.",
+      "properties": {
+        "headless": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run browser in headless mode."
+        },
+        "browserType": {
+          "type": "string",
+          "enum": ["chromium", "firefox", "webkit"],
+          "default": "chromium",
+          "description": "Browser engine to use for sweeps."
+        }
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "type": "object",
+      "description": "Authentication configuration for sweep execution.",
+      "properties": {
+        "credentialsSource": {
+          "type": "string",
+          "default": "manifest",
+          "description": "Source of test credentials. Typically 'manifest' to read from sentinel-manifest.json."
+        }
+      },
+      "additionalProperties": false
+    },
+    "emptyContainerSelectors": {
+      "type": "array",
+      "description": "CSS selectors for containers that should be checked for empty content during browser sweeps.",
+      "items": {
+        "type": "string"
+      },
+      "default": ["[data-sentinel-content]", "main", ".card-body"]
+    }
+  },
+  "additionalProperties": false
+}
