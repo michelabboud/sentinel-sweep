@@ -2,7 +2,7 @@
 name: sentinel
 version: 1.1.0
 description: "Automated QA sweep for web apps — run /sentinel sweep for full browser+API QA, /sentinel api for endpoint-only testing, /sentinel setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
-argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--list] [--severity <level>]
+argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 author: Michel Abboud
 repository: https://github.com/michelabboud/sentinel-sweep
@@ -20,13 +20,14 @@ Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
 - The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `hello`.
-- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`, `--risk-level`, `--safe-only`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
 - If `--severity` appears, take the next word as the severity filter value. Valid values: `critical`, `error`, `warning`, `info`. Store as `severityFilter`. If not present, set `severityFilter = null`.
-
 - Set `reuseManifest = true` if `--reuse-manifest` appears, otherwise `false`.
+- If `--risk-level` appears, take the next word as the risk level override. Valid values: `safe`, `medium`, `high`, `critical`. Store as `riskLevelOverride`. If not present, set `riskLevelOverride = null`.
+- Set `safeOnly = true` if `--safe-only` appears, otherwise `false`. This is a shorthand for `--risk-level safe`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
@@ -59,8 +60,21 @@ Actions:
   fix         Auto-suggest code patches for common findings (missing i18n, RBAC, schemas)
   clean       Remove old sweep runs, keeping the N most recent (default: 5)
 
-Flags:
-  --sandbox          Enable high/critical actions with per-action approval (dev only)
+Safety & Risk Control:
+  By default, Sentinel only executes SAFE and MEDIUM risk actions (read-only
+  and simple writes). Destructive operations like DELETE, bulk purge, and
+  cascade deletes are SKIPPED and listed in the report as "Skipped Actions".
+  You control this with:
+
+  --safe-only        Only execute safe (read-only) actions — no writes at all
+  --risk-level LVL   Override risk policy at runtime without editing settings.json
+                     Levels: safe, medium (default), high, critical
+  --sandbox          Unlock high/critical actions WITH per-action approval prompts
+                     Every dangerous action asks you before executing (dev only)
+
+  The active risk level is always shown in the sweep report header.
+
+Other Flags:
   --dry-run          Generate manifest and show test plan without executing sweeps
   --reuse-manifest   Skip manifest generation, reuse the manifest from the latest run
                      Useful when re-running after fixing issues — saves time.
@@ -70,19 +84,21 @@ Flags:
 
 Examples:
   /sentinel setup                    # First-time check
-  /sentinel sweep                    # Full QA sweep
+  /sentinel sweep                    # Full QA sweep (safe + medium actions)
+  /sentinel sweep --safe-only        # Read-only sweep — nothing gets modified
+  /sentinel sweep --risk-level high  # Also test DELETE endpoints (no approval needed)
+  /sentinel sweep --sandbox          # Test everything, with per-action approval
   /sentinel api --dry-run            # Preview what would be tested
   /sentinel api --reuse-manifest     # Re-run API checks without regenerating manifest
   /sentinel report --severity error  # Show only errors and critical issues
   /sentinel diff                     # Compare latest run vs previous
   /sentinel trends                   # View pass-rate trend across runs
   /sentinel clean 3                  # Keep only the 3 most recent runs
-  /sentinel sweep --sandbox          # Include destructive actions with approval
 
-Tip: Start with '/sentinel api' (no browser needed) to verify endpoints,
-     then graduate to '/sentinel sweep' for full browser + API coverage.
-     After fixing issues, use '--reuse-manifest' to re-test without waiting
-     for manifest regeneration.
+Tip: Start with '/sentinel api --safe-only' for a zero-risk health check,
+     then '/sentinel api' for standard coverage (safe + medium), then
+     '/sentinel sweep' for full browser + API. Use '--sandbox' only when
+     you need to test destructive operations on a dev server.
 ```
 
 ---
@@ -115,6 +131,35 @@ Merge the file contents with these defaults for any missing keys. The file value
 ```
 
 Store the merged result as `settings` for use in subsequent steps. The `reportDir` value from settings is the base output directory for all reports.
+
+---
+
+## Step 2a: Apply Risk Level Override
+
+If `safeOnly` is `true`, set `settings.riskPolicy.maxRiskLevel = "safe"`.
+
+Otherwise, if `riskLevelOverride` is not null, set `settings.riskPolicy.maxRiskLevel = riskLevelOverride`.
+
+Otherwise (no flag provided), prompt the user to choose a risk level:
+
+```
+What risk level should this sweep use?
+
+  [1] safe     — Read-only checks (GET requests only, nothing is modified)
+  [2] medium   — Safe + simple writes (POST, PUT — no deletes) [default]
+  [3] high     — Include delete operations (without approval prompts)
+  [4] critical — Include bulk/cascade deletes (without approval prompts)
+
+Choose [1-4] (press Enter for medium):
+```
+
+Wait for the user's response:
+- If the user presses Enter (empty input) or chooses `2`: keep `settings.riskPolicy.maxRiskLevel = "medium"`.
+- If the user chooses `1`: set `settings.riskPolicy.maxRiskLevel = "safe"`.
+- If the user chooses `3`: set `settings.riskPolicy.maxRiskLevel = "high"`.
+- If the user chooses `4`: set `settings.riskPolicy.maxRiskLevel = "critical"`.
+
+Store the final effective risk level as `effectiveRiskLevel = settings.riskPolicy.maxRiskLevel` for display in the report.
 
 ---
 
@@ -644,7 +689,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
   - `manifest` — Generate and inspect the manifest without sweeping
   - `hello` — Quick greeting + availability check
   - `hello ID` — This full profile
-**Flags**: `--sandbox`, `--dry-run`, `--reuse-manifest`, `--list`, `--severity`
+**Flags**: `--sandbox`, `--dry-run`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--list`, `--severity`
 **Architecture**: Orchestrator + 3 agents (manifest-generator, api-sweeper, browser-sweeper) + setup skill
 **Framework support (v1)**: Vue 3 + FastAPI + Pydantic v2 + SQLAlchemy + JWT
 **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0
@@ -696,6 +741,7 @@ Print the following block, substituting computed values:
 --- Sentinel Sweep Report ---
 
   Mode: {mode} | Roles: {rolesTested}
+  Risk level: {effectiveRiskLevel} {if sandboxMode: "(sandbox — approval required for high/critical)"}
   Routes tested: {routesTested} | Endpoints tested: {endpointsTested}
   Breakpoints: {breakpoints}
   Duration: {duration}
@@ -734,6 +780,7 @@ A markdown table with these rows:
 | Field | Value |
 |-------|-------|
 | Mode | {mode} |
+| Risk level | {effectiveRiskLevel} |
 | Roles tested | {rolesTested} |
 | Routes tested | {routesTested} |
 | Endpoints tested | {endpointsTested} |
