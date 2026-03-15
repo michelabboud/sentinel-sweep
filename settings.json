@@ -1,0 +1,19 @@
+{
+  "riskPolicy": {
+    "maxRiskLevel": "medium",
+    "alwaysSkip": [],
+    "alwaysAllow": []
+  },
+  "breakpoints": [375, 768, 1280],
+  "responseTimeout": 5000,
+  "screenshotOnError": true,
+  "reportDir": "sentinel-reports",
+  "browser": {
+    "headless": true,
+    "browserType": "chromium"
+  },
+  "auth": {
+    "credentialsSource": "manifest"
+  },
+  "emptyContainerSelectors": ["[data-sentinel-content]", "main", ".card-body"]
+}
