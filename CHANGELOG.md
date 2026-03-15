@@ -12,6 +12,10 @@ All notable changes to Sentinel are documented in this file.
 - **`--dry-run` flag** — generate manifest and show test plan without executing sweeps
 - **`/sentinel report --list`** — list all previous sweep runs
 - **`.gitignore`** — excludes `sentinel-reports/`, `sentinel-manifest.json`, `node_modules/`, `*.log`
+- **`/sentinel trends`** — new subcommand showing pass-rate and finding trends across recent runs with issue deltas
+- **Sweep history tracking** — `sweep-history.json` accumulates summary data from each run for cross-run trend analysis
+- **GitHub Actions CI** — validates JSON, plugin mirror parity, YAML frontmatter, and version consistency
+- **Integration test suite** — 83 tests across 5 suites (structure, frontmatter, schema, mirror parity, version consistency)
 
 ### Changed
 - Manifest path passed via dispatch prompt instead of hardcoded CWD lookup

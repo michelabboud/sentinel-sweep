@@ -8,7 +8,7 @@
     {
       "name": "sentinel",
       "description": "Automated QA sweep plugin — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "Michel Abboud",
         "email": "michel@devport.cc"

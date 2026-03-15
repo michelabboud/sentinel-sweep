@@ -1,8 +1,8 @@
 ---
 name: sentinel
-version: 1.0.0
+version: 1.1.0
 description: "Automated QA sweep for web apps — run /sentinel sweep for full browser+API QA, /sentinel api for endpoint-only testing, /sentinel setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
-argument-hint: <sweep|api|report|manifest|setup> [--sandbox]
+argument-hint: <sweep|api|report|manifest|setup|trends> [--sandbox] [--dry-run] [--list]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 author: Michel Abboud
 repository: https://github.com/michelabboud/sentinel-sweep
@@ -19,9 +19,11 @@ You are the Sentinel QA orchestrator. Your job is to parse the user's arguments,
 Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
-- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`.
-- Any word starting with `--` is a flag. The only supported flag is `--sandbox`.
-- Set a boolean `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
+- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`.
+- Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
+- Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
+- Set `listMode = true` if `--list` appears, otherwise `false`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the five valid subcommands, print this exact usage block and stop:
 
@@ -36,9 +38,12 @@ Commands:
   api         API-only sweep (fast, no browser)
   report      View the last sweep report
   manifest    Generate manifest without sweeping
+  trends      Show pass-rate and finding trends across recent runs
 
 Flags:
   --sandbox   Enable high/critical actions with per-action approval (dev only)
+  --dry-run   Generate manifest and show test plan without executing sweeps
+  --list      List all previous sweep runs (use with report subcommand)
 ```
 
 ---
@@ -130,6 +135,16 @@ Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
 
+**Dry-run check:** If `dryRunMode` is `true`, skip all sweeper dispatches. Instead:
+1. Read the manifest that was just generated
+2. Print a summary of what WOULD be tested:
+   - Number of routes by risk level
+   - Number of endpoints by risk level
+   - CRUD flows that would be exercised
+   - Which roles would be tested
+   - Which actions would be skipped due to risk policy
+3. Stop — do not proceed to sweeping or report generation.
+
 **Step api-2: Run API sweep.**
 
 Use the Agent tool to dispatch the api-sweeper agent. Construct the prompt as follows — fill in the bracketed values from `settings` and from `sandboxMode`:
@@ -171,15 +186,26 @@ Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
 
+**Dry-run check:** If `dryRunMode` is `true`, skip all sweeper dispatches. Instead:
+1. Read the manifest that was just generated
+2. Print a summary of what WOULD be tested:
+   - Number of routes by risk level
+   - Number of endpoints by risk level
+   - CRUD flows that would be exercised
+   - Which roles would be tested
+   - Which actions would be skipped due to risk policy
+3. Stop — do not proceed to sweeping or report generation.
+
 **Step sweep-2: Check Playwright availability.**
 
 Attempt to detect whether Playwright MCP browser tools are available. Do this by checking whether you have access to a tool named `browser_navigate` or `mcp__plugin_playwright_playwright__browser_navigate` (or any tool whose name contains `browser_navigate`). Set `playwrightAvailable = true` if such a tool exists, otherwise `false`.
 
-**Step sweep-3: Run browser sweep (conditional).**
+**Step sweep-3: Run sweeps in parallel.**
 
 If `playwrightAvailable` is `true`:
+Use the Agent tool to dispatch BOTH agents in a single message (parallel execution):
 
-Use the Agent tool to dispatch the browser-sweeper agent. Construct the prompt as follows:
+1. The browser-sweeper agent with this prompt:
 
 > Run a browser sentinel sweep using Playwright.
 >
@@ -198,16 +224,7 @@ Use the Agent tool to dispatch the browser-sweeper agent. Construct the prompt a
 >
 > Write all findings to {runDir}/browser-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
-If `playwrightAvailable` is `false`, print this warning and skip the browser sweep:
-
-```
-Warning: Playwright MCP not available — falling back to API-only mode.
-Run /sentinel setup to install.
-```
-
-**Step sweep-4: Run API sweep.**
-
-Use the Agent tool to dispatch the api-sweeper agent with this prompt:
+2. The api-sweeper agent with this prompt:
 
 > Run an API-only sentinel sweep.
 >
@@ -222,7 +239,17 @@ Use the Agent tool to dispatch the api-sweeper agent with this prompt:
 >
 > Write all findings to {runDir}/api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
-**Step sweep-5: Collect and merge findings.**
+If `playwrightAvailable` is `false`:
+Print this warning and skip the browser sweep:
+
+```
+Warning: Playwright MCP not available — falling back to API-only mode.
+Run /sentinel setup to install.
+```
+
+Then dispatch ONLY the api-sweeper agent with the same prompt as above.
+
+**Step sweep-4: Collect and merge findings.**
 
 Use the Read tool to read `{runDir}/api-findings.json`. Store as `apiFindingsData`, or `null` if missing.
 
@@ -232,7 +259,7 @@ Otherwise set `browserFindingsData = null`.
 
 **Deduplication:** Combine the `findings` arrays from both files into a single list. Two findings are considered duplicates if they share the same `endpoint`, `role`, and `message` values. When a duplicate exists, keep the one with the higher severity (critical > error > warning > info).
 
-**Step sweep-6: Generate report.**
+**Step sweep-5: Generate report.**
 
 Generate the report following the instructions in **Section 4: Report Generation** below.
 
@@ -281,6 +308,30 @@ If no reports are found in either format, print:
 ```
 No reports found. Run /sentinel sweep or /sentinel api first.
 ```
+
+---
+
+### Subcommand: `trends`
+
+Read `{settings.reportDir}/sweep-history.json` using the Read tool. If the file does not exist or contains no runs, print:
+
+```
+No sweep history found. Run /sentinel sweep or /sentinel api first.
+```
+
+Otherwise, parse the `runs` array and display the following sections. Use the last 5 entries (or fewer if less than 5 exist), ordered most-recent first.
+
+**Pass Rate Trend:**
+
+Print a table with columns: Run, Mode, Pass Rate. After the table, if there are at least 2 runs, print a trend line showing pass rates from oldest to newest with an arrow between each value, followed by `[improving]` if the latest is higher than the earliest in the window, `[declining]` if lower, or `[stable]` if equal.
+
+**Finding Counts by Severity:**
+
+Print a table with columns: Run, Critical, Error, Warning, Info. Right-align the numeric columns.
+
+**Issue Delta (consecutive runs):**
+
+For each adjacent pair of runs (older to newer), compute the per-severity delta. Print a table with columns: Transition, Critical, Error, Warning, Info. Prefix positive values with `+`, negative with `-`, and show zero as `0`. Skip this section if only 1 run exists.
 
 ---
 
@@ -462,8 +513,8 @@ For each action that was executed in sandbox mode (approved by user during sweep
 Then add a general note:
 
 ```
-> To restore demo data after sandbox execution, run the project's seed scripts
-> (e.g. `docker-compose exec api python -m app.seed.seed_data` for SmartSessions).
+> To restore demo data after sandbox execution, run your project's seed scripts
+> (e.g. `docker-compose exec api python -m seed` or your equivalent seed command).
 ```
 
 If no sandbox actions were executed, write: `_No sandbox actions were executed._`
@@ -509,6 +560,38 @@ ln -sfn {RUN_ID} {settings.reportDir}/latest
 ```
 
 This uses the relative `RUN_ID` (not the full path) so the symlink is portable.
+
+### Step R-6: Append to sweep history
+
+After creating the latest symlink, append a summary entry to the sweep history file:
+
+1. Use the Read tool to read `{settings.reportDir}/sweep-history.json`. If the file does not exist or cannot be parsed, start with `{ "runs": [] }`.
+
+2. Build a new entry from the values computed in Step R-1:
+   ```json
+   {
+     "runId": "{RUN_ID}",
+     "mode": "{mode}",
+     "duration": "{duration}",
+     "rolesTested": ["{...rolesTested array}"],
+     "routesTested": {routesTested},
+     "endpointsTested": {endpointsTested},
+     "findings": {
+       "critical": {countBySeverity.critical},
+       "error": {countBySeverity.error},
+       "warning": {countBySeverity.warning},
+       "info": {countBySeverity.info}
+     },
+     "passed": {passed},
+     "passRate": {passed / (passed + countBySeverity.critical + countBySeverity.error + countBySeverity.warning) * 100, rounded to 1 decimal},
+     "sandboxMode": {sandboxMode},
+     "timestamp": "{ISO 8601 UTC timestamp of now}"
+   }
+   ```
+
+3. Append the new entry to the `runs` array.
+
+4. Use the Write tool to write the updated JSON back to `{settings.reportDir}/sweep-history.json` with 2-space indentation.
 
 ---
 

@@ -1,0 +1,82 @@
+{
+  "metadata": {
+    "mode": "browser",
+    "rolesTested": ["admin", "manager", "unauthenticated"],
+    "endpointsTested": 0,
+    "routesTested": 24,
+    "startedAt": "2026-03-15T10:03:00Z",
+    "finishedAt": "2026-03-15T10:06:45Z"
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "rbac",
+      "endpoint": null,
+      "route": "/admin/settings",
+      "role": "manager",
+      "message": "RBAC violation: route '/admin/settings' accessible as 'manager'",
+      "expected": "Access denied (redirect, 401/403, or error page)",
+      "actual": "Page content loaded successfully for unauthorized role",
+      "fileRef": null,
+      "fixSuggestion": "Check RBAC middleware for this route",
+      "breakpoint": null,
+      "screenshot": "sentinel-reports/screenshots/manager-admin-settings-desktop-20260315.png"
+    },
+    {
+      "severity": "error",
+      "category": "console",
+      "endpoint": null,
+      "route": "/payments",
+      "role": "admin",
+      "message": "Console error: Unhandled promise rejection: TypeError: Cannot read property 'map' of undefined",
+      "expected": "No console errors",
+      "actual": "Unhandled promise rejection",
+      "fileRef": null,
+      "fixSuggestion": "Check data loading in payments component",
+      "breakpoint": null,
+      "screenshot": null
+    },
+    {
+      "severity": "warning",
+      "category": "layout",
+      "endpoint": null,
+      "route": "/payments",
+      "role": "admin",
+      "message": "Horizontal overflow detected (420px > 375px)",
+      "expected": "No horizontal scroll",
+      "actual": "scrollWidth 420px > viewport 375px",
+      "fileRef": null,
+      "fixSuggestion": "Check responsive styles for the payments table",
+      "breakpoint": 375,
+      "screenshot": "sentinel-reports/screenshots/admin-payments-375-20260315.png"
+    },
+    {
+      "severity": "warning",
+      "category": "i18n",
+      "endpoint": null,
+      "route": "/groups",
+      "role": "admin",
+      "message": "Missing i18n key: groups.table.empty_state",
+      "expected": "Translated string",
+      "actual": "groups.table.empty_state",
+      "fileRef": null,
+      "fixSuggestion": "Add missing translation key to locale files",
+      "breakpoint": null,
+      "screenshot": null
+    },
+    {
+      "severity": "info",
+      "category": "layout",
+      "endpoint": null,
+      "route": "/dashboard",
+      "role": "admin",
+      "message": "Empty container: main (dashboard-content)",
+      "expected": null,
+      "actual": null,
+      "fileRef": null,
+      "fixSuggestion": null,
+      "breakpoint": null,
+      "screenshot": null
+    }
+  ]
+}

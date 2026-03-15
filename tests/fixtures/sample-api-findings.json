@@ -1,0 +1,68 @@
+{
+  "metadata": {
+    "mode": "api",
+    "rolesTested": ["admin", "manager", "user", "unauthenticated"],
+    "endpointsTested": 42,
+    "routesTested": 0,
+    "startedAt": "2026-03-15T10:00:00Z",
+    "finishedAt": "2026-03-15T10:02:15Z"
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "rbac",
+      "endpoint": "DELETE /api/v1/users/{user_id}",
+      "route": null,
+      "role": "user",
+      "message": "RBAC violation — DELETE /api/v1/users/{user_id} accessible as user",
+      "expected": "403",
+      "actual": "200",
+      "fileRef": "endpoints/users.py:45",
+      "fixSuggestion": "Add require_admin dependency to this endpoint",
+      "breakpoint": null,
+      "screenshot": null
+    },
+    {
+      "severity": "error",
+      "category": "health",
+      "endpoint": "GET /api/v1/groups/{group_id}/sessions",
+      "route": null,
+      "role": "admin",
+      "message": "Server error (500) on GET /api/v1/groups/{group_id}/sessions as admin",
+      "expected": "200",
+      "actual": "500",
+      "fileRef": null,
+      "fixSuggestion": "Check server logs for unhandled exception",
+      "breakpoint": null,
+      "screenshot": null
+    },
+    {
+      "severity": "warning",
+      "category": "health",
+      "endpoint": "GET /api/v1/events",
+      "route": null,
+      "role": "admin",
+      "message": "Slow response (5200ms, threshold 5000ms)",
+      "expected": "Response under 5000ms",
+      "actual": "5200ms",
+      "fileRef": null,
+      "fixSuggestion": null,
+      "breakpoint": null,
+      "screenshot": null
+    },
+    {
+      "severity": "info",
+      "category": "schema",
+      "endpoint": "GET /api/v1/users",
+      "route": null,
+      "role": "admin",
+      "message": "Unexpected field 'last_login' in response (not in schema)",
+      "expected": null,
+      "actual": null,
+      "fileRef": null,
+      "fixSuggestion": "Update schema definition to include this field",
+      "breakpoint": null,
+      "screenshot": null
+    }
+  ]
+}

@@ -3,7 +3,7 @@ name: browser-sweeper
 description: "Use this agent to perform browser-based QA sweeps using Playwright MCP. Navigates routes as each role, captures console errors, network failures, layout issues, and responsive problems. Reads sentinel-manifest.json for configuration. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching browser-sweeper for visual QA\\n<commentary>Full sweep triggers browser testing.</commentary></example>"
 model: sonnet
 tools: ["Read", "Write", "Bash", "Glob", "Grep", "mcp__plugin_playwright_playwright__browser_navigate", "mcp__plugin_playwright_playwright__browser_navigate_back", "mcp__plugin_playwright_playwright__browser_snapshot", "mcp__plugin_playwright_playwright__browser_take_screenshot", "mcp__plugin_playwright_playwright__browser_console_messages", "mcp__plugin_playwright_playwright__browser_network_requests", "mcp__plugin_playwright_playwright__browser_evaluate", "mcp__plugin_playwright_playwright__browser_resize", "mcp__plugin_playwright_playwright__browser_click", "mcp__plugin_playwright_playwright__browser_fill_form", "mcp__plugin_playwright_playwright__browser_wait_for", "mcp__plugin_playwright_playwright__browser_close"]
-version: 1.0.0
+version: 1.1.0
 triggers:
   keywords: ["sentinel sweep", "browser sweep", "visual QA", "playwright sweep", "layout check"]
   files: ["sentinel-manifest.json", "browser-findings.json"]

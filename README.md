@@ -96,6 +96,7 @@ docker-compose up -d
 | `/sentinel report` | View the most recent sweep report |
 | `/sentinel report --list` | List all past sweep runs |
 | `/sentinel manifest` | Generate and inspect the manifest without sweeping |
+| `/sentinel trends` | Show pass-rate and finding trends across recent runs |
 
 ---
 

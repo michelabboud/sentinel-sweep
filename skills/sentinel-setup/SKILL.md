@@ -1,6 +1,6 @@
 ---
 name: sentinel-setup
-version: 1.0.0
+version: 1.1.0
 description: "Set up and configure Sentinel QA plugin — run /sentinel setup to check Playwright, detect frameworks, verify services, and configure settings. Use when you say 'sentinel setup', 'configure sentinel', 'check sentinel dependencies', 'install playwright', 'check QA environment'."
 context: fork
 author: Michel Abboud

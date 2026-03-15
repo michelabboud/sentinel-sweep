@@ -1,6 +1,6 @@
 ---
 description: Automated QA sweep — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
-argument-hint: <sweep|api|report|manifest|setup> [--sandbox] [--dry-run] [--list]
+argument-hint: <sweep|api|report|manifest|setup|trends> [--sandbox] [--dry-run] [--list]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 ---
 
@@ -13,13 +13,13 @@ You are the Sentinel QA orchestrator. Your job is to parse the user's arguments,
 Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
-- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`.
+- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`.
 - Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
 
-If `$ARGUMENTS` is empty, or the first word is not one of the five valid subcommands, print this exact usage block and stop:
+If `$ARGUMENTS` is empty, or the first word is not one of the six valid subcommands, print this exact usage block and stop:
 
 ```
 Sentinel — Automated QA Sweep
@@ -32,6 +32,7 @@ Commands:
   api         API-only sweep (fast, no browser)
   report      View the last sweep report
   manifest    Generate manifest without sweeping
+  trends      Show pass-rate and finding trends across recent runs
 
 Flags:
   --sandbox   Enable high/critical actions with per-action approval (dev only)
@@ -304,6 +305,30 @@ No reports found. Run /sentinel sweep or /sentinel api first.
 
 ---
 
+### Subcommand: `trends`
+
+Read `{settings.reportDir}/sweep-history.json` using the Read tool. If the file does not exist or contains no runs, print:
+
+```
+No sweep history found. Run /sentinel sweep or /sentinel api first.
+```
+
+Otherwise, parse the `runs` array and display the following sections. Use the last 5 entries (or fewer if less than 5 exist), ordered most-recent first.
+
+**Pass Rate Trend:**
+
+Print a table with columns: Run, Mode, Pass Rate. After the table, if there are at least 2 runs, print a trend line showing pass rates from oldest to newest with an arrow between each value, followed by `[improving]` if the latest is higher than the earliest in the window, `[declining]` if lower, or `[stable]` if equal.
+
+**Finding Counts by Severity:**
+
+Print a table with columns: Run, Critical, Error, Warning, Info. Right-align the numeric columns.
+
+**Issue Delta (consecutive runs):**
+
+For each adjacent pair of runs (older to newer), compute the per-severity delta. Print a table with columns: Transition, Critical, Error, Warning, Info. Prefix positive values with `+`, negative with `-`, and show zero as `0`. Skip this section if only 1 run exists.
+
+---
+
 ## Section 4: Report Generation
 
 This section is invoked after `api` and `sweep` subcommands complete their sweeps. You will have `apiFindingsData` and `browserFindingsData` (either a parsed findings object or `null`), a merged `findings` array (deduplicated), and `settings`.
@@ -529,6 +554,38 @@ ln -sfn {RUN_ID} {settings.reportDir}/latest
 ```
 
 This uses the relative `RUN_ID` (not the full path) so the symlink is portable.
+
+### Step R-6: Append to sweep history
+
+After creating the latest symlink, append a summary entry to the sweep history file:
+
+1. Use the Read tool to read `{settings.reportDir}/sweep-history.json`. If the file does not exist or cannot be parsed, start with `{ "runs": [] }`.
+
+2. Build a new entry from the values computed in Step R-1:
+   ```json
+   {
+     "runId": "{RUN_ID}",
+     "mode": "{mode}",
+     "duration": "{duration}",
+     "rolesTested": ["{...rolesTested array}"],
+     "routesTested": {routesTested},
+     "endpointsTested": {endpointsTested},
+     "findings": {
+       "critical": {countBySeverity.critical},
+       "error": {countBySeverity.error},
+       "warning": {countBySeverity.warning},
+       "info": {countBySeverity.info}
+     },
+     "passed": {passed},
+     "passRate": {passed / (passed + countBySeverity.critical + countBySeverity.error + countBySeverity.warning) * 100, rounded to 1 decimal},
+     "sandboxMode": {sandboxMode},
+     "timestamp": "{ISO 8601 UTC timestamp of now}"
+   }
+   ```
+
+3. Append the new entry to the `runs` array.
+
+4. Use the Write tool to write the updated JSON back to `{settings.reportDir}/sweep-history.json` with 2-space indentation.
 
 ---
 
