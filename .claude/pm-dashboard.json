@@ -1,0 +1,398 @@
+{
+  "projectName": "sentinel-sweep",
+  "lastAssessment": "2026-03-15T23:00:00Z",
+  "assessmentCount": 2,
+  "overallScore": 7.7,
+  "experts": {
+    "qa": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "83 integration tests across 5 suites (structure, frontmatter, manifest schema, mirror parity, version consistency), all passing. Tests validate plugin integrity end-to-end. However, tests are shell-based and do not test runtime behavior (no fixture project, no sweeper execution tests).",
+      "recommendation": "Add a fixture Vue+FastAPI micro-project in tests/fixtures/ and test manifest-generator output against expected manifest structure. This would validate the core runtime logic, not just static file structure.",
+      "riskIfIgnored": "Current tests catch structural regressions but not logic bugs in manifest parsing, risk scoring, or finding generation. A broken sweeper agent would pass all existing tests."
+    },
+    "uiux": {
+      "score": null,
+      "status": "not-assessed",
+      "topFinding": null,
+      "recommendation": null,
+      "riskIfIgnored": null
+    },
+    "security": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "No hardcoded secrets. Sandbox mode has proper pre-flight checks (APP_ENV, DB name, base URL). Risk scoring prevents destructive actions in production. Credentials sourced from manifest at runtime. .gitignore excludes sentinel-manifest.json.",
+      "recommendation": "Add a security note in README about sentinel-manifest.json containing plain-text test credentials. Consider documenting that the manifest should never be committed to version control.",
+      "riskIfIgnored": "Test credentials in sentinel-manifest.json could be accidentally committed to a public repo if users override .gitignore or copy the manifest elsewhere."
+    },
+    "devops": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "GitHub Actions CI pipeline added with 4 validation steps: JSON validation, plugin mirror parity, YAML frontmatter validation, and version consistency checks. All checks pass. CI runs on push to main and on PRs.",
+      "recommendation": "Add a test execution step to the CI workflow that runs tests/run-all.sh. Currently CI duplicates some test logic inline rather than invoking the test suite. Consolidating prevents drift between CI checks and local tests.",
+      "riskIfIgnored": "CI and local tests could diverge — a check could pass locally but not in CI or vice versa. Minor risk since both currently validate the same things."
+    },
+    "networking": {
+      "score": null,
+      "status": "not-assessed",
+      "topFinding": null,
+      "recommendation": null,
+      "riskIfIgnored": null
+    },
+    "development": {
+      "score": 9,
+      "status": "excellent",
+      "topFinding": "Skill and command are now in sync — both have --dry-run, --list flags, parallel dispatch, and trends subcommand. Skill has richer frontmatter (tags, author, repository, license). Code quality across all agents and skills is excellent: clear section numbering, precise instructions, comprehensive edge cases.",
+      "recommendation": "Consider removing the legacy commands/sentinel.md since skills/sentinel/SKILL.md is the primary entry point and has richer metadata. Or document the dual-path strategy explicitly.",
+      "riskIfIgnored": "Two files that must stay in sync is a maintenance burden, though CI mirror parity checks mitigate this."
+    },
+    "architecture": {
+      "score": 9,
+      "status": "excellent",
+      "topFinding": "Clean orchestrator pattern with stateless agents. Run-scoped output directories prevent collisions. Parallel dispatch of sweepers. Plugin structure follows Claude Code conventions. Version consistency now enforced across all 12 files by CI.",
+      "recommendation": "Architecture is solid for v1 scope. For v2 multi-framework support, plan an extensible manifest-generator architecture (strategy pattern per framework) before adding React/Express parsers.",
+      "riskIfIgnored": "Adding v2 framework support ad-hoc could lead to a monolithic manifest-generator agent. Designing the extension point now is cheaper than refactoring later."
+    },
+    "product": {
+      "score": 8,
+      "status": "good",
+      "topFinding": "Well-defined v1 scope fully implemented: Vue 3 + FastAPI, endpoint health, RBAC, CRUD flows, schema validation, responsive testing, i18n detection. Sweep history tracking adds trend analysis capability. Clear v2 roadmap in README.",
+      "recommendation": "Add acceptance criteria for v2 framework support items. The roadmap lists React, Express, Django etc. but without testable success criteria.",
+      "riskIfIgnored": "v2 scope remains informal bullet points without measurable definition of done."
+    },
+    "api": {
+      "score": 8,
+      "status": "good",
+      "topFinding": "Well-defined JSON schemas for findings, manifest, and settings. Consistent contract between orchestrator and agents. test-manifest-schema.sh validates manifest structure programmatically. Parameter resolution system (lookup/static/env) is well-specified.",
+      "recommendation": "Add formal JSON Schema files (.schema.json) for manifest, findings, and settings. The test suite already validates structure but formal schemas enable IDE autocompletion and third-party tooling.",
+      "riskIfIgnored": "Schema contracts exist only in prose and shell test assertions. No programmatic validation beyond the test suite."
+    },
+    "monitoring": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "Sweep history tracking added via sweep-history.json — tracks run metadata, finding counts, pass rates across sweeps. /sentinel trends subcommand visualizes pass-rate trends, finding counts by severity, and issue deltas between consecutive runs.",
+      "recommendation": "Add a warning threshold to trends — if pass rate drops more than 10% between runs, print a prominent warning. Currently trends are informational only.",
+      "riskIfIgnored": "Degradation trends are visible but not flagged automatically. A gradual decline could go unnoticed without explicit alerting."
+    },
+    "database": {
+      "score": null,
+      "status": "not-assessed",
+      "topFinding": null,
+      "recommendation": null,
+      "riskIfIgnored": null
+    },
+    "performance": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "Parallel dispatch of browser and API sweepers. Appropriate model selection (Opus for deep analysis, Sonnet for throughput). Configurable timeouts. No performance concerns at current scale.",
+      "recommendation": "No performance concerns at current scale. Consider caching manifest generation results to avoid re-analyzing unchanged files when v2 adds more framework parsers.",
+      "riskIfIgnored": "Minimal risk at current scale."
+    },
+    "documentation": {
+      "score": 9,
+      "status": "excellent",
+      "topFinding": "Exceptional documentation. README covers installation, usage, configuration, architecture, troubleshooting. CLAUDE.md provides full AI context. CHANGELOG follows Keep a Changelog. Design spec and implementation plan in docs/. Sweep history spec added.",
+      "recommendation": "Add a CONTRIBUTING.md for external contributors. The development guidelines exist in CLAUDE.md but a dedicated file would be more discoverable.",
+      "riskIfIgnored": "Contributors must read CLAUDE.md to find development guidelines, which is unconventional."
+    },
+    "specifications": {
+      "score": 9,
+      "status": "excellent",
+      "topFinding": "Outstanding specification quality. Design spec, implementation plan, and sweep history spec in docs/. Agent instructions include exact JSON schemas, step-by-step procedures, edge case handling. Risk scoring formula is precisely defined with modifiers.",
+      "recommendation": "Add acceptance criteria for v2 roadmap items (React Router, Express, Django, session auth, OpenAPI import).",
+      "riskIfIgnored": "v2 scope remains informal without testable criteria."
+    },
+    "projectDocs": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "Design spec documents architectural decisions (orchestrator pattern, risk scoring, run-scoped directories). CHANGELOG tracks per-version decisions. Key design decisions section in CLAUDE.md. However, no formal ADRs.",
+      "recommendation": "Add a decisions section to CLAUDE.md summarizing key choices. The design spec serves as the de facto ADR but is buried in docs/.",
+      "riskIfIgnored": "Minor — design spec already covers this, just not prominently surfaced."
+    },
+    "progress": {
+      "score": 7,
+      "status": "good",
+      "topFinding": "CHANGELOG clearly documents what changed in v1.1.0. Git history is clean with descriptive commit messages. CI validates structural integrity on every push. However, implementation plan in docs/ still does not mark completed tasks.",
+      "recommendation": "Mark completed tasks in docs/2026-03-15-sentinel-plan.md. Add file path pointers for each task so a new agent can navigate directly to relevant code.",
+      "riskIfIgnored": "A new contributor must cross-reference git history to determine completion status. Manageable but friction-adding."
+    }
+  },
+  "tasks": [
+    {
+      "id": "t1",
+      "title": "Sync skill/SKILL.md with commands/sentinel.md — the skill version is missing --dry-run, --list flags and parallel sweeper dispatch",
+      "status": "done",
+      "priority": 1,
+      "impact": "high",
+      "effort": "low",
+      "expert": "development",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t2",
+      "title": "Unify version numbers across plugin.json, marketplace.json, CLAUDE.md, skill frontmatter, and agent frontmatter to 1.1.0",
+      "status": "done",
+      "priority": 2,
+      "impact": "high",
+      "effort": "low",
+      "expert": "architecture",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t3",
+      "title": "Add basic CI/CD with GitHub Actions — validate markdown frontmatter, JSON validity, and plugin mirror parity",
+      "status": "done",
+      "priority": 3,
+      "impact": "high",
+      "effort": "low",
+      "expert": "devops",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t4",
+      "title": "Add integration tests — 83 tests across 5 suites covering structure, frontmatter, schema, mirror parity, and version consistency",
+      "status": "done",
+      "priority": 4,
+      "impact": "high",
+      "effort": "high",
+      "expert": "qa",
+      "quadrant": "major-project"
+    },
+    {
+      "id": "t5",
+      "title": "Add sweep-history.json and /sentinel trends subcommand for tracking run metrics over time",
+      "status": "done",
+      "priority": 5,
+      "impact": "medium",
+      "effort": "medium",
+      "expert": "monitoring",
+      "quadrant": "major-project"
+    },
+    {
+      "id": "t6",
+      "title": "Add formal JSON Schema files (.schema.json) for manifest, findings, and settings formats",
+      "status": "todo",
+      "priority": 6,
+      "impact": "medium",
+      "effort": "low",
+      "expert": "api",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t7",
+      "title": "Add CONTRIBUTING.md with guidelines for adding new sweepers and framework support",
+      "status": "todo",
+      "priority": 7,
+      "impact": "low",
+      "effort": "low",
+      "expert": "documentation",
+      "quadrant": "fill-in"
+    },
+    {
+      "id": "t8",
+      "title": "Mark completed tasks in docs/2026-03-15-sentinel-plan.md and add file path pointers for agent resumability",
+      "status": "todo",
+      "priority": 8,
+      "impact": "medium",
+      "effort": "low",
+      "expert": "progress",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t9",
+      "title": "Add security note in README about sentinel-manifest.json containing plain-text test credentials",
+      "status": "todo",
+      "priority": 9,
+      "impact": "medium",
+      "effort": "low",
+      "expert": "security",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t10",
+      "title": "Add runtime behavior tests with a fixture Vue+FastAPI micro-project to validate manifest generation and sweeper output",
+      "status": "todo",
+      "priority": 10,
+      "impact": "high",
+      "effort": "high",
+      "expert": "qa",
+      "quadrant": "major-project"
+    },
+    {
+      "id": "t11",
+      "title": "Consolidate CI workflow to invoke tests/run-all.sh instead of duplicating test logic inline",
+      "status": "todo",
+      "priority": 11,
+      "impact": "medium",
+      "effort": "low",
+      "expert": "devops",
+      "quadrant": "quick-win"
+    },
+    {
+      "id": "t12",
+      "title": "Design extensible manifest-generator architecture (strategy pattern per framework) before adding v2 framework parsers",
+      "status": "todo",
+      "priority": 12,
+      "impact": "high",
+      "effort": "high",
+      "expert": "architecture",
+      "quadrant": "major-project"
+    },
+    {
+      "id": "t13",
+      "title": "Add pass-rate warning threshold to /sentinel trends — flag >10% drops prominently",
+      "status": "todo",
+      "priority": 13,
+      "impact": "low",
+      "effort": "low",
+      "expert": "monitoring",
+      "quadrant": "fill-in"
+    },
+    {
+      "id": "t14",
+      "title": "Decide whether to keep or remove legacy commands/sentinel.md now that skills/sentinel/SKILL.md is in sync",
+      "status": "todo",
+      "priority": 14,
+      "impact": "low",
+      "effort": "low",
+      "expert": "development",
+      "quadrant": "fill-in"
+    }
+  ],
+  "risks": [
+    {
+      "id": "r1",
+      "description": "RESOLVED — Skill version now synced with command version. Both have --dry-run, --list, parallel dispatch, and trends.",
+      "severity": "low",
+      "likelihood": "low",
+      "expert": "development",
+      "mitigation": "Resolved in v1.1.0. CI mirror parity check prevents future drift."
+    },
+    {
+      "id": "r2",
+      "description": "RESOLVED — All 12 version sources now read 1.1.0. CI version consistency check prevents future mismatch.",
+      "severity": "low",
+      "likelihood": "low",
+      "expert": "architecture",
+      "mitigation": "Resolved in v1.1.0. CI catches any version inconsistency."
+    },
+    {
+      "id": "r3",
+      "description": "Tests validate structural integrity but not runtime behavior — a broken risk scoring formula or manifest parser would pass all 83 tests",
+      "severity": "medium",
+      "likelihood": "medium",
+      "expert": "qa",
+      "mitigation": "Add fixture-based runtime tests (t10) that execute manifest-generator against a known codebase and validate output."
+    },
+    {
+      "id": "r4",
+      "description": "Two parallel entry points (command + skill) that must stay in sync — maintenance burden increases with each change",
+      "severity": "low",
+      "likelihood": "medium",
+      "expert": "development",
+      "mitigation": "CI mirror parity catches drift. Consider removing legacy command (t14) to eliminate the risk entirely."
+    }
+  ],
+  "technicalDebt": [
+    {
+      "id": "d1",
+      "item": "RESOLVED — Legacy commands/sentinel.md now synced with skills/sentinel/SKILL.md. Both have all features.",
+      "category": "code",
+      "impact": "low",
+      "effort": "hours",
+      "interestRate": "declining"
+    },
+    {
+      "id": "d2",
+      "item": "RESOLVED — Version numbers consistent across all 12 files at 1.1.0, enforced by CI.",
+      "category": "process",
+      "impact": "low",
+      "effort": "hours",
+      "interestRate": "declining"
+    },
+    {
+      "id": "d3",
+      "item": "RESOLVED — 83 tests across 5 suites added with CI execution. Static/structural coverage is strong.",
+      "category": "test",
+      "impact": "low",
+      "effort": "days",
+      "interestRate": "declining"
+    },
+    {
+      "id": "d4",
+      "item": "RESOLVED — Plugin mirror parity enforced by both test-mirror-parity.sh and CI workflow.",
+      "category": "infra",
+      "impact": "low",
+      "effort": "hours",
+      "interestRate": "declining"
+    },
+    {
+      "id": "d5",
+      "item": "CI workflow duplicates test logic instead of invoking tests/run-all.sh — potential for CI/local test divergence",
+      "category": "infra",
+      "impact": "medium",
+      "effort": "hours",
+      "interestRate": "stable"
+    },
+    {
+      "id": "d6",
+      "item": "Dual command+skill entry points require synchronized maintenance on every orchestrator change",
+      "category": "code",
+      "impact": "low",
+      "effort": "hours",
+      "interestRate": "stable"
+    },
+    {
+      "id": "d7",
+      "item": "No runtime/behavioral tests — only static structural validation. Risk scoring, manifest parsing, and finding generation untested.",
+      "category": "test",
+      "impact": "medium",
+      "effort": "days",
+      "interestRate": "stable"
+    }
+  ],
+  "history": [
+    {
+      "date": "2026-03-15T22:30:00Z",
+      "scores": {
+        "qa": 2,
+        "uiux": null,
+        "security": 7,
+        "devops": 2,
+        "networking": null,
+        "development": 8,
+        "architecture": 8,
+        "product": 8,
+        "api": 8,
+        "monitoring": 4,
+        "database": null,
+        "performance": 7,
+        "documentation": 9,
+        "specifications": 9,
+        "projectDocs": 7,
+        "progress": 6
+      }
+    },
+    {
+      "date": "2026-03-15T23:00:00Z",
+      "scores": {
+        "qa": 7,
+        "uiux": null,
+        "security": 7,
+        "devops": 7,
+        "networking": null,
+        "development": 9,
+        "architecture": 9,
+        "product": 8,
+        "api": 8,
+        "monitoring": 7,
+        "database": null,
+        "performance": 7,
+        "documentation": 9,
+        "specifications": 9,
+        "projectDocs": 7,
+        "progress": 7
+      }
+    }
+  ]
+}
