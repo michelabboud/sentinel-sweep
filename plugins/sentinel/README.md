@@ -30,14 +30,14 @@ Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/c
 ### From GitHub
 
 ```bash
-claude plugin marketplace add https://github.com/michelabboud/claude-sentinel-sweep
+claude plugin marketplace add https://github.com/michelabboud/sentinel-sweep
 claude plugin install sentinel
 ```
 
 ### From local path
 
 ```bash
-claude plugin marketplace add /path/to/claude-sentinel-sweep
+claude plugin marketplace add /path/to/sentinel-sweep
 claude plugin install sentinel
 ```
 

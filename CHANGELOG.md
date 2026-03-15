@@ -7,7 +7,7 @@ All notable changes to Sentinel are documented in this file.
 ### Added
 - **Run-scoped output directories** — each sweep writes to `sentinel-reports/{ISO-timestamp}/` with a `latest` symlink, preventing parallel run collisions
 - **Skills 2.0 migration** — added `skills/sentinel/SKILL.md` and `skills/sentinel-setup/SKILL.md` with enriched frontmatter (tags, triggers, author, repository, license)
-- **Hello Protocol** — all agents now implement the standard greeting handshake (`hello` / `hello <name> ID`)
+- **Hello Protocol** — all agents, skills, and the orchestrator implement the standard greeting handshake (`hello` / `hello <name> ID`)
 - **Parallel sweeper dispatch** — browser and API sweepers launch simultaneously in `/sentinel sweep`
 - **`--dry-run` flag** — generate manifest and show test plan without executing sweeps
 - **`/sentinel report --list`** — list all previous sweep runs
@@ -15,7 +15,9 @@ All notable changes to Sentinel are documented in this file.
 - **`/sentinel trends`** — new subcommand showing pass-rate and finding trends across recent runs with issue deltas
 - **Sweep history tracking** — `sweep-history.json` accumulates summary data from each run for cross-run trend analysis
 - **GitHub Actions CI** — validates JSON, plugin mirror parity, YAML frontmatter, and version consistency
-- **Integration test suite** — 83 tests across 5 suites (structure, frontmatter, schema, mirror parity, version consistency)
+- **Integration test suite** — 106 tests across 6 suites (structure, frontmatter, schema, mirror parity, version consistency, runtime behavior)
+- **JSON Schema files** — formal schemas for manifest, findings, settings, and sweep-history (`schemas/`)
+- **Security documentation** — credential handling guidance and sandbox safety checklist in README
 
 ### Changed
 - Manifest path passed via dispatch prompt instead of hardcoded CWD lookup
