@@ -444,7 +444,7 @@ Each task includes file:line reference and fix suggestion when possible. The tas
 ## Plugin Structure
 
 ```
-sentinel-plugin/
+sentinel-sweep/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── commands/

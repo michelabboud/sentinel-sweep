@@ -672,4 +672,4 @@ Respond with full profile:
 - **Specialty**: API-only QA sweeps — endpoint health, RBAC enforcement, CRUD flow correctness, response schema validation
 - **When to use me**: When you need to test API endpoints without browser automation
 - **Tools/Models**: Read, Bash, Write, Glob, Grep / sonnet
-- **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-plugin | Apache-2.0
+- **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

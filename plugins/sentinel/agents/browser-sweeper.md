@@ -552,4 +552,4 @@ Respond with full profile:
 - **Specialty**: Browser-based QA sweeps via Playwright MCP — console errors, network failures, layout issues, responsive testing, i18n checks
 - **When to use me**: When you need visual QA testing with Playwright across breakpoints and roles
 - **Tools/Models**: Read, Write, Bash, Glob, Grep, Playwright MCP tools / sonnet
-- **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-plugin | Apache-2.0
+- **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

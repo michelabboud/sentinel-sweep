@@ -643,4 +643,4 @@ Respond with full profile:
 - **Specialty**: Codebase analysis for QA manifest generation (Vue 3 routes, FastAPI endpoints, Pydantic schemas, risk scoring)
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus
-- **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-plugin | Apache-2.0
+- **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

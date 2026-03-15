@@ -5,7 +5,7 @@ description: "Automated QA sweep for web apps — run /sentinel sweep for full b
 argument-hint: <sweep|api|report|manifest|setup> [--sandbox]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 author: Michel Abboud
-repository: https://github.com/michelabboud/sentinel-plugin
+repository: https://github.com/michelabboud/sentinel-sweep
 license: Apache-2.0
 tags: [qa, testing, sweep, playwright, api, rbac, accessibility, i18n, layout]
 ---

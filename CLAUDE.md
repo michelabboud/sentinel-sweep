@@ -40,7 +40,7 @@ Sentinel is a 5-component plugin using an orchestrator pattern:
 ## Repository Structure
 
 ```
-sentinel-plugin/
+sentinel-sweep/
 ├── CLAUDE.md                           # This file
 ├── README.md                           # User-facing documentation
 ├── CHANGELOG.md                        # Version history

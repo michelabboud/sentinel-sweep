@@ -14,7 +14,7 @@
 
 ## File Structure
 
-All files live under `/home/michel/projects/sentinel-plugin/`.
+All files live under `/home/michel/projects/sentinel-sweep/`.
 
 | File | Responsibility |
 |------|---------------|
@@ -42,7 +42,7 @@ All files live under `/home/michel/projects/sentinel-plugin/`.
 - [ ] **Step 1: Create plugin directory structure**
 
 ```bash
-cd /home/michel/projects/sentinel-plugin
+cd /home/michel/projects/sentinel-sweep
 mkdir -p .claude-plugin commands agents skills/sentinel-setup
 ```
 
@@ -669,7 +669,7 @@ git commit -m "feat: browser-sweeper agent — Playwright-based visual QA with l
 
 Sections:
 1. **Header** — name, one-line description, badges placeholder
-2. **Installation** — `claude plugin add /path/to/sentinel-plugin` (local install)
+2. **Installation** — `claude plugin add /path/to/sentinel-sweep` (local install)
 3. **Quick Start** — `/sentinel setup` → `/sentinel api` → `/sentinel sweep`
 4. **Commands** — table from spec (setup, sweep, api, report, manifest)
 5. **Configuration** — settings.json fields with descriptions and defaults
@@ -700,7 +700,7 @@ git commit -m "docs: README — installation, usage, configuration, and referenc
 
 ```bash
 # From the SmartSessions project directory
-claude plugin add /home/michel/projects/sentinel-plugin
+claude plugin add /home/michel/projects/sentinel-sweep
 ```
 
 Or symlink: check Claude Code docs for local plugin development workflow.
