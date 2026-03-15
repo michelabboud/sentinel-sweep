@@ -26,7 +26,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.1.0 — Automated QA Sweep for Web Applications
+Sentinel v1.2.0 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -668,7 +668,7 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.1.0
+**Name**: Sentinel v1.2.0
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
 **How to invoke**: `/sentinel <command> [flags]`
 **Available commands**:
@@ -692,7 +692,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.1.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.2.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel hello ID` for the full guide.
 ```
 
 ---

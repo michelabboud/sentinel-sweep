@@ -2,6 +2,16 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.2.0] - 2026-03-15
+
+### Added
+- **`--risk-level` flag** — override risk policy at runtime without editing settings.json (safe, medium, high, critical)
+- **`--safe-only` flag** — shorthand for `--risk-level safe`, limits sweep to read-only GET requests
+- **Interactive risk level prompt** — when no risk flag is provided, Sentinel asks which risk level to use (defaults to medium)
+- **Risk level in report header** — the active risk level is now always visible in both the terminal summary and the markdown report
+- **`--reuse-manifest` flag** — skip manifest regeneration by reusing the manifest from the latest run; also available as an interactive prompt when a previous manifest is detected
+- **Clearer safety documentation** — help text now explains the risk model upfront with a dedicated "Safety & Risk Control" section
+
 ## [1.1.0] - 2026-03-15
 
 ### Added
@@ -27,11 +37,6 @@ All notable changes to Sentinel are documented in this file.
 - **Example report** — sample sweep.md in `docs/example-report/` showing realistic output
 - **Marketplace.json in plugin mirror** — `plugins/sentinel/.claude-plugin/marketplace.json` now included
 - **Command/skill parity test** — CI now verifies `commands/sentinel.md` body matches `skills/sentinel/SKILL.md`
-- **`--reuse-manifest` flag** — skip manifest regeneration by reusing the manifest from the latest run; also available as an interactive prompt when a previous manifest is detected
-- **`--risk-level` flag** — override risk policy at runtime without editing settings.json (safe, medium, high, critical)
-- **`--safe-only` flag** — shorthand for `--risk-level safe`, limits sweep to read-only GET requests
-- **Interactive risk level prompt** — when no risk flag is provided, Sentinel asks which risk level to use (defaults to medium)
-- **Risk level in report header** — the active risk level is now always visible in both the terminal summary and the markdown report
 
 ### Changed
 - Manifest path passed via dispatch prompt instead of hardcoded CWD lookup
