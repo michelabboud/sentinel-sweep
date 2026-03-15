@@ -81,15 +81,16 @@ sentinel-sweep/
 ### Orchestrator (`skills/sentinel/SKILL.md`)
 
 The main entry point. Handles:
-1. Argument parsing (`sweep`, `api`, `report`, `manifest`, `setup`)
+1. Argument parsing (`sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`)
 2. Settings loading from `settings.json` with defaults
 3. Run ID generation (ISO timestamp)
 4. Run directory creation under `sentinel-reports/`
 5. Agent dispatch (parallel for sweep, single for api)
 6. Finding collection and deduplication
 7. Report generation (markdown + terminal summary)
+8. Run comparison (`diff`), auto-fix suggestions (`fix`), and history cleanup (`clean`)
 
-Flags: `--sandbox`, `--dry-run`, `--list`
+Flags: `--sandbox`, `--dry-run`, `--list`, `--severity`
 
 ### Manifest Generator (`agents/manifest-generator.md`)
 

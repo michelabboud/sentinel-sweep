@@ -95,6 +95,10 @@ docker-compose up -d
 | `/sentinel api --dry-run` | Show what would be tested without executing |
 | `/sentinel report` | View the most recent sweep report |
 | `/sentinel report --list` | List all past sweep runs |
+| `/sentinel report --severity error` | Filter report to show only errors and critical issues |
+| `/sentinel diff` | Compare latest two runs — shows new, fixed, and regressed findings |
+| `/sentinel fix` | Auto-suggest and apply code patches for common findings |
+| `/sentinel clean` | Remove old sweep runs, keeping the 5 most recent (or specify N) |
 | `/sentinel manifest` | Generate and inspect the manifest without sweeping |
 | `/sentinel trends` | Show pass-rate and finding trends across recent runs |
 

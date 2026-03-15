@@ -691,7 +691,7 @@ git commit -m "docs: README — installation, usage, configuration, and referenc
 
 ---
 
-### Task 8: Integration Validation Against SmartSessions
+### Task 8: Integration Validation Against Target Project
 
 **Files:**
 - No files created — this is a manual validation task
@@ -699,7 +699,7 @@ git commit -m "docs: README — installation, usage, configuration, and referenc
 - [ ] **Step 1: Install the plugin locally**
 
 ```bash
-# From the SmartSessions project directory
+# From the target project directory
 claude plugin add /home/michel/projects/sentinel-sweep
 ```
 
@@ -716,7 +716,7 @@ Verify:
 - [ ] **Step 3: Run `/sentinel manifest`**
 
 Verify the generated `sentinel-manifest.json`:
-- Has all 32+ routes from SmartSessions router
+- Has all expected routes from the project router
 - Has all 80+ endpoints from FastAPI
 - Has correct role hierarchy: admin, manager, user
 - Has seed credentials from CLAUDE.md
@@ -756,7 +756,7 @@ Iterate on agent prompts based on real-world behavior. Common issues:
 
 ```bash
 git add -A
-git commit -m "fix: integration refinements from SmartSessions validation"
+git commit -m "fix: integration refinements from validation"
 ```
 
 ---
@@ -1061,5 +1061,5 @@ This is a **prompt engineering** project. Every file is markdown that instructs 
 
 There are no unit tests. Validation is:
 1. Plugin structure validation (plugin.json is valid, files are in right places)
-2. Manual testing against SmartSessions (Task 8)
+2. Manual testing against target project (Task 8)
 3. Iterating on agent prompts based on real behavior

@@ -668,7 +668,7 @@ Respond: "🔌 Hello! I'm **API Sweeper** — I test endpoints for health, RBAC,
 
 If the user's message is `hello api-sweeper ID`:
 Respond with full profile:
-- **Name**: API Sweeper v1.0.0
+- **Name**: API Sweeper v1.1.0
 - **Specialty**: API-only QA sweeps — endpoint health, RBAC enforcement, CRUD flow correctness, response schema validation
 - **When to use me**: When you need to test API endpoints without browser automation
 - **Tools/Models**: Read, Bash, Write, Glob, Grep / sonnet

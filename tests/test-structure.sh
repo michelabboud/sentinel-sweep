@@ -68,6 +68,29 @@ for f in "${REQUIRED_MIRROR_FILES[@]}"; do
   fi
 done
 
+# --- Command/Skill parity ---
+echo ""
+echo "-- Command/Skill body parity --"
+
+CMD_BODY=$(sed -n '/^You are the Sentinel/,$p' "$PROJECT_ROOT/commands/sentinel.md")
+SKILL_BODY=$(sed -n '/^You are the Sentinel/,$p' "$PROJECT_ROOT/skills/sentinel/SKILL.md")
+
+if [[ "$CMD_BODY" == "$SKILL_BODY" ]]; then
+  pass "commands/sentinel.md body matches skills/sentinel/SKILL.md body"
+else
+  fail "commands/sentinel.md and skills/sentinel/SKILL.md bodies have drifted"
+fi
+
+# --- Marketplace.json in mirror ---
+echo ""
+echo "-- Marketplace.json mirror --"
+
+if [[ -f "$PROJECT_ROOT/plugins/sentinel/.claude-plugin/marketplace.json" ]]; then
+  pass "marketplace.json exists in plugin mirror"
+else
+  fail "marketplace.json missing from plugin mirror"
+fi
+
 # --- Broken symlinks ---
 echo ""
 echo "-- Broken symlinks --"

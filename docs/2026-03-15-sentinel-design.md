@@ -508,7 +508,7 @@ sentinel-sweep/
 
 ## Framework Support
 
-v1 targets **Vue 3 + FastAPI** (SmartSessions stack). The architecture supports other frameworks via the manifest-generator agent — each framework needs its own parsing logic:
+v1 targets **Vue 3 + FastAPI**. The architecture supports other frameworks via the manifest-generator agent — each framework needs its own parsing logic:
 
 | Framework | Router Source | Endpoint Source | Schema Source |
 |-----------|-------------|-----------------|--------------|
@@ -543,7 +543,7 @@ A successful Sentinel sweep should:
 2. Correctly classify risk levels for every action
 3. Never execute a destructive action without explicit approval in sandbox mode
 4. Never execute any destructive action against a production environment
-5. Catch the categories of bugs found during the SmartSessions development session:
+5. Catch common categories of bugs found during development:
    - User count cartesian product (schema drift / wrong API response)
    - Manager UUID display (missing data resolution)
    - Missing i18n keys

@@ -2,7 +2,7 @@
 name: sentinel
 version: 1.1.0
 description: "Automated QA sweep for web apps — run /sentinel sweep for full browser+API QA, /sentinel api for endpoint-only testing, /sentinel setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
-argument-hint: <sweep|api|report|manifest|setup|trends> [--sandbox] [--dry-run] [--list]
+argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 author: Michel Abboud
 repository: https://github.com/michelabboud/sentinel-sweep
@@ -19,31 +19,62 @@ You are the Sentinel QA orchestrator. Your job is to parse the user's arguments,
 Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
-- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `hello`.
-- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`.
+- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `hello`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
+- If `--severity` appears, take the next word as the severity filter value. Valid values: `critical`, `error`, `warning`, `info`. Store as `severityFilter`. If not present, set `severityFilter = null`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel — Automated QA Sweep
+Sentinel v1.1.0 — Automated QA Sweep for Web Applications
+
+Catches console errors, layout problems, RBAC violations, API schema drift,
+and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
 
 Usage: /sentinel <command> [flags]
 
-Commands:
-  setup       Check environment, install Playwright, configure settings
-  sweep       Full browser + API sweep
-  api         API-only sweep (fast, no browser)
-  report      View the last sweep report
-  manifest    Generate manifest without sweeping
+Getting Started:
+  setup       Check environment, install Playwright, detect frameworks, configure
+              Run this first to verify your dev server is reachable and Playwright is installed.
+
+Sweep Commands:
+  sweep       Full browser + API sweep (runs both sweepers in parallel)
+              Generates manifest, tests all endpoints via curl, navigates all routes via
+              Playwright, captures console errors, layout issues, and RBAC violations.
+  api         API-only sweep — endpoint health, RBAC, CRUD flows, schema contracts
+              Faster than sweep — no browser needed. Good for CI or backend-only changes.
+
+Analysis & Reporting:
+  report      View the most recent sweep report (markdown format)
   trends      Show pass-rate and finding trends across recent runs
+  diff        Compare two runs side-by-side — shows new, fixed, and regressed findings
+  manifest    Generate and inspect the manifest without sweeping
+
+Actions:
+  fix         Auto-suggest code patches for common findings (missing i18n, RBAC, schemas)
+  clean       Remove old sweep runs, keeping the N most recent (default: 5)
 
 Flags:
   --sandbox   Enable high/critical actions with per-action approval (dev only)
   --dry-run   Generate manifest and show test plan without executing sweeps
   --list      List all previous sweep runs (use with report subcommand)
+  --severity  Filter report output by minimum severity (critical, error, warning, info)
+
+Examples:
+  /sentinel setup                    # First-time check
+  /sentinel sweep                    # Full QA sweep
+  /sentinel api --dry-run            # Preview what would be tested
+  /sentinel report --severity error  # Show only errors and critical issues
+  /sentinel diff                     # Compare latest run vs previous
+  /sentinel trends                   # View pass-rate trend across runs
+  /sentinel clean 3                  # Keep only the 3 most recent runs
+  /sentinel sweep --sandbox          # Include destructive actions with approval
+
+Tip: Start with '/sentinel api' (no browser needed) to verify endpoints,
+     then graduate to '/sentinel sweep' for full browser + API coverage.
 ```
 
 ---
@@ -293,7 +324,11 @@ First, try the new run-scoped format by reading from the `latest` symlink:
 cat {settings.reportDir}/latest/sweep.md 2>/dev/null
 ```
 
-If `{settings.reportDir}/latest/sweep.md` exists, use the Read tool to read that file and print its full contents to the terminal.
+If `{settings.reportDir}/latest/sweep.md` exists, use the Read tool to read that file.
+
+**Severity filter:** If `severityFilter` is not null, filter the report output to only show findings at or above the specified severity. The severity ordering from highest to lowest is: `critical` > `error` > `warning` > `info`. For example, `--severity error` shows only critical and error findings. Apply this filter to all finding sections (Critical Issues, Errors, Warnings, Info) and the Task List — omit sections that have no findings after filtering. Always show the Summary section regardless of filter.
+
+Print the (optionally filtered) report contents to the terminal.
 
 If the `latest` symlink does not exist or does not contain `sweep.md`, fall back to the old flat format:
 
@@ -335,6 +370,192 @@ For each adjacent pair of runs (older to newer), compute the per-severity delta.
 
 ---
 
+### Subcommand: `diff`
+
+Compare two sweep runs to show what's new, what's fixed, and what regressed.
+
+**Step diff-1: Identify the two runs to compare.**
+
+Parse `$ARGUMENTS` for run IDs after the `diff` keyword. There are three cases:
+
+1. **No run IDs provided** (`/sentinel diff`): Compare the two most recent runs. Use the Bash tool:
+   ```bash
+   ls -1d {settings.reportDir}/????-??-??T??-??-??Z 2>/dev/null | sort -r | head -2
+   ```
+   The first result is the "current" run, the second is the "previous" run. If fewer than 2 runs exist, print: `"Need at least 2 runs to diff. Run /sentinel sweep or /sentinel api first."` and stop.
+
+2. **One run ID provided** (`/sentinel diff 2026-03-15T14-30-00Z`): Compare the specified run against its predecessor. Find the run that precedes it chronologically.
+
+3. **Two run IDs provided** (`/sentinel diff <older> <newer>`): Compare the two specified runs directly.
+
+Store as `olderRun` and `newerRun`.
+
+**Step diff-2: Load findings from both runs.**
+
+Read `{settings.reportDir}/{olderRun}/api-findings.json` and `{settings.reportDir}/{olderRun}/browser-findings.json`. Merge into a single `olderFindings` array. Do the same for `newerRun` → `newerFindings`.
+
+If either run has no findings files, print a warning and use an empty array.
+
+**Step diff-3: Compute the diff.**
+
+Compare findings using the composite key `(endpoint, route, role, category, message)`.
+
+Classify each finding into one of three buckets:
+
+- **Fixed**: Present in `olderFindings` but absent in `newerFindings`. These issues were resolved.
+- **New**: Absent in `olderFindings` but present in `newerFindings`. These are regressions or new issues.
+- **Persisted**: Present in both runs (same key). Note if severity changed.
+
+**Step diff-4: Print the diff report.**
+
+```
+--- Sentinel Diff: {olderRun} → {newerRun} ---
+
+  Fixed ({fixedCount}):
+  {for each fixed finding:}
+    - [FIXED] [{severity}] {category}: {message}
+      {endpoint or route} ({role})
+
+  New ({newCount}):
+  {for each new finding:}
+    - [NEW] [{severity}] {category}: {message}
+      {endpoint or route} ({role})
+
+  Persisted ({persistedCount}):
+    {count} findings unchanged across both runs.
+    {if any severity changed:}
+    Severity changes:
+    - {endpoint}: {oldSeverity} → {newSeverity}
+
+  Summary:
+    Older run: {olderPassRate}% pass rate ({olderTotal} findings)
+    Newer run: {newerPassRate}% pass rate ({newerTotal} findings)
+    Net change: {delta with +/- prefix} findings
+```
+
+If there are no fixed and no new findings, print: `"No changes between runs."`.
+
+---
+
+### Subcommand: `fix`
+
+Analyze the most recent sweep findings and suggest (or apply) code fixes for common issue patterns.
+
+**Step fix-1: Load latest findings.**
+
+Read findings from the `latest` symlink:
+- `{settings.reportDir}/latest/api-findings.json`
+- `{settings.reportDir}/latest/browser-findings.json`
+
+Merge into a single findings array. If no findings exist, print: `"No findings to fix. Run /sentinel sweep or /sentinel api first."` and stop.
+
+**Step fix-2: Categorize fixable findings.**
+
+Filter findings to those with actionable fix patterns. The following categories have auto-fix support:
+
+| Category | Pattern | Fix Strategy |
+|----------|---------|-------------|
+| `i18n` | Missing i18n key | Add the key to the locale file with a placeholder value |
+| `rbac` | Unauthorized role got 2xx | Add the appropriate auth dependency to the endpoint |
+| `schema` | Required field missing | Update the Pydantic response model |
+| `health` | Stack trace leaked | Wrap the endpoint in a try/except with proper error response |
+| `crud` | Empty body accepted | Add request body validation |
+
+For each fixable finding, print:
+
+```
+[{n}] [{severity}] {category}: {message}
+    Suggested fix: {fixSuggestion}
+    File: {fileRef or "unknown — manual investigation needed"}
+```
+
+**Step fix-3: Offer to apply fixes.**
+
+After listing all fixable findings, print:
+
+```
+Found {fixableCount} auto-fixable findings out of {totalCount} total.
+
+Options:
+  - Type a number (e.g., "1") to apply a specific fix
+  - Type "all" to apply all fixes
+  - Type "skip" to exit without changes
+
+Which fixes would you like to apply?
+```
+
+Wait for the user's response.
+
+**Step fix-4: Apply selected fixes.**
+
+For each selected fix, use the appropriate tool:
+
+- **i18n fixes**: Use Glob to find locale JSON files (e.g., `**/locales/*.json`, `**/i18n/*.json`). Read the file, add the missing key with value `"TODO: translate"`, write it back.
+- **RBAC fixes**: Use the `fileRef` to read the endpoint file. Add the appropriate `Depends()` call to the function signature.
+- **Schema fixes**: Read the schema file, add the missing field declaration.
+- **Other fixes**: Print the suggested fix as a code snippet for the user to apply manually.
+
+After applying fixes, print a summary:
+
+```
+Applied {appliedCount} fixes:
+  - {description of each fix applied}
+
+Re-run /sentinel api to verify the fixes resolved the issues.
+```
+
+---
+
+### Subcommand: `clean`
+
+Remove old sweep run directories, keeping only the N most recent.
+
+**Step clean-1: Determine retention count.**
+
+Parse `$ARGUMENTS` for a number after `clean`. If a number is provided, use it as the retention count. If no number is provided, default to `5`.
+
+**Step clean-2: List all runs.**
+
+Use the Bash tool:
+
+```bash
+ls -1d {settings.reportDir}/????-??-??T??-??-??Z 2>/dev/null | sort -r
+```
+
+If no runs exist, print: `"No runs found. Nothing to clean."` and stop.
+
+**Step clean-3: Identify runs to remove.**
+
+Keep the first N entries (most recent). The remaining entries are candidates for removal.
+
+If there are no candidates (total runs <= retention count), print: `"Only {count} runs found. Nothing to clean (keeping {retentionCount})."` and stop.
+
+**Step clean-4: Confirm and remove.**
+
+Print the list of runs that will be removed:
+
+```
+Keeping {retentionCount} most recent runs:
+  {list of kept run IDs}
+
+Removing {removeCount} older runs:
+  {list of run IDs to remove}
+
+Proceed? [y/n]
+```
+
+Wait for user confirmation. If the user confirms, use the Bash tool to remove each directory:
+
+```bash
+rm -rf {settings.reportDir}/{runId}
+```
+
+After removal, update `sweep-history.json` to remove entries for deleted runs. Read the file, filter the `runs` array to keep only entries whose `runId` matches a kept run, write back.
+
+Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
+
+---
+
 ### Subcommand: `hello`
 
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
@@ -347,12 +568,15 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
   - `setup` — Check environment, install Playwright, detect framework, configure settings
   - `sweep` — Full browser + API sweep (parallel sweepers, run-scoped output)
   - `api` — API-only sweep (endpoint health, RBAC, CRUD flows, schema contracts)
-  - `report` — View the most recent sweep report (`--list` to see all runs)
-  - `manifest` — Generate and inspect the manifest without sweeping
+  - `report` — View the most recent sweep report (`--list` to see all runs, `--severity` to filter)
   - `trends` — Show pass-rate and finding trends across recent runs
+  - `diff` — Compare two runs side-by-side (new, fixed, regressed findings)
+  - `fix` — Auto-suggest and apply code patches for common findings
+  - `clean` — Remove old sweep runs, keeping the N most recent
+  - `manifest` — Generate and inspect the manifest without sweeping
   - `hello` — Quick greeting + availability check
   - `hello ID` — This full profile
-**Flags**: `--sandbox`, `--dry-run`, `--list`
+**Flags**: `--sandbox`, `--dry-run`, `--list`, `--severity`
 **Architecture**: Orchestrator + 3 agents (manifest-generator, api-sweeper, browser-sweeper) + setup skill
 **Framework support (v1)**: Vue 3 + FastAPI + Pydantic v2 + SQLAlchemy + JWT
 **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

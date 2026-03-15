@@ -15,9 +15,18 @@ All notable changes to Sentinel are documented in this file.
 - **`/sentinel trends`** — new subcommand showing pass-rate and finding trends across recent runs with issue deltas
 - **Sweep history tracking** — `sweep-history.json` accumulates summary data from each run for cross-run trend analysis
 - **GitHub Actions CI** — validates JSON, plugin mirror parity, YAML frontmatter, and version consistency
-- **Integration test suite** — 106 tests across 6 suites (structure, frontmatter, schema, mirror parity, version consistency, runtime behavior)
+- **Integration test suite** — 108 tests across 6 suites (structure, frontmatter, schema, mirror parity, version consistency, runtime behavior)
 - **JSON Schema files** — formal schemas for manifest, findings, settings, and sweep-history (`schemas/`)
 - **Security documentation** — credential handling guidance and sandbox safety checklist in README
+- **`/sentinel diff`** — compare two runs side-by-side showing new, fixed, and regressed findings
+- **`/sentinel fix`** — auto-suggest and apply code patches for common findings (i18n, RBAC, schema, health)
+- **`/sentinel clean`** — prune old sweep runs, keeping the N most recent (default: 5)
+- **`--severity` flag** — filter report output by minimum severity level (critical, error, warning, info)
+- **Enhanced help text** — usage block now includes descriptions, examples, and getting-started tip
+- **`CONTRIBUTING.md`** — contributor guide covering setup, development, testing, and PR workflow
+- **Example report** — sample sweep.md in `docs/example-report/` showing realistic output
+- **Marketplace.json in plugin mirror** — `plugins/sentinel/.claude-plugin/marketplace.json` now included
+- **Command/skill parity test** — CI now verifies `commands/sentinel.md` body matches `skills/sentinel/SKILL.md`
 
 ### Changed
 - Manifest path passed via dispatch prompt instead of hardcoded CWD lookup
@@ -28,7 +37,8 @@ All notable changes to Sentinel are documented in this file.
 
 ### Fixed
 - Report overwrites when multiple sweeps run in the same project
-- Hardcoded `SmartSessions` reference replaced with generic instruction
+- Hardcoded project-specific reference replaced with generic instruction
+- Agent Hello Protocol version strings now match frontmatter (v1.0.0 → v1.1.0)
 
 ## [1.0.0] - 2026-03-14
 

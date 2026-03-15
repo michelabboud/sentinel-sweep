@@ -639,7 +639,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.0.0
+- **Name**: Manifest Generator v1.1.0
 - **Specialty**: Codebase analysis for QA manifest generation (Vue 3 routes, FastAPI endpoints, Pydantic schemas, risk scoring)
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus
