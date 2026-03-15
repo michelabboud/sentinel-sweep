@@ -2,6 +2,11 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.2.2] - 2026-03-16
+
+### Fixed
+- **Enforce parallel sweep dispatch** — added explicit parallelism instruction so browser and API sweepers run concurrently during `/sentinel:run sweep`
+
 ## [1.2.1] - 2026-03-16
 
 ### Changed

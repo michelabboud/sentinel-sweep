@@ -26,7 +26,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.2.1 — Automated QA Sweep for Web Applications
+Sentinel v1.2.2 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -340,8 +340,10 @@ Attempt to detect whether Playwright MCP browser tools are available. Do this by
 
 **Step sweep-3: Run sweeps in parallel.**
 
+CRITICAL PARALLELISM REQUIREMENT: You MUST make both Agent tool calls in the SAME response message. Do NOT call one agent, wait for its result, then call the other. Both calls go out together — this is the whole point of the sweep command. If you serialize them, the sweep takes 2x longer than necessary.
+
 If `playwrightAvailable` is `true`:
-Use the Agent tool to dispatch BOTH agents in a single message (parallel execution):
+Call the Agent tool TWICE in your NEXT response — both calls in the same message, no text between them, no waiting:
 
 1. The browser-sweeper agent with this prompt:
 
@@ -668,7 +670,7 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.2.1
+**Name**: Sentinel v1.2.2
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -692,7 +694,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.2.1. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.2.2. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---

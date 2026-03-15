@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with the Sentinel plugin
 
 **Sentinel** is a Claude Code plugin that automates QA sweeps for web applications. It catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys.
 
-- **Version**: 1.2.1
+- **Version**: 1.2.2
 - **License**: Apache-2.0
 - **Framework support (v1)**: Vue 3 + FastAPI + Pydantic v2 + SQLAlchemy + JWT
 - **Browser automation**: Playwright MCP
