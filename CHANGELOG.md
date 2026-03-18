@@ -2,6 +2,17 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.3.0] - 2026-03-18
+
+### Added
+- **Multi-service architecture support** — sweep projects with multiple APIs and frontends (e.g., Internal Archive + Public Portal)
+  - New `services` array in `settings.json` for explicit service configuration
+  - Auto-detection from multiple `docker-compose.yml` files
+  - Per-service manifest tagging (routes/endpoints tagged with `"service"` field)
+  - Parallel sweeper dispatch per service (one api-sweeper + one browser-sweeper each)
+  - Report findings grouped by service name
+  - Full backward compatibility — single-service projects work unchanged
+
 ## [1.2.2] - 2026-03-16
 
 ### Fixed

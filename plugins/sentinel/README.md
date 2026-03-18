@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.2.2** | Vue 3 + FastAPI | JWT auth | Playwright MCP
+> **v1.3.0** | Vue 3 + FastAPI | JWT auth | Playwright MCP
 
 ---
 
@@ -13,6 +13,7 @@ Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/c
 - [Commands](#commands)
 - [How It Works](#how-it-works)
 - [Configuration](#configuration)
+- [Multi-Service Projects](#multi-service-projects)
 - [Manifest](#manifest)
 - [Risk Levels](#risk-levels)
 - [Sandbox Mode](#sandbox-mode)
@@ -169,7 +170,8 @@ Settings are in `settings.json` at the plugin root. All fields have sensible def
   "auth": {
     "credentialsSource": "manifest"
   },
-  "emptyContainerSelectors": ["[data-sentinel-content]", "main", ".card-body"]
+  "emptyContainerSelectors": ["[data-sentinel-content]", "main", ".card-body"],
+  "services": []
 }
 ```
 
@@ -185,10 +187,76 @@ Settings are in `settings.json` at the plugin root. All fields have sensible def
 | `browser.headless` | `true` | Run browser in headless mode |
 | `browser.browserType` | `"chromium"` | Browser engine (`chromium`, `firefox`, `webkit`) |
 | `emptyContainerSelectors` | see above | CSS selectors for empty container layout checks |
+| `services` | `[]` | Multi-service configuration (see [Multi-Service Projects](#multi-service-projects)) |
 
 ### Tailwind breakpoint auto-detection
 
 If you use Tailwind CSS, Sentinel auto-detects your custom breakpoints from `tailwind.config.js` or `@theme` CSS blocks. Detected breakpoints override the defaults unless you've explicitly set them in `settings.json`.
+
+---
+
+## Multi-Service Projects
+
+Sentinel supports projects with multiple APIs and frontends — for example, an Internal Archive (admin API + admin dashboard) and a Public Portal (public API + SSR frontend) under the same repository.
+
+### Configuration
+
+Add a `services` array to `settings.json`:
+
+```json
+{
+  "services": [
+    {
+      "name": "internal-archive",
+      "apiBaseUrl": "http://localhost:18000",
+      "baseUrl": "http://localhost:13001",
+      "sourcePath": "internal/"
+    },
+    {
+      "name": "public-portal",
+      "apiBaseUrl": "http://localhost:18001",
+      "baseUrl": "http://localhost:13000",
+      "sourcePath": "public/"
+    }
+  ]
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Service identifier (used in findings, reports, and output filenames) |
+| `apiBaseUrl` | Yes | Base URL for API requests |
+| `baseUrl` | No | Base URL for browser navigation (omit for API-only services) |
+| `sourcePath` | No | Path to service source code (default: `"."` — project root) |
+| `auth` | No | Per-service auth override (inherits top-level `auth` if not set) |
+
+### Auto-detection
+
+If `services` is empty, the manifest generator auto-detects multi-service projects from multiple `docker-compose.yml` files in different subdirectories. Each docker-compose file with distinct API ports becomes a separate service.
+
+### How it works
+
+1. **Manifest generation** — The manifest generator processes each service's `sourcePath` independently, tagging every route and endpoint with `"service": "service-name"`
+2. **Parallel dispatch** — The orchestrator dispatches one API sweeper + one browser sweeper per service, all in a single parallel batch
+3. **Findings merge** — Results from all service sweepers are merged, with each finding tagged by service
+4. **Grouped reports** — Report sections group findings under service name subheadings
+
+### Output structure (multi-service)
+
+```
+sentinel-reports/
+└── 2026-03-18T10-00-00Z/
+    ├── sentinel-manifest.json
+    ├── internal-archive-api-findings.json
+    ├── internal-archive-browser-findings.json
+    ├── public-portal-api-findings.json
+    ├── public-portal-browser-findings.json
+    └── sweep.md
+```
+
+### Backward compatibility
+
+Single-service projects work exactly as before. The `services` field defaults to `[]`, no `service` tags are added to findings, and output filenames remain `api-findings.json` / `browser-findings.json`.
 
 ---
 
@@ -296,13 +364,15 @@ sentinel-reports/
 ├── latest -> 2026-03-15T14-30-00Z/
 ├── 2026-03-15T14-30-00Z/
 │   ├── sentinel-manifest.json    # Manifest used for this run
-│   ├── api-findings.json         # API sweeper results
-│   ├── browser-findings.json     # Browser sweeper results
+│   ├── api-findings.json         # API sweeper results (single-service)
+│   ├── browser-findings.json     # Browser sweeper results (single-service)
 │   ├── sweep.md                  # Full markdown report
 │   └── screenshots/              # Layout issue screenshots
 └── 2026-03-14T09-15-00Z/
     └── ...
 ```
+
+In multi-service mode, findings files are prefixed with the service name (e.g., `internal-archive-api-findings.json`). See [Multi-Service Projects](#multi-service-projects).
 
 ### Report sections
 

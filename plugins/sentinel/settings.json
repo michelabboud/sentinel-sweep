@@ -15,5 +15,6 @@
   "auth": {
     "credentialsSource": "manifest"
   },
-  "emptyContainerSelectors": ["[data-sentinel-content]", "main", ".card-body"]
+  "emptyContainerSelectors": ["[data-sentinel-content]", "main", ".card-body"],
+  "services": []
 }

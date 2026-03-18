@@ -1,6 +1,6 @@
 ---
 name: run
-version: 1.2.2
+version: 1.3.0
 description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:sentinel-setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
 argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
@@ -32,7 +32,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.2.2 — Automated QA Sweep for Web Applications
+Sentinel v1.3.0 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -131,6 +131,26 @@ Merge the file contents with these defaults for any missing keys. The file value
 ```
 
 Store the merged result as `settings` for use in subsequent steps. The `reportDir` value from settings is the base output directory for all reports.
+
+### Multi-Service Detection
+
+After loading settings, determine the service list:
+
+1. If `settings.services` is a non-empty array, use it directly. Each service object has this shape:
+   ```json
+   {
+     "name": "internal-api",
+     "apiBaseUrl": "http://localhost:18000",
+     "baseUrl": "http://localhost:13001",
+     "sourcePath": ".",
+     "auth": { "credentialsSource": "manifest" }
+   }
+   ```
+   Only `name` and `apiBaseUrl` are required. `baseUrl` is optional (for browser sweeps). `sourcePath` defaults to `"."` (project root). `auth` inherits from the top-level `settings.auth` if not specified.
+
+2. If `settings.services` is empty or not set, the manifest generator will auto-detect services from `docker-compose.yml` files. The orchestrator treats this as a single implicit service (backward compatible — same behavior as before).
+
+Set `isMultiService = true` if `settings.services` has 2+ entries OR if the manifest (once generated) contains 2+ services. Otherwise `isMultiService = false`.
 
 ---
 
@@ -259,7 +279,13 @@ Use the Agent tool to dispatch the manifest-generator agent with this prompt:
    - Which actions would be skipped due to risk policy
 3. Stop — do not proceed to sweeping or report generation.
 
-**Step api-2: Run API sweep.**
+**Step api-2: Detect services from manifest.**
+
+Use the Read tool to read `{runDir}/sentinel-manifest.json`. Check whether the manifest contains a `services` array with 2+ entries. If yes, set `isMultiService = true` and store the service list. Otherwise, set `isMultiService = false`.
+
+**Step api-3: Run API sweep(s).**
+
+**Single-service mode** (`isMultiService = false`):
 
 Use the Agent tool to dispatch the api-sweeper agent. Construct the prompt as follows — fill in the bracketed values from `settings` and from `sandboxMode`:
 
@@ -276,15 +302,38 @@ Use the Agent tool to dispatch the api-sweeper agent. Construct the prompt as fo
 >
 > Write all findings to {runDir}/api-findings.json using the findings JSON schema. When finished, do not print a summary — the orchestrator will handle reporting.
 
-**Step api-3: Collect findings.**
+**Multi-service mode** (`isMultiService = true`):
 
-Use the Read tool to read `{runDir}/api-findings.json`. Store the parsed content as `apiFindingsData`. If the file does not exist or cannot be read, set `apiFindingsData` to `null` and print a warning:
+Dispatch one api-sweeper agent per service, ALL in the SAME response message (parallel). For each service in the manifest's `services` array, construct the prompt:
+
+> Run an API-only sentinel sweep for the **{service.name}** service.
+>
+> Manifest path: {runDir}/sentinel-manifest.json
+> Service name: {service.name}
+> API base URL: {service.apiBaseUrl}
+>
+> IMPORTANT: Only test endpoints belonging to service "{service.name}". In the manifest, each endpoint has a `"service"` field — only test endpoints where `service` equals "{service.name}". Use `{service.apiBaseUrl}` as the API base URL instead of the top-level `app.apiBaseUrl`.
+>
+> Settings:
+> - Risk policy: {settings.riskPolicy as JSON}
+> - Response timeout: {settings.responseTimeout}ms
+> - Report directory: {runDir}
+>
+> Sandbox mode: {sandboxMode}
+>
+> Write all findings to {runDir}/{service.name}-api-findings.json using the findings JSON schema. Tag every finding with `"service": "{service.name}"`. When finished, do not print a summary — the orchestrator will handle reporting.
+
+**Step api-4: Collect findings.**
+
+**Single-service mode**: Use the Read tool to read `{runDir}/api-findings.json`. Store the parsed content as `apiFindingsData`. If the file does not exist or cannot be read, set `apiFindingsData` to `null` and print a warning:
 
 ```
 Warning: api-sweeper did not produce findings. Report will be empty.
 ```
 
-**Step api-4: Generate report.**
+**Multi-service mode**: For each service, read `{runDir}/{service.name}-api-findings.json`. Merge all findings arrays into a single `apiFindingsData` object. Combine the `metadata` fields: sum `endpointsTested`, union `rolesTested`, take earliest `startedAt` and latest `finishedAt`. If any service file is missing, print a warning for that service and continue with the others.
+
+**Step api-5: Generate report.**
 
 Set `browserFindingsData = null`. Merge findings and generate the report following the instructions in **Section 4: Report Generation** below.
 
@@ -344,9 +393,15 @@ Use the Agent tool to dispatch the manifest-generator agent with this prompt:
 
 Attempt to detect whether Playwright MCP browser tools are available. Do this by checking whether you have access to a tool named `browser_navigate` or `mcp__plugin_playwright_playwright__browser_navigate` (or any tool whose name contains `browser_navigate`). Set `playwrightAvailable = true` if such a tool exists, otherwise `false`.
 
+**Step sweep-2b: Detect services from manifest.**
+
+Use the Read tool to read `{runDir}/sentinel-manifest.json`. Check whether the manifest contains a `services` array with 2+ entries. If yes, set `isMultiService = true` and store the service list. Otherwise, set `isMultiService = false`.
+
 **Step sweep-3: Run sweeps in parallel.**
 
-CRITICAL PARALLELISM REQUIREMENT: You MUST make both Agent tool calls in the SAME response message. Do NOT call one agent, wait for its result, then call the other. Both calls go out together — this is the whole point of the sweep command. If you serialize them, the sweep takes 2x longer than necessary.
+CRITICAL PARALLELISM REQUIREMENT: You MUST make ALL Agent tool calls in the SAME response message. Do NOT call one agent, wait for its result, then call the next. ALL calls go out together — this is the whole point of the sweep command. If you serialize them, the sweep takes N× longer than necessary.
+
+#### Single-service mode (`isMultiService = false`):
 
 If `playwrightAvailable` is `true`:
 Call the Agent tool TWICE in your NEXT response — both calls in the same message, no text between them, no waiting:
@@ -395,13 +450,59 @@ Run /sentinel:run setup to install.
 
 Then dispatch ONLY the api-sweeper agent with the same prompt as above.
 
+#### Multi-service mode (`isMultiService = true`):
+
+Dispatch ALL agents in a SINGLE response message. For each service in the manifest's `services` array, dispatch:
+
+1. **One api-sweeper agent** with this prompt:
+
+> Run an API-only sentinel sweep for the **{service.name}** service.
+>
+> Manifest path: {runDir}/sentinel-manifest.json
+> Service name: {service.name}
+> API base URL: {service.apiBaseUrl}
+>
+> IMPORTANT: Only test endpoints belonging to service "{service.name}". In the manifest, each endpoint has a `"service"` field — only test endpoints where `service` equals "{service.name}". Use `{service.apiBaseUrl}` as the API base URL instead of the top-level `app.apiBaseUrl`.
+>
+> Settings:
+> - Risk policy: {settings.riskPolicy as JSON}
+> - Response timeout: {settings.responseTimeout}ms
+> - Report directory: {runDir}
+>
+> Sandbox mode: {sandboxMode}
+>
+> Write all findings to {runDir}/{service.name}-api-findings.json using the findings JSON schema. Tag every finding with `"service": "{service.name}"`. When finished, do not print a summary — the orchestrator will handle reporting.
+
+2. **One browser-sweeper agent** (if `playwrightAvailable` AND the service has a `baseUrl`) with this prompt:
+
+> Run a browser sentinel sweep using Playwright for the **{service.name}** service.
+>
+> Manifest path: {runDir}/sentinel-manifest.json
+> Service name: {service.name}
+> Frontend base URL: {service.baseUrl}
+>
+> IMPORTANT: Only test routes belonging to service "{service.name}". In the manifest, each route has a `"service"` field — only test routes where `service` equals "{service.name}". Use `{service.baseUrl}` as the frontend base URL instead of the top-level `app.baseUrl`.
+>
+> Settings:
+> - Breakpoints: {settings.breakpoints}
+> - Risk policy: {settings.riskPolicy as JSON}
+> - Response timeout: {settings.responseTimeout}ms
+> - Screenshot on error: {settings.screenshotOnError}
+> - Report directory: {runDir}
+> - Browser: {settings.browser as JSON}
+> - Empty container selectors: {settings.emptyContainerSelectors as JSON, or default ["[data-sentinel-content]", "main", ".card-body"] if not set}
+>
+> Sandbox mode: {sandboxMode}
+>
+> Write all findings to {runDir}/{service.name}-browser-findings.json using the findings JSON schema. Tag every finding with `"service": "{service.name}"`. When finished, do not print a summary — the orchestrator will handle reporting.
+
+If `playwrightAvailable` is `false`, skip all browser-sweeper dispatches and print the Playwright warning as above.
+
 **Step sweep-4: Collect and merge findings.**
 
-Use the Read tool to read `{runDir}/api-findings.json`. Store as `apiFindingsData`, or `null` if missing.
+**Single-service mode**: Use the Read tool to read `{runDir}/api-findings.json`. Store as `apiFindingsData`, or `null` if missing. If `playwrightAvailable` was `true`, use the Read tool to read `{runDir}/browser-findings.json`. Store as `browserFindingsData`, or `null` if missing. Otherwise set `browserFindingsData = null`.
 
-If `playwrightAvailable` was `true`, use the Read tool to read `{runDir}/browser-findings.json`. Store as `browserFindingsData`, or `null` if missing.
-
-Otherwise set `browserFindingsData = null`.
+**Multi-service mode**: For each service, read `{runDir}/{service.name}-api-findings.json` and (if applicable) `{runDir}/{service.name}-browser-findings.json`. Merge all findings arrays into a single combined list. Each finding already has a `"service"` tag from the sweepers. Combine the `metadata` fields: sum `endpointsTested` and `routesTested`, union `rolesTested`, take earliest `startedAt` and latest `finishedAt`. Store the merged API data as `apiFindingsData` and merged browser data as `browserFindingsData`. If any service file is missing, print a warning for that service and continue.
 
 **Deduplication:** Combine the `findings` arrays from both files into a single list. Two findings are considered duplicates if they share the same `endpoint`, `role`, and `message` values. When a duplicate exists, keep the one with the higher severity (critical > error > warning > info).
 
@@ -676,7 +777,7 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.2.2
+**Name**: Sentinel v1.3.0
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -700,7 +801,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.2.2. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.3.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---
@@ -799,10 +900,13 @@ A markdown table with these rows:
 
 #### `## Critical Issues`
 
+**Multi-service grouping**: If `isMultiService` is `true`, group all finding sections (Critical, Errors, Warnings, Info) by service. For each severity section, write a `### {service.name}` subheading, then list the findings for that service. Findings with no `service` tag go under a `### General` subheading.
+
 For each finding with `severity = "critical"`, write a checkbox entry:
 
 ```
 - [ ] **[CRITICAL]** {category}: {message}
+  - Service: {service or "—"}
   - File: {fileRef or "unknown"}
   - Expected: {expected or "n/a"}
   - Actual: {actual or "n/a"}
@@ -819,6 +923,7 @@ Same checkbox format as Critical Issues, for findings with `severity = "error"`:
 
 ```
 - [ ] **[ERROR]** {category}: {message}
+  - Service: {service or "—"}
   - File: {fileRef or "unknown"}
   - Expected: {expected or "n/a"}
   - Actual: {actual or "n/a"}
@@ -835,6 +940,7 @@ Same checkbox format for findings with `severity = "warning"`:
 
 ```
 - [ ] **[WARNING]** {category}: {message}
+  - Service: {service or "—"}
   - File: {fileRef or "unknown"}
   - Expected: {expected or "n/a"}
   - Actual: {actual or "n/a"}
@@ -850,7 +956,7 @@ If there are no warnings, write: `_No warnings._`
 Bullet list (no checkboxes) for findings with `severity = "info"`:
 
 ```
-- [{category}] {message} — {endpoint or route or "n/a"} ({role or "n/a"})
+- [{category}] {message} — {endpoint or route or "n/a"} ({role or "n/a"}) {if service: "[{service}]"}
 ```
 
 If there are no info findings, write: `_No info entries._`
@@ -994,7 +1100,8 @@ Both sweeper agents write their findings to JSON files. When reading these files
       "fileRef": "file:line or null",
       "fixSuggestion": "optional fix hint or null",
       "breakpoint": "viewport width in px or null",
-      "screenshot": "relative path or null"
+      "screenshot": "relative path or null",
+      "service": "service name or null (multi-service mode only)"
     }
   ]
 }
@@ -1002,6 +1109,7 @@ Both sweeper agents write their findings to JSON files. When reading these files
 
 - `endpoint` and `route` may both be null for findings that apply globally.
 - `screenshot` paths are relative to the project root.
+- `service` is set by sweeper agents in multi-service mode. In single-service mode, it is `null` or absent.
 - Sweeper agents may add extra fields; ignore unknown fields when reading.
-- API sweeper writes to: `{runDir}/api-findings.json`
-- Browser sweeper writes to: `{runDir}/browser-findings.json`
+- **Single-service mode**: API sweeper writes to `{runDir}/api-findings.json`, browser sweeper writes to `{runDir}/browser-findings.json`.
+- **Multi-service mode**: Each sweeper writes to `{runDir}/{service.name}-api-findings.json` or `{runDir}/{service.name}-browser-findings.json`.

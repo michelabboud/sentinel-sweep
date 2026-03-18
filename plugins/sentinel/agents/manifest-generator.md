@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.2.2
+version: 1.3.0
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -138,6 +138,61 @@ Store the hierarchy as `roleHierarchy`.
 
 ---
 
+## Section 2b: Multi-Service Detection
+
+Detect whether the project has multiple independent services (e.g., separate APIs and frontends under the same repository).
+
+### Check for Services Configuration
+
+First, check if the orchestrator's prompt mentions a `services` configuration (passed from `settings.json`). If the prompt includes a `services` array, use those service definitions directly and skip auto-detection.
+
+### Auto-Detection from docker-compose Files
+
+If no services configuration was provided, look for multi-service patterns:
+
+1. Use Glob to find all `**/docker-compose.yml` and `**/docker-compose.yaml` files. If multiple docker-compose files exist in different subdirectories, each likely represents a separate service stack.
+
+2. For each docker-compose file found, read it and extract:
+   - Service entries that expose API ports (services containing "api", "backend", "server" in their name, or that reference Python/FastAPI/Django/Flask)
+   - Service entries that expose frontend ports (services containing "web", "frontend", "client", "app", or referencing Node.js/Vue/React/Nuxt)
+   - The directory containing the docker-compose file (this is the service's `sourcePath`)
+
+3. If there are 2+ distinct API services (different ports), this is a multi-service project. Build a `services` array:
+
+```json
+[
+  {
+    "name": "service-name-from-dir-or-compose",
+    "apiBaseUrl": "http://localhost:{api_port}",
+    "baseUrl": "http://localhost:{frontend_port}",
+    "sourcePath": "relative/path/to/service/dir",
+    "auth": null
+  }
+]
+```
+
+Service names are derived from the docker-compose file's parent directory name or the docker-compose service name (prefer directory name for clarity). If a service has no frontend, omit `baseUrl`.
+
+### Single-Service Fallback
+
+If only one API is detected (or zero), treat this as a single-service project. Set `services` to an empty array and proceed with the existing single-service logic (Sections 3-8).
+
+### Multi-Service Processing
+
+If `services` is a non-empty array (2+ entries), process each service independently:
+
+1. For each service, set its `sourcePath` as the search scope for Sections 3-8 (Route Extraction, Endpoint Extraction, Schema Extraction, etc.). Only search for files within that service's directory tree.
+
+2. Tag every route with `"service": "{service.name}"` and every endpoint with `"service": "{service.name}"`.
+
+3. Each service may have its own auth configuration (different login endpoints, different credentials). If not explicitly provided, inherit from the top-level auth configuration.
+
+4. Store per-service `baseUrl` and `apiBaseUrl` values — these override the top-level `app.baseUrl` and `app.apiBaseUrl` for that service.
+
+After processing all services, the manifest will contain routes and endpoints from ALL services, each tagged with their service name.
+
+---
+
 ## Section 3: Route Extraction
 
 This section covers Vue 3 router parsing (v1 target). If `frontendFramework` is not `"vue"`, skip this section and set `routes` to an empty array `[]`.
@@ -210,9 +265,12 @@ Each route entry:
   "riskLevel": "safe",
   "riskScore": 0,
   "params": null,
-  "description": null
+  "description": null,
+  "service": null
 }
 ```
+
+The `service` field is `null` in single-service mode. In multi-service mode, it contains the service name (e.g., `"internal-archive"`, `"public-portal"`).
 
 Store all routes in an array called `routes`.
 
@@ -296,9 +354,12 @@ Each endpoint entry:
   "description": "List users",
   "sideEffects": [],
   "requiresConfirm": false,
-  "params": null
+  "params": null,
+  "service": null
 }
 ```
+
+The `service` field is `null` in single-service mode. In multi-service mode, it contains the service name.
 
 Store all endpoints in an array called `endpoints`.
 
@@ -572,6 +633,7 @@ Assemble the complete manifest JSON object:
       "<role>": { "email": "...", "password": "..." }
     }
   },
+  "services": [],
   "routes": [ <all route entries> ],
   "endpoints": [ <all endpoint entries> ],
   "crudFlows": [ <all CRUD flow entries> ],
@@ -583,6 +645,17 @@ Assemble the complete manifest JSON object:
     "alwaysAllow": []
   }
 }
+```
+
+**Multi-service manifest additions:**
+
+When `services` is non-empty (multi-service mode), the manifest includes:
+
+- `"services"`: Array of service definitions with `name`, `apiBaseUrl`, `baseUrl` (optional), `sourcePath`, and `auth` (optional override).
+- Each entry in `routes` and `endpoints` has a `"service": "service-name"` field.
+- The top-level `app.baseUrl` and `app.apiBaseUrl` reflect the first service's values (for backward compatibility), but sweepers should use per-service URLs.
+
+When `services` is empty (single-service mode), routes and endpoints do NOT have a `service` field. This preserves full backward compatibility.
 ```
 
 ### Generate Timestamp
@@ -639,7 +712,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.2.2
+- **Name**: Manifest Generator v1.3.0
 - **Specialty**: Codebase analysis for QA manifest generation (Vue 3 routes, FastAPI endpoints, Pydantic schemas, risk scoring)
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus
