@@ -2,6 +2,24 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.7.0] - 2026-03-24
+
+### Added
+- **Performance Scoring Dashboard** (`--dashboard`) — composite health score (0-100) with weighted category breakdowns (API health, RBAC, schema, layout, i18n, a11y). Grade A-F. Always computed, `--dashboard` shows visual bar chart.
+- **CI/CD Integration Mode** (`--ci`) — non-interactive mode with JSON stdout, exit codes (0=clean, 1=critical, 2=errors), no screenshots, blocked high/critical risk levels
+- **Incremental Sweep** (`--changed-only`) — uses `git diff` against previous sweep's commit SHA to only test changed endpoints/routes. 10x faster for large apps.
+- **Visual Diff** — upgraded `diff` subcommand with tree-style endpoint comparison showing +NEW/-REMOVED/~CHANGED with risk and RBAC changes
+- **Auto-Fix Agent upgrade** — `fix` now shows diff previews, applies patches with confirmation, supports batch "all" mode. Added i18n key insertion, RBAC middleware injection, schema field addition.
+- **Regression Guard** (`fix --verify`) — after applying fixes, auto-re-sweeps affected endpoints to verify fixes worked. Offers to revert regressions.
+- **Export Collections** (`export --format postman|insomnia|bruno`) — generates API collections from manifest with auth config, sample bodies, resource grouping
+- **Interactive Config** (`config`) — settings editor for risk policy, breakpoints, browser, auth, services with validation
+- **Parallel Manifest Generation** — dispatches 4 sub-agents (routes, endpoints, schemas, config) in parallel for faster manifest creation on large projects
+- **WebSocket Endpoint Detection** — detects WS endpoints across all frameworks, tagged with `protocol: "websocket"` and `sweepable: false`
+- **API Versioning Analysis** — detects URL/header versioning, flags deprecated endpoints still in use, version gaps
+- **Database Migration Drift Detection** — compares migrations against ORM models for Alembic, Django, Prisma, Laravel, Diesel. Flags missing migrations and orphaned columns.
+- **Rate Limiting Detection** — detects rate limit libraries, maps protected vs unprotected endpoints, flags public endpoints without limits
+- **Security Headers Audit** — checks HSTS, CSP, X-Content-Type-Options, X-Frame-Options, CORS wildcards, cookie flags (HttpOnly, Secure, SameSite), server info disclosure
+
 ## [1.6.1] - 2026-03-24
 
 ### Changed

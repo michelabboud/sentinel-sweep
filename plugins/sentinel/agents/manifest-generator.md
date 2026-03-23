@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.6.1
+version: 1.7.0
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -1554,6 +1554,79 @@ If no dead code is detected, set `deadCode` to `null`. This analysis is best-eff
 
 ---
 
+## Section 6.8: WebSocket Endpoint Detection
+
+Detect WebSocket endpoints and tag them in the manifest. WebSocket endpoints are not swept but documented for awareness.
+
+### Detection Patterns
+
+| Framework | Pattern |
+|-----------|---------|
+| Express/Koa | `require('ws')`, `require('socket.io')`, `new WebSocket.Server()`, `io.on('connection')` |
+| FastAPI | `@app.websocket("/ws")`, `@router.websocket(...)` |
+| NestJS | `@WebSocketGateway()`, `@SubscribeMessage()` |
+| Django | `channels`, `AsyncWebsocketConsumer` |
+| Actix-web | `actix_web_actors::ws`, `web::get().to(ws_handler)` |
+| Axum | `axum::extract::ws::WebSocketUpgrade` |
+| Gin/Echo/Chi | `gorilla/websocket`, `nhooyr.io/websocket` |
+| Hono | `upgradeWebSocket()` |
+| Laravel | `laravel-websockets`, `broadcasting` |
+
+Tag WebSocket endpoints with `"protocol": "websocket"` and `"sweepable": false` in the manifest.
+
+---
+
+## Section 6.9: API Versioning Analysis
+
+Detect API versioning strategy and flag inconsistencies.
+
+1. Scan endpoint paths for `/api/v1/`, `/api/v2/`, etc. Group by version prefix.
+2. Check for header-based versioning (`Accept-Version`, `X-API-Version`).
+3. Flag: v1 endpoints still called from frontend when v2 exists, endpoints not migrated to latest version.
+
+Add `apiVersioning` field to manifest: `{ strategy, versions, v1Only, deprecated }`. Set to `null` if single version.
+
+---
+
+## Section 6.10: Database Migration Drift Detection
+
+Compare migration files against ORM models to detect drift.
+
+| ORM | Migrations | Models | Comparison |
+|-----|-----------|--------|------------|
+| SQLAlchemy | `alembic/versions/*.py` | `models/*.py` Column defs | `op.add_column` vs model fields |
+| Django | `migrations/*.py` | `models.py` field defs | Migration chain final state vs model |
+| Prisma | `prisma/migrations/**/*.sql` | `schema.prisma` model defs | SQL columns vs schema fields |
+| Laravel | `database/migrations/*.php` | `app/Models/*.php` | `Schema::create` columns vs `$fillable`/`$casts` |
+| Diesel | `migrations/**/*.sql` + `schema.rs` | Model structs | `schema.rs` tables vs struct fields |
+
+Flag **missing migrations** (field in model, no column in migrations) and **orphaned columns** (column in migration, not in model).
+
+Add `migrationDrift` field to manifest. Set to `null` if no drift detected.
+
+---
+
+## Section 6.11: Rate Limiting Detection
+
+Detect rate limiting configuration.
+
+| Library | Pattern |
+|---------|---------|
+| `express-rate-limit` | `rateLimit({ windowMs, max })` |
+| `@nestjs/throttler` | `@Throttle()`, `ThrottlerModule` |
+| `slowapi` | `@limiter.limit("5/minute")` |
+| `flask-limiter` | `@limiter.limit("5 per minute")` |
+| Nginx/Caddy | `limit_req_zone`, `rate_limit` directives |
+| `actix-web` | `Governor` middleware |
+| `tower` (Axum) | `RateLimitLayer` |
+| `gin` | `limiter.Limit()` middleware |
+
+Determine if rate limiting is global or per-route. Flag public endpoints without rate limiting.
+
+Add `rateLimiting` field to manifest. Set to `null` if no rate limiting detected.
+
+---
+
 ## Section 7: CRUD Flow Detection
 
 Automatically detect CRUD flows by analyzing the `endpoints` array.
@@ -1760,8 +1833,8 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.6.1
-- **Specialty**: Codebase analysis for QA manifest generation — 7 frontend parsers, 14 backend parsers (Python, JS/TS, Rust, Go, PHP + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, i18n/a11y/dead-code analysis, 5 auth methods, 9 ORM cascade detectors
+- **Name**: Manifest Generator v1.7.0
+- **Specialty**: Codebase analysis for QA manifest generation — 7 frontend, 14+ backend (5 languages + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, 8 analyzers (i18n, a11y, dead code, WebSocket, versioning, migration drift, rate limiting), 5 auth methods, 9 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus
 - **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

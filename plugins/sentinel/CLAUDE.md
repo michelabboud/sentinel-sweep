@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with the Sentinel plugin
 
 **Sentinel** is a Claude Code plugin that automates QA sweeps for web applications. It catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys.
 
-- **Version**: 1.6.1
+- **Version**: 1.7.0
 - **License**: Apache-2.0
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, PHP
 - **Frontend**: Vue 3, Nuxt 3, Next.js, React Router, SvelteKit, Angular, Remix
@@ -15,7 +15,8 @@ This file provides guidance to Claude Code when working with the Sentinel plugin
 - **Schemas**: Pydantic v2, Zod, TypeScript interfaces, Django serializers, Rust serde, Go structs, GraphQL types, Laravel FormRequest
 - **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key, OAuth PKCE
 - **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM, GORM, Eloquent
-- **Cross-cutting**: OpenAPI import + auto-gen, static i18n analysis, a11y analysis, dead endpoint detection
+- **Cross-cutting**: OpenAPI import + auto-gen, i18n, a11y, dead endpoints, WebSocket detection, API versioning, migration drift, rate limiting, security headers
+- **Features**: Health score dashboard (--dashboard), CI mode (--ci), incremental sweep (--changed-only), visual diff, Postman/Insomnia/Bruno export, interactive config, auto-fix with regression guard, parallel manifest generation
 - **Browser automation**: Playwright MCP
 
 ## Architecture
@@ -187,7 +188,7 @@ The `plugins/sentinel/` directory must mirror the root-level files exactly. When
 The `VERSION` file is the single source of truth. Use the bump script:
 
 ```bash
-./scripts/bump-version.sh 1.6.1
+./scripts/bump-version.sh 1.7.0
 ```
 
 This updates VERSION, all JSON/MD files, and syncs the plugin mirror. Then add a CHANGELOG entry and run tests.

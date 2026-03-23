@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.6.1** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
+> **v1.7.0** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
 
 ---
 
@@ -499,6 +499,24 @@ After each sweep, you get a quick summary:
 | **Accessibility (a11y) analysis** | Detects missing alt text, form labels, keyboard handlers, heading hierarchy, button text; a11y score |
 | **Dead endpoint detection** | Cross-references frontend API calls with backend endpoints to find dead code and phantom references |
 | **OpenAPI auto-generation** | Extracts OpenAPI specs from code annotations (utoipa, swagger-jsdoc, drf-spectacular, swag, @hono/zod-openapi) |
+| **WebSocket detection** | Detects WS endpoints across all frameworks, tags as `protocol: websocket`, documents but doesn't sweep |
+| **API versioning analysis** | Detects URL/header versioning strategy, flags deprecated endpoints still in use, version gaps |
+| **Migration drift detection** | Compares ORM models against migrations for Alembic, Django, Prisma, Laravel, Diesel — flags missing migrations and orphaned columns |
+| **Rate limiting detection** | Maps protected vs unprotected endpoints, flags public endpoints without rate limits |
+| **Security headers audit** | Checks HSTS, CSP, X-Content-Type-Options, CORS wildcards, cookie flags, server info disclosure |
+
+### Platform Features
+
+| Feature | Description |
+|---------|-------------|
+| **Health score dashboard** | Composite 0-100 score with A-F grade and category breakdowns (API, RBAC, schema, layout, i18n, a11y) |
+| **CI/CD mode** (`--ci`) | Non-interactive JSON output, exit codes (0/1/2), blocked destructive ops |
+| **Incremental sweep** (`--changed-only`) | Only sweeps endpoints whose source files changed since last run via git diff |
+| **Visual diff** | Tree-style diff showing +NEW/-REMOVED/~CHANGED endpoints with risk and RBAC changes |
+| **Auto-fix + regression guard** | Applies fixes with diff preview, re-sweeps to verify, offers to revert regressions |
+| **Collection export** | Generates Postman, Insomnia, or Bruno collections from manifest |
+| **Interactive config** | Settings editor for risk policy, breakpoints, browser, auth, services |
+| **Parallel manifest gen** | Dispatches 4 sub-agents for routes, endpoints, schemas, config in parallel |
 
 ### Browser Automation
 
@@ -506,10 +524,10 @@ Playwright MCP (Chromium, Firefox, WebKit)
 
 ### Planned
 
-- WebSocket endpoint detection
 - CSS/Tailwind dead class analysis
-- Database migration drift detection
-- API versioning analysis
+- Database query N+1 detection
+- API response time percentile tracking
+- Multi-language i18n completeness matrix
 
 ---
 

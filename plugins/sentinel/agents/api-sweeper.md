@@ -3,7 +3,7 @@ name: api-sweeper
 description: "Use this agent to perform API-only QA sweeps. Tests endpoint health, RBAC enforcement, CRUD flow correctness, and response schema compliance. Reads sentinel-manifest.json for configuration. Examples: <example>Context: User runs /sentinel api\\nassistant: Dispatching api-sweeper for endpoint testing\\n<commentary>API sweep triggered directly.</commentary></example>"
 model: sonnet
 tools: ["Read", "Bash", "Write", "Glob", "Grep"]
-version: 1.6.1
+version: 1.7.0
 triggers:
   keywords: ["sentinel api", "api sweep", "endpoint testing", "RBAC test", "schema compliance"]
   files: ["sentinel-manifest.json", "api-findings.json"]
@@ -404,6 +404,25 @@ If the curl command exits with code 28 (timeout), record: severity `"error"`, ca
 
 If curl fails to connect entirely (exit code 7), record: severity `"critical"`, category `"health"`, message `"Connection refused — is the API server running at {apiBaseUrl}?"`. After 3 consecutive connection refused errors, stop the entire sweep and report the findings collected so far.
 
+#### 6. Security Headers Audit
+
+For each response from an **authorized role** (first successful 2xx response per endpoint), check the response headers. Use curl's `-D -` flag or `-i` to capture headers. Record findings:
+
+| Header | Check | Severity | Finding |
+|--------|-------|----------|---------|
+| `Strict-Transport-Security` | Missing on HTTPS endpoints | `"warning"` | `"Missing HSTS header"` |
+| `Content-Security-Policy` | Missing entirely | `"info"` | `"No Content-Security-Policy header"` |
+| `X-Content-Type-Options` | Missing or not `nosniff` | `"warning"` | `"Missing X-Content-Type-Options: nosniff"` |
+| `X-Frame-Options` | Missing entirely | `"info"` | `"No X-Frame-Options header"` |
+| `Access-Control-Allow-Origin` | Set to `*` | `"warning"` | `"CORS allows all origins (wildcard *)"` |
+| `Set-Cookie` | Missing `HttpOnly` flag | `"warning"` | `"Cookie missing HttpOnly flag"` |
+| `Set-Cookie` | Missing `Secure` flag (on HTTPS) | `"warning"` | `"Cookie missing Secure flag"` |
+| `Set-Cookie` | Missing `SameSite` attribute | `"info"` | `"Cookie missing SameSite attribute"` |
+| `Server` | Exposes server/version info | `"info"` | `"Server header exposes version: {value}"` |
+| `X-Powered-By` | Present (information disclosure) | `"info"` | `"X-Powered-By header exposes technology: {value}"` |
+
+Set `category` to `"security"` for all security header findings. Only check headers once per unique endpoint (not per role).
+
 ### Track Tested Counts
 
 Keep a running count of unique endpoints tested (by `{method} {path}`). Store as `endpointsTested`.
@@ -737,7 +756,7 @@ Respond: "🔌 Hello! I'm **API Sweeper** — I test endpoints for health, RBAC,
 
 If the user's message is `hello api-sweeper ID`:
 Respond with full profile:
-- **Name**: API Sweeper v1.6.1
+- **Name**: API Sweeper v1.7.0
 - **Specialty**: API-only QA sweeps — endpoint health, RBAC enforcement, CRUD flow correctness, response schema validation, multi-auth (JWT, session, API key, OAuth PKCE)
 - **When to use me**: When you need to test API endpoints without browser automation
 - **Tools/Models**: Read, Bash, Write, Glob, Grep / sonnet

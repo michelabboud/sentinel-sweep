@@ -1,6 +1,6 @@
 ---
 name: run
-version: 1.6.1
+version: 1.7.0
 description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:sentinel-setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
 argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
@@ -19,20 +19,25 @@ You are the Sentinel QA orchestrator. Your job is to parse the user's arguments,
 Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
-- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `hello`.
-- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`, `--risk-level`, `--safe-only`.
+- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `export`, `config`, `hello`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--ci`, `--changed-only`, `--dashboard`, `--format`, `--verify`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
+- Set `ciMode = true` if `--ci` appears, otherwise `false`. CI mode disables all interactive prompts, screenshots, and uses JSON stdout.
+- Set `changedOnly = true` if `--changed-only` appears, otherwise `false`. Only sweep endpoints/routes whose source files changed since last run.
+- Set `dashboardMode = true` if `--dashboard` appears, otherwise `false`.
 - If `--severity` appears, take the next word as the severity filter value. Valid values: `critical`, `error`, `warning`, `info`. Store as `severityFilter`. If not present, set `severityFilter = null`.
 - Set `reuseManifest = true` if `--reuse-manifest` appears, otherwise `false`.
 - If `--risk-level` appears, take the next word as the risk level override. Valid values: `safe`, `medium`, `high`, `critical`. Store as `riskLevelOverride`. If not present, set `riskLevelOverride = null`.
 - Set `safeOnly = true` if `--safe-only` appears, otherwise `false`. This is a shorthand for `--risk-level safe`.
+- If `--format` appears, take the next word as the export format. Valid values: `postman`, `insomnia`, `bruno`. Store as `exportFormat`.
+- Set `verifyFixes = true` if `--verify` appears (used with `fix` subcommand), otherwise `false`.
 
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.6.1 — Automated QA Sweep for Web Applications
+Sentinel v1.7.0 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -52,12 +57,16 @@ Sweep Commands:
 
 Analysis & Reporting:
   report      View the most recent sweep report (markdown format)
+  report --dashboard  Show project health score (0-100) with category breakdowns
   trends      Show pass-rate and finding trends across recent runs
-  diff        Compare two runs side-by-side — shows new, fixed, and regressed findings
+  diff        Compare two runs side-by-side — visual tree diff with +NEW/-REMOVED/~CHANGED
   manifest    Generate and inspect the manifest without sweeping
+  export      Export manifest as Postman/Insomnia/Bruno collection (--format postman|insomnia|bruno)
 
 Actions:
-  fix         Auto-suggest code patches for common findings (missing i18n, RBAC, schemas)
+  fix         Auto-fix common findings with confirmation — RBAC, i18n, alt text, schemas
+  fix --verify  Apply fixes then auto-re-sweep to verify they worked
+  config      Interactive settings editor — frameworks, breakpoints, auth, risk policy
   clean       Remove old sweep runs, keeping the N most recent (default: 5)
 
 Safety & Risk Control:
@@ -74,31 +83,45 @@ Safety & Risk Control:
 
   The active risk level is always shown in the sweep report header.
 
+CI/CD:
+  --ci               Non-interactive mode for CI pipelines — no prompts, JSON stdout,
+                     exit code 0 (clean), 1 (criticals), 2 (errors found)
+  --changed-only     Only sweep endpoints/routes whose source files changed since last run
+                     Uses git diff against the commit SHA from the previous sweep
+
 Other Flags:
   --dry-run          Generate manifest and show test plan without executing sweeps
   --reuse-manifest   Skip manifest generation, reuse the manifest from the latest run
                      Useful when re-running after fixing issues — saves time.
                      Also prompted interactively when a recent manifest is detected.
+  --dashboard        Show project health score with category breakdowns (use with report)
   --list             List all previous sweep runs (use with report subcommand)
   --severity         Filter report output by minimum severity (critical, error, warning, info)
+  --format FMT       Export format: postman, insomnia, bruno (use with export subcommand)
+  --verify           After applying fixes, auto-re-sweep to verify (use with fix subcommand)
 
 Examples:
-  /sentinel:run setup                    # First-time check
-  /sentinel:run sweep                    # Full QA sweep (safe + medium actions)
-  /sentinel:run sweep --safe-only        # Read-only sweep — nothing gets modified
-  /sentinel:run sweep --risk-level high  # Also test DELETE endpoints (no approval needed)
-  /sentinel:run sweep --sandbox          # Test everything, with per-action approval
-  /sentinel:run api --dry-run            # Preview what would be tested
-  /sentinel:run api --reuse-manifest     # Re-run API checks without regenerating manifest
-  /sentinel:run report --severity error  # Show only errors and critical issues
-  /sentinel:run diff                     # Compare latest run vs previous
-  /sentinel:run trends                   # View pass-rate trend across runs
-  /sentinel:run clean 3                  # Keep only the 3 most recent runs
+  /sentinel:run setup                         # First-time check
+  /sentinel:run sweep                         # Full QA sweep (safe + medium actions)
+  /sentinel:run sweep --safe-only             # Read-only sweep — nothing gets modified
+  /sentinel:run sweep --risk-level high       # Also test DELETE endpoints
+  /sentinel:run sweep --sandbox               # Test everything, with per-action approval
+  /sentinel:run sweep --changed-only          # Only sweep files changed since last run
+  /sentinel:run api --dry-run                 # Preview what would be tested
+  /sentinel:run api --ci                      # CI mode — JSON output, exit codes
+  /sentinel:run report --dashboard            # Project health score (0-100)
+  /sentinel:run report --severity error       # Show only errors and critical issues
+  /sentinel:run diff                          # Visual diff: latest vs previous run
+  /sentinel:run trends                        # Pass-rate trend across runs
+  /sentinel:run fix --verify                  # Apply fixes then re-sweep to verify
+  /sentinel:run export --format postman       # Export as Postman collection
+  /sentinel:run config                        # Interactive settings editor
+  /sentinel:run clean 3                       # Keep only the 3 most recent runs
 
 Tip: Start with '/sentinel:run api --safe-only' for a zero-risk health check,
      then '/sentinel:run api' for standard coverage (safe + medium), then
-     '/sentinel:run sweep' for full browser + API. Use '--sandbox' only when
-     you need to test destructive operations on a dev server.
+     '/sentinel:run sweep' for full browser + API. Use '--ci' in pipelines
+     and '--changed-only' for fast incremental checks.
 ```
 
 ---
@@ -219,9 +242,68 @@ To run a safe sweep instead: /sentinel:run sweep --safe-only
 To run with medium risk (no deletes): /sentinel:run sweep
 ```
 
-**This warning cannot be skipped, suppressed, or auto-confirmed.** It applies to both `api` and `sweep` subcommands.
+**This warning cannot be skipped, suppressed, or auto-confirmed.** It applies to both `api` and `sweep` subcommands. In `--ci` mode, high/critical risk levels are **blocked entirely** — print `"CI mode does not allow high/critical risk levels. Use --safe-only or --risk-level medium."` and exit with code 2.
 
 Store the final effective risk level as `effectiveRiskLevel = settings.riskPolicy.maxRiskLevel` for display in the report.
+
+---
+
+## Step 2a.1: CI Mode Behavior
+
+If `ciMode` is `true`, apply these global overrides for the entire session:
+
+1. **No interactive prompts** — all prompts that wait for user input are auto-resolved with defaults:
+   - Risk level prompt → use `"medium"` (or the `--risk-level` flag if provided, but high/critical are blocked).
+   - Manifest reuse prompt → generate a new manifest (never prompt).
+   - All confirmation prompts → auto-skip (no destructive actions in CI).
+2. **No screenshots** — set `settings.screenshotOnError = false`.
+3. **JSON stdout** — after the sweep completes, output a single JSON object to stdout (in addition to the normal report):
+   ```json
+   {
+     "version": "1.7.0",
+     "runId": "{RUN_ID}",
+     "mode": "{mode}",
+     "healthScore": {healthScore},
+     "findings": { "critical": N, "error": N, "warning": N, "info": N },
+     "passRate": N.N,
+     "duration": "Nm Ns",
+     "exitCode": 0
+   }
+   ```
+4. **Exit codes** — after the JSON output, the sweep is considered complete:
+   - Exit code `0`: No critical or error findings.
+   - Exit code `1`: At least one critical finding.
+   - Exit code `2`: No critical findings but at least one error finding.
+   - Print the exit code recommendation: `"CI exit code: {code}"` (the actual exit is handled by the Claude Code runtime, not the skill).
+
+---
+
+## Step 2a.2: Incremental Sweep (--changed-only)
+
+If `changedOnly` is `true`, determine which endpoints and routes to test based on changed files:
+
+1. **Get the previous commit SHA**: Read `{settings.reportDir}/sweep-history.json`. Extract the `commitSha` from the most recent entry. If no history exists, fall back to a full sweep and print: `"No previous sweep found — running full sweep."`.
+
+2. **Find changed files**: Use the Bash tool:
+   ```bash
+   git diff --name-only {previousCommitSha}..HEAD
+   ```
+   Store the list of changed file paths.
+
+3. **Map files to endpoints/routes**: After manifest generation, cross-reference each changed file path against:
+   - Endpoint `fileRef` fields in the manifest — if the changed file matches, include that endpoint.
+   - Route `view` or component file paths — if the changed file matches, include that route.
+   - Schema files — if a schema file changed, include ALL endpoints that reference that schema.
+   - Auth/middleware files — if changed, include ALL endpoints (auth changes affect everything).
+
+4. **Filter the manifest**: Create a filtered manifest with only the affected endpoints and routes. Pass this filtered manifest to the sweeper agents instead of the full manifest.
+
+5. **Record commit SHA**: After the sweep, store the current commit SHA in `sweep-history.json`:
+   ```bash
+   git rev-parse HEAD
+   ```
+
+If `changedOnly` is `false`, skip this section entirely and use the full manifest.
 
 ---
 
@@ -284,7 +366,7 @@ Look for the most recent manifest by checking `{settings.reportDir}/latest/senti
 ```bash
 cp {settings.reportDir}/latest/sentinel-manifest.json {runDir}/sentinel-manifest.json
 ```
-Print: `"Reusing manifest from latest run."` and skip to the dry-run check.
+print `"Reusing manifest from latest run."` and skip to the dry-run check.
 
 If the latest manifest does not exist, print a warning: `"No existing manifest found — generating a new one."` and proceed with manifest generation below.
 
@@ -307,7 +389,17 @@ Wait for the user's response:
 If no existing manifest is found, proceed directly with generation (no prompt).
 
 **Manifest generation (when needed):**
-Use the Agent tool to dispatch the manifest-generator agent with this prompt:
+
+For large projects, dispatch **parallel sub-agents** for faster manifest generation. Use the Agent tool to dispatch up to 4 agents in a single response message:
+
+- **Agent A (routes)**: `"Extract all frontend routes from the codebase. Write results as JSON to {runDir}/manifest-routes.json. Include path, view, requiredRole, params for each route."`
+- **Agent B (endpoints)**: `"Extract all backend API endpoints from the codebase. Write results as JSON to {runDir}/manifest-endpoints.json. Include method, path, requiredRole, responseSchema, params for each endpoint."`
+- **Agent C (schemas)**: `"Extract all schema definitions (Pydantic, Zod, TS interfaces, serde structs, GraphQL types, etc.) from the codebase. Write results as JSON to {runDir}/manifest-schemas.json."`
+- **Agent D (config+analysis)**: `"Detect app configuration (name, URLs, auth, services), i18n coverage, a11y issues, and dead endpoints. Write results as JSON to {runDir}/manifest-config.json."`
+
+After all 4 agents complete, dispatch a **merge agent**: `"Read {runDir}/manifest-routes.json, manifest-endpoints.json, manifest-schemas.json, and manifest-config.json. Merge into a single sentinel-manifest.json with risk scoring. Write to {runDir}/sentinel-manifest.json."`
+
+**Fallback**: If parallel dispatch is not supported or any sub-agent fails, fall back to a single manifest-generator dispatch:
 
 > Generate sentinel-manifest.json for the current project. Read the codebase, extract routes, endpoints, schemas, and auth config. Write the manifest to {runDir}/sentinel-manifest.json.
 
@@ -394,7 +486,7 @@ Look for the most recent manifest by checking `{settings.reportDir}/latest/senti
 ```bash
 cp {settings.reportDir}/latest/sentinel-manifest.json {runDir}/sentinel-manifest.json
 ```
-Print: `"Reusing manifest from latest run."` and skip to the dry-run check.
+print `"Reusing manifest from latest run."` and skip to the dry-run check.
 
 If the latest manifest does not exist, print a warning: `"No existing manifest found — generating a new one."` and proceed with manifest generation below.
 
@@ -664,34 +756,54 @@ Classify each finding into one of three buckets:
 - **New**: Absent in `olderFindings` but present in `newerFindings`. These are regressions or new issues.
 - **Persisted**: Present in both runs (same key). Note if severity changed.
 
-**Step diff-4: Print the diff report.**
+**Step diff-3.5: Compare manifests for structural changes.**
+
+Also load `sentinel-manifest.json` from both runs. Compare the endpoint and route lists structurally:
+
+- **Added endpoints**: Present in newer manifest but absent in older.
+- **Removed endpoints**: Present in older manifest but absent in newer.
+- **RBAC changes**: Same endpoint exists in both but `requiredRole` changed.
+- **Risk changes**: Same endpoint exists but `riskLevel` or `riskScore` changed.
+
+**Step diff-4: Print the visual diff report.**
 
 ```
 --- Sentinel Diff: {olderRun} → {newerRun} ---
 
+┌─ Endpoint Changes ─────────────────────────────────────────┐
+│                                                             │
+│  /api/v1/users         GET   [safe]     ✓ unchanged        │
+│  /api/v1/users         POST  [medium]   ✓ unchanged        │
+│+ /api/v1/users/export  GET   [high]     NEW endpoint       │
+│- /api/v1/legacy/data   GET   [safe]     REMOVED            │
+│~ /admin/settings       —     [safe]     RBAC: user → admin │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
   Fixed ({fixedCount}):
   {for each fixed finding:}
-    - [FIXED] [{severity}] {category}: {message}
-      {endpoint or route} ({role})
+    ✅ [{severity}] {category}: {message}
+       {endpoint or route} ({role})
 
   New ({newCount}):
   {for each new finding:}
-    - [NEW] [{severity}] {category}: {message}
-      {endpoint or route} ({role})
+    🔴 [{severity}] {category}: {message}
+       {endpoint or route} ({role})
 
   Persisted ({persistedCount}):
     {count} findings unchanged across both runs.
     {if any severity changed:}
     Severity changes:
-    - {endpoint}: {oldSeverity} → {newSeverity}
+    ⚠ {endpoint}: {oldSeverity} → {newSeverity}
 
   Summary:
     Older run: {olderPassRate}% pass rate ({olderTotal} findings)
     Newer run: {newerPassRate}% pass rate ({newerTotal} findings)
-    Net change: {delta with +/- prefix} findings
+    Health score: {olderScore}/100 → {newerScore}/100 ({delta with +/- prefix})
+    Net change: {findingDelta with +/- prefix} findings
 ```
 
-If there are no fixed and no new findings, print: `"No changes between runs."`.
+If there are no fixed, no new findings, and no structural changes, print: `"No changes between runs."`.
 
 ---
 
@@ -753,14 +865,58 @@ For each selected fix, use the appropriate tool:
 - **Schema fixes**: Read the schema file, add the missing field declaration.
 - **Other fixes**: Print the suggested fix as a code snippet for the user to apply manually.
 
+After applying each fix, use the appropriate tool (Edit for code changes, Write for new files like locale keys). Show a diff preview before applying:
+
+```
+Fix #{n}: {description}
+  File: {filePath}:{lineNumber}
+  Change:
+    - {old code line}
+    + {new code line}
+  Apply? [yes/no]:
+```
+
+Wait for confirmation before each fix. If the user types `"all"` at any fix prompt, apply all remaining fixes without further prompts.
+
 After applying fixes, print a summary:
 
 ```
 Applied {appliedCount} fixes:
   - {description of each fix applied}
 
-Re-run /sentinel:run api to verify the fixes resolved the issues.
+{if verifyFixes: "Running verification sweep..."}
+{else: "Run /sentinel:run fix --verify to auto-verify, or /sentinel:run api to re-check manually."}
 ```
+
+**Step fix-5: Regression Guard (--verify).**
+
+If `verifyFixes` is `true`, automatically re-sweep after applying fixes:
+
+1. Run `/sentinel:run api --safe-only --reuse-manifest --ci` targeting only the endpoints/routes that had fixed findings.
+2. Load the new findings and compare against the original findings.
+3. For each fix:
+   - If the finding is gone → `"VERIFIED: {description}"`.
+   - If the finding persists → `"UNRESOLVED: {description} — fix did not resolve the issue"`.
+   - If a new finding appeared on the same endpoint → `"REGRESSION: {description} — fix introduced a new issue"`.
+4. Print verification summary:
+
+```
+Verification Results:
+  Verified:   {verifiedCount} fixes confirmed working
+  Unresolved: {unresolvedCount} fixes did not resolve the issue
+  Regressions: {regressionCount} fixes introduced new issues
+
+{if unresolvedCount > 0: "Unresolved fixes may need manual investigation."}
+{if regressionCount > 0: "WARNING: Some fixes introduced regressions. Review the affected endpoints."}
+```
+
+If any regressions are detected, offer to revert the affected fixes:
+
+```
+Revert {regressionCount} regressed fixes? [yes/no]:
+```
+
+If confirmed, use the Edit tool to restore the original code (the pre-fix content was stored in Step fix-4).
 
 ---
 
@@ -810,7 +966,107 @@ rm -rf {settings.reportDir}/{runId}
 
 After removal, update `sweep-history.json` to remove entries for deleted runs. Read the file, filter the `runs` array to keep only entries whose `runId` matches a kept run, write back.
 
-Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
+print `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
+
+---
+
+### Subcommand: `export`
+
+Export the manifest as an API collection file for external tools.
+
+**Step export-1: Load manifest.**
+
+Read the latest manifest from `{settings.reportDir}/latest/sentinel-manifest.json`. If not found, try `sentinel-manifest.json` in the project root. If neither exists, print: `"No manifest found. Run /sentinel:run manifest first."` and stop.
+
+**Step export-2: Determine format.**
+
+Use `exportFormat` from the parsed flags. If not provided, prompt:
+
+```
+Export format:
+  [1] Postman Collection v2.1 (JSON)
+  [2] Insomnia v4 (YAML)
+  [3] Bruno (directory structure)
+
+Choose [1-3]:
+```
+
+**Step export-3: Generate collection.**
+
+For each endpoint in the manifest, create a request entry:
+
+- **Name**: `{method} {path}` (e.g., `GET /api/v1/users`)
+- **URL**: `{apiBaseUrl}{path}` with parameter placeholders
+- **Method**: From the endpoint
+- **Headers**: Based on `manifest.auth.method` — add `Authorization: Bearer {{token}}` for JWT, `x-api-key: {{api_key}}` for apikey
+- **Body**: For POST/PUT/PATCH, generate a sample body from `manifest.schemas[endpoint.responseSchema]` if available
+- **Group by**: Resource path (e.g., all `/users` endpoints in a "Users" folder)
+
+**Postman format**: Write `{runDir}/sentinel-collection.postman.json` following Postman Collection v2.1 schema. Include environment variables for `baseUrl`, `token`, per-role credentials.
+
+**Insomnia format**: Write `{runDir}/sentinel-collection.insomnia.yaml` with workspace, request groups, and requests.
+
+**Bruno format**: Create `{runDir}/bruno-collection/` directory with `bruno.json` config and one `.bru` file per endpoint organized in folders.
+
+print `"Exported {endpointCount} endpoints to {outputPath}"`.
+
+---
+
+### Subcommand: `config`
+
+Interactive settings editor for Sentinel configuration.
+
+**Step config-1: Load current settings.**
+
+Read `settings.json` from the plugin directory. Display current values:
+
+```
+Current Sentinel Configuration:
+
+  Risk Policy:
+    Max risk level: {maxRiskLevel}
+    Always skip: {alwaysSkip or "none"}
+    Always allow: {alwaysAllow or "none"}
+
+  Browser:
+    Headless: {headless}
+    Browser type: {browserType}
+    Breakpoints: {breakpoints}
+    Screenshot on error: {screenshotOnError}
+
+  Network:
+    Response timeout: {responseTimeout}ms
+    Report directory: {reportDir}
+
+  Auth:
+    Credentials source: {credentialsSource}
+
+  Services: {services.length or "single-service (auto-detect)"}
+
+What would you like to change?
+  [1] Risk policy
+  [2] Breakpoints
+  [3] Browser settings
+  [4] Network/timeout settings
+  [5] Auth credentials
+  [6] Services configuration
+  [7] Reset to defaults
+  [0] Exit
+
+Choose [0-7]:
+```
+
+**Step config-2: Handle selection.**
+
+For each option, present the relevant sub-settings and allow the user to modify them. After each change, write the updated `settings.json` back to the plugin directory.
+
+Validate all inputs:
+- Risk levels must be one of: `safe`, `medium`, `high`, `critical`
+- Breakpoints must be positive integers
+- Timeout must be a positive number
+- Browser type must be: `chromium`, `firefox`, `webkit`
+
+print `"Settings updated: {settingsPath}"` after each change.
 
 ---
 
@@ -819,7 +1075,7 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.6.1
+**Name**: Sentinel v1.7.0
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, i18n gaps, a11y issues, dead endpoints
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -843,14 +1099,15 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 **Schemas**: Pydantic v2, Zod, TS interfaces, Django serializers, Rust serde, Go structs, GraphQL types, Laravel FormRequest
 **Auth**: JWT, NextAuth, session/cookie, API key, OAuth PKCE
 **ORM cascade**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM, GORM, Eloquent
-**Cross-cutting**: i18n analysis, a11y analysis, dead endpoint detection
+**Cross-cutting**: i18n, a11y, dead endpoints, WebSocket, versioning, migration drift, rate limiting, security headers
+**Features**: Health score (--dashboard), CI mode (--ci), incremental (--changed-only), visual diff, auto-fix (--verify), export, config, parallel manifest
 **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0
 ```
 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.6.1. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.7.0. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---
@@ -916,6 +1173,50 @@ If `topIssues` is empty (no findings at all), replace the top issues block with:
 ```
   No issues found.
 ```
+
+### Step R-3.5: Compute Health Score
+
+Calculate a composite project health score (0-100) with weighted category breakdowns. This score is always computed and included in the report; `--dashboard` controls whether the detailed breakdown is shown in the terminal.
+
+**Category scores** (each is 0-100):
+
+| Category | Weight | Calculation |
+|----------|--------|-------------|
+| API Health | 25% | `100 - (healthFindings / endpointsTested * 100)` where healthFindings = findings with category `"health"` and severity `"critical"` or `"error"`. Floor at 0. If no endpoints tested, score = 100. |
+| RBAC Compliance | 25% | `100` if zero RBAC findings with severity `"critical"`. Subtract 25 per critical RBAC finding, 10 per error. Floor at 0. |
+| Schema Conformance | 15% | `100 - (schemaFindings / schemasChecked * 100)` where schemaFindings = findings with category `"schema"`. If no schemas checked, score = 100. |
+| Layout Quality | 15% | `100 - (layoutFindings / routesTested * 50)` where layoutFindings = findings with category `"layout"` severity `"error"` or `"warning"`. Floor at 0. If no routes tested, score = 100. |
+| i18n Coverage | 10% | Use the `i18n.coverage` value from the manifest (0.0-1.0) × 100. If no i18n data, score = 100. |
+| a11y Compliance | 10% | Use the `a11y.score` value from the manifest (0.0-1.0) × 100. If no a11y data, score = 100. |
+
+**Composite score**: `round(apiHealth * 0.25 + rbac * 0.25 + schema * 0.15 + layout * 0.15 + i18n * 0.10 + a11y * 0.10)`
+
+**Grade**: A (90-100), B (80-89), C (70-79), D (60-69), F (0-59)
+
+Store as `healthScore`, `healthGrade`, and `categoryScores` (object with all 6 scores).
+
+**If `dashboardMode` is `true` OR in `--ci` mode**, print the dashboard after the terminal summary:
+
+```
+╔══════════════════════════════════════════════════╗
+║           PROJECT HEALTH SCORE: {score}/100  {grade}           ║
+╠══════════════════════════════════════════════════╣
+║                                                  ║
+║  API Health        [{bar}] {apiHealth}/100       ║
+║  RBAC Compliance   [{bar}] {rbac}/100            ║
+║  Schema Conformance[{bar}] {schema}/100          ║
+║  Layout Quality    [{bar}] {layout}/100          ║
+║  i18n Coverage     [{bar}] {i18n}/100            ║
+║  a11y Compliance   [{bar}] {a11y}/100            ║
+║                                                  ║
+╚══════════════════════════════════════════════════╝
+```
+
+Where `{bar}` is a visual bar using `█` characters (10 chars wide, proportional to score/100).
+
+The health score is always written to the report markdown and sweep-history.json regardless of `--dashboard`.
+
+---
 
 ### Step R-4: Write markdown report
 
