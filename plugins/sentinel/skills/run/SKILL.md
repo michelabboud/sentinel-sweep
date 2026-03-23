@@ -1,6 +1,6 @@
 ---
 name: run
-version: 1.3.0
+version: 1.4.0
 description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:sentinel-setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
 argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
@@ -32,7 +32,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.3.0 — Automated QA Sweep for Web Applications
+Sentinel v1.4.0 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -777,7 +777,7 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.3.0
+**Name**: Sentinel v1.4.0
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -794,14 +794,14 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
   - `hello ID` — This full profile
 **Flags**: `--sandbox`, `--dry-run`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--list`, `--severity`
 **Architecture**: Orchestrator + 3 agents (manifest-generator, api-sweeper, browser-sweeper) + setup skill
-**Framework support (v1)**: Vue 3 + FastAPI + Pydantic v2 + SQLAlchemy + JWT
+**Framework support**: Vue 3, Nuxt 3, Next.js, React, SvelteKit | FastAPI, Express, Django REST, NestJS | Pydantic, Zod, TS interfaces
 **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0
 ```
 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.3.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.4.0. Automated QA sweep — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---

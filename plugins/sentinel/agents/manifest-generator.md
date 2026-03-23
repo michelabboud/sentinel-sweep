@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.3.0
+version: 1.4.0
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -26,25 +26,41 @@ Detect what frontend and backend frameworks the project uses.
 
 ### Frontend Detection
 
+Check in this order. Use the FIRST match:
+
 1. Use Glob to search for `**/router/index.js` and `**/router/index.ts`. If found, the frontend framework is `"vue"`.
-2. Use Glob to search for `**/src/App.tsx` and `**/src/App.jsx`. If found, the frontend framework is likely `"react"`. Confirm by reading the file and checking for `react-router` imports, or by checking `package.json`.
-3. Use Glob to search for `**/package.json` in the project root (not inside `node_modules`). Read the file. Check the `dependencies` and `devDependencies` objects:
+2. Use Glob for `**/pages/**/*.vue` (Nuxt-style). If found AND `package.json` has `nuxt` dependency → `"nuxt"`.
+3. Use Glob for `**/src/routes/**/+page.svelte`. If found → `"sveltekit"`.
+4. Use Glob for `**/app/**/page.tsx` or `**/app/**/page.jsx` (Next.js App Router). If found AND `package.json` has `next` → `"nextjs"`.
+5. Use Glob for `**/src/App.tsx` and `**/src/App.jsx`. If found, read `package.json` to confirm:
+   - If `react-router-dom` or `@tanstack/react-router` in deps → `"react"`.
+6. Use Glob for `**/package.json` in the project root. Read the file. Check `dependencies` and `devDependencies`:
+   - Key `nuxt` present → `"nuxt"`
+   - Key `next` present → `"nextjs"`
    - Key `vue` present → `"vue"`
    - Key `react` present → `"react"`
-   - Key `svelte` present → `"svelte"`
+   - Key `svelte` or `@sveltejs/kit` present → `"sveltekit"`
    - Key `@angular/core` present → `"angular"`
-4. If no frontend framework is detected, set `app.framework.frontend` to `"none"`.
+7. If no frontend framework is detected, set `app.framework.frontend` to `"none"`.
 
 ### Backend Detection
 
-1. Use Glob to search for `**/endpoints/*.py` and `**/api/**/endpoints/*.py`. If Python endpoint files are found, read one of them. If it contains `@router.get(`, `@router.post(`, or similar FastAPI decorators, the backend is `"fastapi"`.
-2. Use Glob to search for `**/routes/*.js` or `**/routes/*.ts`. If found, read one file. If it contains `express.Router()` or `router.get(`, the backend is `"express"`.
-3. Use Glob to search for `**/urls.py`. If found and it contains `urlpatterns`, the backend is `"django"`.
-4. Use Glob to search for `requirements.txt` or `pyproject.toml` in the project root. Read the file. Check for:
+Check in this order. Use the FIRST match:
+
+1. Use Glob for `**/endpoints/*.py` and `**/api/**/endpoints/*.py`. If Python endpoint files contain `@router.get(`, `@router.post(`, or similar FastAPI decorators → `"fastapi"`.
+2. Use Glob for `**/*.controller.ts`. If found and files contain `@Controller(`, `@Get(`, `@Post(` decorators → `"nestjs"`.
+3. Use Glob for `**/routes/*.js` or `**/routes/*.ts`. If found and files contain `express.Router()` or `router.get(` → `"express"`.
+4. Use Glob for `**/urls.py`. If found and it contains `urlpatterns` → `"django"`.
+5. Use Glob for `requirements.txt` or `pyproject.toml`. Check for:
    - `fastapi` → `"fastapi"`
-   - `django` → `"django"`
+   - `django` or `djangorestframework` → `"django"`
    - `flask` → `"flask"`
-5. If no backend framework is detected, set `app.framework.backend` to `"none"`.
+6. Use Glob for `package.json`. Check for:
+   - `@nestjs/core` → `"nestjs"`
+   - `express` → `"express"`
+   - `hono` → `"hono"`
+   - `koa` → `"koa"`
+7. If no backend framework is detected, set `app.framework.backend` to `"none"`.
 
 Store the detected values as `frontendFramework` and `backendFramework`.
 
@@ -84,16 +100,26 @@ If no URL is found for either, use these defaults:
 
 #### Auth Method
 
-Determine authentication method:
+Determine authentication method by checking for evidence in this order:
 
-1. Use Grep to search Python files for imports of `jwt`, `python-jose`, `PyJWT`, `jose`, or calls to `jwt.encode`, `jwt.decode`. Also check `requirements.txt` or `pyproject.toml` for `python-jose`, `PyJWT`, `pyjwt`. If found → `"jwt"`.
-2. Use Grep to search for `session`, `cookie`, `csrf_token` patterns in auth-related files. If found without JWT evidence → `"session"`.
-3. If neither is found → `"none"`.
+1. **JWT**: Use Grep to search Python files for `jwt`, `python-jose`, `PyJWT`, `jose`, `jwt.encode`, `jwt.decode`. Check `requirements.txt`/`pyproject.toml` for `python-jose`, `PyJWT`. Check JS/TS files for `jsonwebtoken`, `jose`, `@auth/core`. If found → `"jwt"`.
+2. **NextAuth / Auth.js**: Use Glob for `**/auth.ts`, `**/auth.js`, `**/**/[...nextauth]/route.ts`, `**/auth.config.ts`. If found and contains `NextAuth` or `authConfig` → `"nextauth"`. Check `package.json` for `next-auth` or `@auth/core`.
+3. **Session/cookie**: Use Grep to search for `express-session`, `cookie-session`, `connect-session`, `SESSION_SECRET`, `req.session`, `ctx.session`, `passport.session()`. Check Python files for `SessionMiddleware`, `session_cookie`. If found → `"session"`.
+4. **API key**: Use Grep for `x-api-key`, `apiKey`, `API_KEY` header patterns in middleware/auth files. If found → `"apikey"`.
+5. If no auth method detected → `"none"`.
 
-**Important v1 limitation:** If the detected auth method is NOT `"jwt"`, print a warning to the user:
-> "⚠ Warning: Auth method detected as '{method}'. Sentinel v1 supports JWT authentication only. Session cookies, CSRF tokens, and OAuth browser flows are not supported. API sweeps requiring authentication may not work correctly."
+**Auth method handling for sweepers:**
 
-Continue with manifest generation regardless — the manifest is still useful for unauthenticated route/endpoint discovery.
+| Method | API Sweeper | Browser Sweeper |
+|--------|-------------|-----------------|
+| `"jwt"` | Login → store token → send `Authorization: Bearer` header | Login via API → store token → inject via `localStorage` or cookie |
+| `"nextauth"` | Login → extract session cookie → send `Cookie` header | Navigate to sign-in page → fill form → session cookie auto-set |
+| `"session"` | Login → extract `Set-Cookie` → send `Cookie` header | Navigate to login page → fill form → session cookie auto-set |
+| `"apikey"` | Send `x-api-key` header (from manifest credentials) | Not applicable for browser |
+| `"none"` | No auth headers | No login required |
+
+Print a note for non-JWT auth:
+> "ℹ Auth method: '{method}'. Sentinel will use cookie/session-based auth flow for API and browser sweeps."
 
 #### Login Endpoint
 
@@ -195,37 +221,108 @@ After processing all services, the manifest will contain routes and endpoints fr
 
 ## Section 3: Route Extraction
 
-This section covers Vue 3 router parsing (v1 target). If `frontendFramework` is not `"vue"`, skip this section and set `routes` to an empty array `[]`.
+Based on `frontendFramework`, follow the matching subsection below. If the framework is `"none"`, skip this section and set `routes` to an empty array `[]`.
 
-### Find the Router File
+---
+
+### 3A: Vue 3 Router (`frontendFramework = "vue"`)
 
 Use Glob to search for `**/router/index.js` and `**/router/index.ts`. Read the first match.
 
-### Parse Routes
+The Vue 3 router file exports an array of route objects. For each route object:
 
-The Vue 3 router file exports an array of route objects. Each route object has this shape:
+1. **Extract `path`**: Convert Vue dynamic segments from `:param` to `{param}` notation. `/groups/:id/members` → `/groups/{id}/members`.
+2. **Extract `view`**: From the `component` property. Lazy imports like `() => import('../views/admin/UsersView.vue')` → `UsersView`.
+3. **Extract `requiredRole`**: From `meta.role`. If `meta.requiresAuth` is true but no `role` → `"user"`. If neither → `null`.
+4. **Handle nested routes (children)**: Prefix child paths with parent path. Inherit parent `meta` as defaults.
+5. **Handle redirects**: Skip routes with `redirect` and no `component`.
 
-```js
-{
-  path: '/some/path',
-  name: 'RouteName',
-  component: () => import('../views/SomeView.vue'),
-  meta: { requiresAuth: true, role: 'admin' },
-  children: [...]
-}
-```
+---
 
-For each route object in the file:
+### 3B: Nuxt 3 (`frontendFramework = "nuxt"`)
 
-1. **Extract `path`**: Read the `path` property. Convert Vue dynamic segments from `:param` notation to `{param}` notation. For example, `/groups/:id/members` becomes `/groups/{id}/members`.
+Nuxt uses file-system routing from the `pages/` directory.
 
-2. **Extract `view`**: Look at the `component` property. For lazy imports like `() => import('../views/admin/UsersView.vue')`, extract the filename without extension: `UsersView`. For direct component references like `component: UsersView`, use the component name directly.
+1. Use Glob to find all `**/pages/**/*.vue` files (excluding `node_modules`).
+2. For each file, convert the file path to a route path:
+   - `pages/index.vue` → `/`
+   - `pages/about.vue` → `/about`
+   - `pages/users/index.vue` → `/users`
+   - `pages/users/[id].vue` → `/users/{id}`
+   - `pages/admin/settings.vue` → `/admin/settings`
+   - `pages/[...slug].vue` → `/{slug}` (catch-all)
+   - Square bracket `[param]` → `{param}`
+3. **Extract `view`**: Use the filename without extension.
+4. **Extract `requiredRole`**: Read each `.vue` file. Look for:
+   - `definePageMeta({ middleware: ['auth'] })` → `"user"`
+   - `definePageMeta({ middleware: ['admin'] })` or `meta: { role: 'admin' }` → `"admin"`
+   - Nuxt middleware files in `middleware/auth.ts` — read them to understand role gating.
+   - If no auth middleware → `null`.
+5. **Extract layout**: Check for `definePageMeta({ layout: 'admin' })` — routes using admin layout likely require admin role.
 
-3. **Extract `requiredRole`**: Look at the `meta` object. If `meta.role` exists, use its value (e.g., `"admin"`, `"manager"`). If `meta.requiresAuth` is true but no `role` is specified, set to `"user"` (authenticated but no specific role). If neither exists, set to `null`.
+---
 
-4. **Handle nested routes (children)**: If a route has a `children` array, process each child route. Prefix the child's `path` with the parent's `path` (add a `/` separator if the child path doesn't start with `/`). Apply the parent's `meta` as defaults if the child doesn't override.
+### 3C: Next.js App Router (`frontendFramework = "nextjs"`)
 
-5. **Handle redirects**: If a route has `redirect` property and no `component`, skip it (don't include in the manifest).
+Next.js App Router uses file-system routing from the `app/` directory.
+
+1. Use Glob to find all `**/app/**/page.tsx`, `**/app/**/page.jsx`, `**/app/**/page.ts`, `**/app/**/page.js`.
+2. For each file, convert the directory path to a route path:
+   - `app/page.tsx` → `/`
+   - `app/about/page.tsx` → `/about`
+   - `app/users/page.tsx` → `/users`
+   - `app/users/[id]/page.tsx` → `/users/{id}`
+   - `app/admin/settings/page.tsx` → `/admin/settings`
+   - `app/(dashboard)/users/page.tsx` → `/users` (route groups in parens are stripped)
+   - `app/[...slug]/page.tsx` → `/{slug}` (catch-all)
+   - Square bracket `[param]` → `{param}`
+3. **Extract `view`**: Use the parent directory name (e.g., `users`, `settings`).
+4. **Extract `requiredRole`**: Look for adjacent `layout.tsx` files in the route segment or parent segments. Read them for:
+   - `getServerSession()` or `auth()` calls → `"user"` (authenticated)
+   - Middleware: read `middleware.ts` at root for `matcher` patterns and auth checks.
+   - Explicit role checks in the page or layout → extract role name.
+   - If no auth patterns → `null`.
+5. **Skip route groups**: Paths like `(marketing)` in parentheses are organizational — strip them from the URL.
+
+---
+
+### 3D: SvelteKit (`frontendFramework = "sveltekit"`)
+
+SvelteKit uses file-system routing from `src/routes/`.
+
+1. Use Glob to find all `**/src/routes/**/+page.svelte`.
+2. For each file, convert the directory path to a route path:
+   - `src/routes/+page.svelte` → `/`
+   - `src/routes/about/+page.svelte` → `/about`
+   - `src/routes/users/[id]/+page.svelte` → `/users/{id}`
+   - `src/routes/(app)/dashboard/+page.svelte` → `/dashboard` (group stripped)
+   - Square bracket `[param]` → `{param}`
+3. **Extract `view`**: Use the directory name.
+4. **Extract `requiredRole`**: Look for adjacent `+page.server.ts` or `+layout.server.ts` files. Read them for:
+   - `locals.user` checks or `redirect(303, '/login')` → `"user"`
+   - Role-based checks (e.g., `if (locals.user.role !== 'admin')`) → extract role.
+   - Also check `hooks.server.ts` for global auth middleware.
+   - If no auth patterns → `null`.
+
+---
+
+### 3E: React Router (`frontendFramework = "react"`)
+
+React Router uses code-based routing. Look for route definitions.
+
+1. Use Grep to search `.tsx`, `.jsx`, `.ts`, `.js` files for `createBrowserRouter`, `createRoutesFromElements`, `<Route`, `<Routes>`, or `useRoutes`.
+2. Read matching files. Parse route definitions:
+   - `createBrowserRouter([{ path: '/users', element: <Users /> }])` → extract `path` and component name.
+   - `<Route path="/users/:id" element={<UserDetail />} />` → path `/users/{id}`, view `UserDetail`.
+   - Nested `<Route>` elements: prefix child path with parent path.
+   - `<Route index element={<Home />} />` → inherits parent path.
+3. **Convert params**: React Router `:param` → `{param}`.
+4. **Extract `requiredRole`**: Look for:
+   - Wrapper components like `<ProtectedRoute>`, `<RequireAuth>`, `<AdminRoute>` → infer role from component name.
+   - `requiredRole` or `roles` props on wrapper elements.
+   - Auth context checks in route components.
+   - If no auth patterns → `null`.
+5. **Handle lazy routes**: `lazy: () => import('./pages/Users')` → extract view from import path.
 
 ### Generate Route Parameters
 
@@ -278,61 +375,131 @@ Store all routes in an array called `routes`.
 
 ## Section 4: Endpoint Extraction
 
-This section covers FastAPI endpoint parsing (v1 target). If `backendFramework` is not `"fastapi"`, skip this section and set `endpoints` to an empty array `[]`.
+Based on `backendFramework`, follow the matching subsection below. If the framework is `"none"`, skip this section and set `endpoints` to an empty array `[]`.
 
-### Find Endpoint Files
+For ALL backend parsers, extract these fields per endpoint: `method`, `path`, `requiredRole`, `responseSchema`, `requiresConfirm`, `description`, `sideEffects` (initially `[]`), `params`, `service`.
 
-Use Glob to search for `**/endpoints/*.py` and `**/api/**/endpoints/*.py`. Collect all matching file paths. Exclude `__init__.py` and `__pycache__` files.
+---
 
-### Determine the API Prefix
+### 4A: FastAPI (`backendFramework = "fastapi"`)
 
-Before parsing individual endpoint files, find the API version prefix:
+**Find files**: Use Glob for `**/endpoints/*.py` and `**/api/**/endpoints/*.py`. Exclude `__init__.py` and `__pycache__`.
 
-1. Use Glob to find `**/router.py` or `**/api/**/router.py` (the main router aggregation file). Read it.
-2. Look for the pattern where individual routers are included with a prefix, such as:
-   - `app.include_router(router, prefix="/api/v1")`
-   - `router.include_router(auth_router, prefix="/auth")`
-3. Build a prefix map: `{ "auth": "/api/v1/auth", "users": "/api/v1/users", ... }` by combining the global API prefix with each sub-router's prefix.
-4. If the router file defines prefixes via `APIRouter(prefix=...)` in each endpoint file, note those too.
+**Determine the API prefix**:
+1. Use Glob to find `**/router.py` or `**/api/**/router.py`. Read it.
+2. Build a prefix map from `app.include_router(router, prefix="/api/v1")` and `APIRouter(prefix=...)` patterns.
 
-### Parse Each Endpoint File
+**Parse each file**:
+1. Read the file. Find `APIRouter(prefix="...")` for the router prefix.
+2. Find decorators: `@router.get("...")`, `@router.post("...")`, `@router.put("...")`, `@router.patch("...")`, `@router.delete("...")`.
+3. For each decorator:
+   - **`method`**: From decorator name.
+   - **`path`**: API prefix + router prefix + decorator path. FastAPI already uses `{param}` notation.
+   - **`requiredRole`**: Scan function signature for `Depends(require_admin)` → `"admin"`, `Depends(require_manager_or_admin)` → `"manager"`, `Depends(get_current_user)` → `"user"`, none → `null`.
+   - **`responseSchema`**: From `response_model=SchemaName`. Handle `list[SchemaName]` — extract inner name.
+   - **`requiresConfirm`**: Look for `confirm: bool = Query(` parameter.
+   - **`description`**: From docstring, or generate from function name (`list_users` → `"List users"`).
 
-For each endpoint Python file:
+---
 
-1. **Read the file** using the Read tool.
+### 4B: Express.js (`backendFramework = "express"`)
 
-2. **Find the router prefix**: Look for `APIRouter(prefix="...")` at the top of the file. If not found, look up the prefix from the main router file's include statements (matched by filename or router variable name).
+**Find files**: Use Glob for `**/routes/*.js`, `**/routes/*.ts`, `**/router/*.js`, `**/router/*.ts`. Also check `**/app.js`, `**/app.ts`, `**/server.js`, `**/server.ts` for inline routes.
 
-3. **Find all endpoint decorators**: Search for these patterns:
-   - `@router.get("...")` or `@router.get("...",`
-   - `@router.post("...")` or `@router.post("...",`
-   - `@router.put("...")` or `@router.put("...",`
-   - `@router.patch("...")` or `@router.patch("...",`
-   - `@router.delete("...")` or `@router.delete("...",`
+**Parse each file**:
+1. Read the file. Look for `express.Router()` or `const router = Router()`.
+2. Find route definitions:
+   - `router.get('/users', ...)` or `router.get('/users/:id', ...)`
+   - `app.get('/api/users', ...)`
+   - `router.route('/users').get(...).post(...)`
+3. For each route:
+   - **`method`**: From the method call (`.get` → `"GET"`, `.post` → `"POST"`, etc.).
+   - **`path`**: Combine mount prefix + route path. Convert Express `:param` to `{param}`.
+   - **`requiredRole`**: Look at middleware arguments before the handler:
+     - `authenticate` or `requireAuth` middleware → `"user"`
+     - `requireRole('admin')` or `isAdmin` middleware → `"admin"`
+     - `authorize(['admin', 'manager'])` → `"manager"` (lowest listed role)
+     - No auth middleware → `null`.
+   - **`responseSchema`**: Express doesn't declare response schemas. Set to `null`. If the project uses a validation library (Joi, Zod, celebrate), note the schema name if referenced.
+   - **`description`**: From inline comments above the route, or generate from handler function name, or from the path pattern.
 
-4. **For each decorator found**, extract:
+**Determine mount prefix**: Look in the main app file for `app.use('/api/v1', router)` patterns.
 
-   - **`method`**: From the decorator name — `get` → `"GET"`, `post` → `"POST"`, `put` → `"PUT"`, `patch` → `"PATCH"`, `delete` → `"DELETE"`.
+---
 
-   - **`path`**: Combine the API prefix + router prefix + decorator path. For example, if the API prefix is `/api/v1`, router prefix is `/groups/{group_id}`, and decorator path is `/members`, the full path is `/api/v1/groups/{group_id}/members`. Ensure path parameters use `{param}` notation (FastAPI already uses this).
+### 4C: Django REST Framework (`backendFramework = "django"`)
 
-   - **`requiredRole`**: Look at the function signature for dependency injection parameters. Scan the function definition (the `def` or `async def` line and subsequent lines until the closing parenthesis) for:
-     - `Depends(require_admin)` or `require_admin` → `"admin"`
-     - `Depends(require_manager_or_admin)` or `require_manager` → `"manager"`
-     - `Depends(get_current_user)` → `"user"` (authenticated, any role)
-     - No auth dependency found → `null` (public endpoint)
+**Find files**: Use Glob for `**/urls.py`, `**/views.py`, `**/viewsets.py`, `**/api/*.py`.
 
-   - **`responseSchema`**: Look for `response_model=SchemaName` in the decorator arguments. Extract the schema class name as a string. If no `response_model` is specified, set to `null`. Handle `response_model=list[SchemaName]` or `response_model=List[SchemaName]` — extract just the inner schema name.
+**Parse URL patterns**:
+1. Read all `urls.py` files. Find `urlpatterns = [...]`.
+2. Parse patterns:
+   - `path('users/', UserListView.as_view())` → GET `/users/`, POST `/users/`
+   - `path('users/<int:pk>/', UserDetailView.as_view())` → GET, PUT, PATCH, DELETE
+   - `re_path(r'^users/(?P<pk>\d+)/$', ...)` → same but regex
+   - `router.register('users', UserViewSet)` (DRF router) → standard CRUD set
+3. Convert Django path params: `<int:pk>` → `{pk}`, `<slug:username>` → `{username}`.
 
-   - **`requiresConfirm`**: Look in the function signature for a parameter named `confirm` — patterns like `confirm: bool = Query(`, `confirm: bool = False`, or `confirm = Query(False)`. Set `true` if found, `false` otherwise.
+**Parse Views/ViewSets**:
+1. Read view files. For each `ViewSet`:
+   - `ModelViewSet` → generates list, create, retrieve, update, partial_update, destroy
+   - `ReadOnlyModelViewSet` → generates list, retrieve only
+   - `@action(detail=True, methods=['post'])` → custom action on detail route
+2. For each `APIView`:
+   - Method handlers: `def get(self, request)`, `def post(self, request)` → map to HTTP methods
+3. **`requiredRole`**: Look for:
+   - `permission_classes = [IsAdminUser]` → `"admin"`
+   - `permission_classes = [IsAuthenticated]` → `"user"`
+   - `permission_classes = [AllowAny]` → `null`
+   - Custom permissions: read the permission class for role checks.
+4. **`responseSchema`**: From `serializer_class = UserSerializer` → `"UserSerializer"`.
+5. **`description`**: From docstring on the view class or method.
 
-   - **`description`**: Extract from the function's docstring (the triple-quoted string immediately inside the function body). If no docstring, generate a description from the function name by replacing underscores with spaces and capitalizing: `list_users` → `"List users"`, `create_member` → `"Create member"`, `delete_group` → `"Delete group"`.
+**Combine prefix**: Look for `path('api/v1/', include('myapp.urls'))` to build full paths.
 
-   - **`sideEffects`**: Set to an empty array `[]` initially. Will be populated in Section 6 for high/critical endpoints.
+---
 
-### Generate Endpoint Parameters
+### 4D: NestJS (`backendFramework = "nestjs"`)
 
-For endpoints with `{param}` placeholders, generate a `params` object using the same lookup syntax as routes:
+**Find files**: Use Glob for `**/*.controller.ts`. Exclude `node_modules`.
+
+**Parse each controller**:
+1. Read the file. Find `@Controller('path')` decorator for the base path.
+2. Find method decorators:
+   - `@Get('/')`, `@Get(':id')` → GET endpoints
+   - `@Post('/')` → POST
+   - `@Put(':id')`, `@Patch(':id')` → PUT/PATCH
+   - `@Delete(':id')` → DELETE
+3. For each decorator:
+   - **`method`**: From decorator name.
+   - **`path`**: Controller path + method path. Convert NestJS `:param` to `{param}`.
+   - **`requiredRole`**: Look for:
+     - `@UseGuards(AuthGuard)` or `@UseGuards(JwtAuthGuard)` → `"user"`
+     - `@Roles('admin')` or `@UseGuards(RolesGuard)` with `@Roles(Role.ADMIN)` → `"admin"`
+     - No guards → `null`.
+   - **`responseSchema`**: From return type annotation or `@ApiResponse({ type: UserDto })` if using Swagger decorators.
+   - **`description`**: From `@ApiOperation({ summary: '...' })` or generate from method name.
+4. **Global prefix**: Check `main.ts` for `app.setGlobalPrefix('api')`.
+
+---
+
+### 4E: Next.js API Routes (`backendFramework = "nextjs"` OR `frontendFramework = "nextjs"`)
+
+If the project uses Next.js, also check for API routes:
+
+1. Use Glob for `**/app/api/**/route.ts`, `**/app/api/**/route.js` (App Router API routes).
+2. Also check `**/pages/api/**/*.ts`, `**/pages/api/**/*.js` (Pages Router API routes).
+3. For each file:
+   - App Router: exported function names define methods — `export async function GET()`, `export async function POST()`.
+   - Pages Router: `export default function handler(req, res)` with `req.method` switch.
+   - **`path`**: From file path → URL. `app/api/users/[id]/route.ts` → `/api/users/{id}`.
+   - **`requiredRole`**: Look for auth checks inside the handler (session checks, token verification).
+
+---
+
+### Endpoint Parameters (all frameworks)
+
+For endpoints with `{param}` placeholders, generate a `params` object using lookup syntax:
 
 - `/api/v1/groups/{group_id}` → `{ "group_id": "lookup:groups[0].id" }`
 - `/api/v1/groups/{group_id}/members/{member_id}` → `{ "group_id": "lookup:groups[0].id", "member_id": "lookup:groups/{group_id}/members[0].id" }`
@@ -367,53 +534,108 @@ Store all endpoints in an array called `endpoints`.
 
 ## Section 5: Schema Extraction
 
-Parse Pydantic v2 schema files to extract response model definitions.
+Run ALL applicable schema parsers below. A project may use multiple schema systems (e.g., Pydantic for the backend and Zod for the frontend). Merge results into one `schemas` dictionary keyed by class/schema name.
 
-### Find Schema Files
+---
 
-Use Glob to search for `**/schemas/*.py`. Collect all matching file paths. Exclude `__init__.py`.
+### 5A: Pydantic v2 (Python)
 
-### Parse Each Schema File
+**Find files**: Use Glob for `**/schemas/*.py`. Exclude `__init__.py`.
 
-For each schema file:
+**Parse each file**: Find classes inheriting from `BaseModel`:
+- `class ClassName(BaseModel):` or `class ClassName(SomeOtherModel):`
 
-1. **Read the file** using the Read tool.
+For each class, extract fields using Python type annotations:
+- `field: str` → `"string"`, required, not nullable
+- `field: int` / `field: float` → `"number"`
+- `field: bool` → `"boolean"`
+- `field: list[X]` / `field: List[X]` → `"array"`
+- `field: dict` / `field: Dict[K,V]` → `"object"`
+- `field: Optional[X]` / `field: X | None` → nullable
+- `field: str = "default"` / `field: str = Field(default=...)` → not required
+- `field: UUID` / `field: datetime` / `field: date` / `field: EmailStr` → `"string"`
+- `field: Any` → `"object"`
 
-2. **Find all class definitions** that inherit from `BaseModel`, `BaseModel` subclasses, or other Pydantic base classes. Look for patterns:
-   - `class ClassName(BaseModel):`
-   - `class ClassName(SomeOtherModel):` — where `SomeOtherModel` is itself a BaseModel subclass defined in the same file or imported
+**Special handling**: Note `extra="allow"`, deep inheritance (>2 levels), `computed_field`. Skip inner classes, validators, methods, private fields (`_`).
 
-3. **For each class**, extract:
+---
 
-   - **Class name**: The identifier after `class`.
+### 5B: Zod (TypeScript/JavaScript)
 
-   - **Fields**: Each line inside the class body that declares a field. Pydantic v2 fields look like:
-     - `field_name: str` → type `"string"`, required `true`, nullable `false`
-     - `field_name: int` → type `"number"`, required `true`, nullable `false`
-     - `field_name: float` → type `"number"`, required `true`, nullable `false`
-     - `field_name: bool` → type `"boolean"`, required `true`, nullable `false`
-     - `field_name: list` or `field_name: List[X]` or `field_name: list[X]` → type `"array"`, required `true`, nullable `false`
-     - `field_name: dict` or `field_name: Dict[K, V]` or `field_name: dict[K, V]` → type `"object"`, required `true`, nullable `false`
-     - `field_name: Optional[X]` or `field_name: X | None` → nullable `true`, type from `X`
-     - `field_name: str = "default"` or `field_name: str = Field(default="x")` → required `false`
-     - `field_name: str = None` or `field_name: Optional[str] = None` → required `false`, nullable `true`
-     - `field_name: UUID` or `field_name: uuid.UUID` → type `"string"` (UUIDs are serialized as strings)
-     - `field_name: datetime` or `field_name: date` → type `"string"` (ISO format strings)
-     - `field_name: EmailStr` → type `"string"`
-     - `field_name: Any` → type `"object"`
+**Find files**: Use Glob for `**/schemas/*.ts`, `**/schemas/*.js`, `**/types/*.ts`, `**/validators/*.ts`. Also use Grep for `z.object(` across `.ts`/`.js` files if no dedicated schema directory exists.
 
-   - **Source location**: Record the filename (relative to the schemas directory) and line number where the class is defined. Format: `"filename.py:LINE"`.
+**Parse each file**: Find Zod schema definitions:
+- `const UserSchema = z.object({ ... })` or `export const userSchema = z.object({ ... })`
 
-4. **Special handling**:
-   - If a class has `model_config = ConfigDict(extra="allow")` or `class Config: extra = "allow"`, add a note in the schema: `"note": "extra fields allowed"`.
-   - If a class inherits from more than 2 levels of BaseModel subclasses (e.g., `C(B)` where `B(A)` where `A(BaseModel)` — that's 3 levels), add `"note": "Complex model, may need schemaOverride"` and still extract what fields you can.
-   - If a field uses `computed_field` decorator or `@computed_field`, skip that field and add `"note": "Has computed fields, may need schemaOverride"`.
-   - Skip inner classes (`class Config`, `class Meta`), classmethods, validators, and methods — only extract field declarations.
-   - Skip private fields (names starting with `_`).
+For each schema object, extract fields:
+- `z.string()` → `"string"`, required, not nullable
+- `z.number()` / `z.bigint()` → `"number"`
+- `z.boolean()` → `"boolean"`
+- `z.array(z.X())` → `"array"`
+- `z.object({})` → `"object"`
+- `z.string().optional()` → not required
+- `z.string().nullable()` → nullable
+- `z.string().nullish()` → optional AND nullable
+- `z.enum([...])` → `"string"`
+- `z.date()` / `z.string().uuid()` / `z.string().email()` → `"string"`
+- `z.union([...])` → type of first variant, add note `"union type"`
+- `z.lazy(() => ...)` → add note `"recursive type"`
 
-### Output Format
+**Schema name**: Use the const/export variable name, converting camelCase to PascalCase (e.g., `userSchema` → `UserSchema`).
 
-Store schemas in a dictionary keyed by class name:
+---
+
+### 5C: TypeScript Interfaces and Types
+
+**Find files**: Use Glob for `**/types/*.ts`, `**/interfaces/*.ts`, `**/dto/*.ts`, `**/models/*.ts`. Exclude `node_modules`.
+
+**Parse each file**: Find interface and type declarations:
+- `interface UserResponse { ... }`
+- `type UserDTO = { ... }`
+- `export interface CreateUserInput { ... }`
+
+For each declaration, extract fields:
+- `field: string` → `"string"`, required, not nullable
+- `field: number` → `"number"`
+- `field: boolean` → `"boolean"`
+- `field: X[]` / `field: Array<X>` → `"array"`
+- `field: Record<string, X>` / `field: { [key: string]: X }` → `"object"`
+- `field?: string` → not required (optional)
+- `field: string | null` → nullable
+- `field?: string | null` → optional AND nullable
+- `field: Date` → `"string"`
+
+**Priority**: If a project has both Zod schemas AND TypeScript interfaces for the same name, prefer the Zod version (it has richer validation info). Mark the TS version with `"note": "duplicate — Zod version preferred"`.
+
+---
+
+### 5D: Django Serializers
+
+**Find files**: Use Glob for `**/serializers.py`, `**/serializers/*.py`.
+
+**Parse each file**: Find classes inheriting from `serializers.Serializer` or `serializers.ModelSerializer`:
+- `class UserSerializer(serializers.ModelSerializer):`
+
+For ModelSerializer, look at the `Meta` class:
+- `model = User` → link to Django model
+- `fields = ['id', 'email', 'name']` or `fields = '__all__'`
+- `read_only_fields = ['id']`
+- `extra_kwargs = {'email': {'required': True}}`
+
+For explicit field declarations:
+- `email = serializers.EmailField()` → `"string"`, required
+- `age = serializers.IntegerField(required=False)` → `"number"`, not required
+- `items = serializers.ListField()` → `"array"`
+- `data = serializers.JSONField()` → `"object"`
+- `name = serializers.CharField(allow_null=True)` → nullable
+
+If `fields = '__all__'`, read the referenced model file to discover field names and types.
+
+---
+
+### Schema Output Format (all parsers)
+
+Store schemas in a dictionary keyed by class/schema name:
 
 ```json
 {
@@ -439,13 +661,34 @@ Calculate risk scores for every route and every endpoint. This section modifies 
 
 ### Read Model Files for Cascade Information
 
-Before scoring, gather cascade relationship data:
+Before scoring, gather cascade relationship data from the applicable ORM:
 
-1. Use Glob to search for `**/models/*.py`. Read each model file.
-2. For each SQLAlchemy model, look for `relationship(` calls with `cascade=` arguments. Record which models have cascade delete settings:
-   - `cascade="all, delete-orphan"` or `cascade="all, delete"` → the parent model has cascade deletes to the child
+**SQLAlchemy (Python)**:
+1. Use Glob for `**/models/*.py`. Read each model file.
+2. Look for `relationship(` with `cascade=` arguments:
+   - `cascade="all, delete-orphan"` or `cascade="all, delete"` → cascade delete
    - Format: `{ "ParentModel": ["ChildModel1", "ChildModel2"] }`
-3. Also check for soft-delete patterns: look for `deleted_at` columns in models. If all models have `deleted_at`, the project uses soft-delete (DELETE operations are reversible). If a DELETE endpoint explicitly bypasses soft-delete (e.g., hard-delete with `confirm=true`), it's irreversible.
+3. Check for soft-delete: `deleted_at` columns.
+
+**Django ORM (Python)**:
+1. Use Glob for `**/models.py`, `**/models/*.py`.
+2. Look for `ForeignKey(... on_delete=models.CASCADE)` → cascade delete to parent.
+3. `on_delete=models.SET_NULL` → no cascade. `on_delete=models.PROTECT` → protected.
+4. Check for `deleted_at` or `is_deleted` fields for soft-delete.
+
+**Prisma (TypeScript/JavaScript)**:
+1. Use Glob for `**/schema.prisma`.
+2. Look for `@relation(... onDelete: Cascade)` → cascade delete.
+3. Check for `deletedAt DateTime?` fields for soft-delete.
+
+**TypeORM (TypeScript)**:
+1. Use Glob for `**/entities/*.ts`, `**/*.entity.ts`.
+2. Look for `@ManyToOne(() => X, { onDelete: 'CASCADE' })` → cascade.
+3. Check for `@DeleteDateColumn()` for soft-delete.
+
+**Mongoose (JavaScript/TypeScript)**:
+1. Use Glob for `**/models/*.js`, `**/models/*.ts`.
+2. Mongoose doesn't have native cascades — check for `pre('deleteOne')` or `pre('remove')` hooks that delete related documents.
 
 Store cascade info as `cascadeMap` and soft-delete presence as `hasSoftDelete`.
 
@@ -712,7 +955,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.3.0
+- **Name**: Manifest Generator v1.4.0
 - **Specialty**: Codebase analysis for QA manifest generation (Vue 3 routes, FastAPI endpoints, Pydantic schemas, risk scoring)
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus

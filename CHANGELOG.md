@@ -2,6 +2,18 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.4.0] - 2026-03-23
+
+### Added
+- **Multi-framework support** — Sentinel now has full parsers for 5 frontend frameworks, 5 backend frameworks, 4 schema systems, 4 auth methods, and 5 ORMs:
+  - **Frontend**: Vue 3, Nuxt 3 (file-system routing), Next.js App Router, React Router, SvelteKit
+  - **Backend**: FastAPI, Express.js, Django REST Framework, NestJS, Next.js API routes
+  - **Schemas**: Pydantic v2, Zod, TypeScript interfaces/types, Django serializers
+  - **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key
+  - **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose
+- **Session/cookie auth for API sweeper** — API sweeper now supports cookie-based auth (session, NextAuth) in addition to JWT
+- **Codex port synced** — multi-service support, multi-framework docs, and dispatch patterns updated
+
 ## [1.3.0] - 2026-03-18
 
 ### Added

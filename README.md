@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.3.0** | Vue 3 + FastAPI | JWT auth | Playwright MCP
+> **v1.4.0** | Vue 3 + FastAPI | JWT auth | Playwright MCP
 
 ---
 
@@ -417,24 +417,68 @@ After each sweep, you get a quick summary:
 
 ## Framework Support
 
-### v1 (current)
+### Frontend Routing
 
-| Component | Supported |
-|-----------|-----------|
-| Frontend | Vue 3 (Vue Router with `meta.role` guards) |
-| Backend | FastAPI (`@router` decorators, `Depends()` auth) |
-| Schemas | Pydantic v2 (`BaseModel` classes) |
-| ORM | SQLAlchemy (cascade relationship detection) |
-| Auth | JWT (via `python-jose` / `PyJWT`) |
-| Browser | Playwright MCP (Chromium, Firefox, WebKit) |
+| Framework | Status | Route Source |
+|-----------|--------|-------------|
+| **Vue 3** | Full parser | Vue Router (`router/index.ts`) with `meta.role` guards |
+| **Nuxt 3** | Full parser | File-system routing (`pages/`) with `definePageMeta` |
+| **Next.js** | Full parser | App Router (`app/`) with layout auth, also API routes |
+| **React Router** | Full parser | `createBrowserRouter`, `<Route>` JSX, wrapper auth |
+| **SvelteKit** | Full parser | File-system routing (`src/routes/`) with server hooks |
+| **Angular** | Detected | Detection only — manual entries needed |
 
-### Planned (v2+)
+### Backend API
 
-- React Router, Next.js, SvelteKit
-- Express.js, Django, Rails
-- Session/cookie auth, OAuth PKCE
-- Static i18n analysis
+| Framework | Status | Endpoint Source |
+|-----------|--------|----------------|
+| **FastAPI** | Full parser | `@router` decorators, `Depends()` auth, `response_model` |
+| **Express.js** | Full parser | `router.get/post/...`, middleware auth patterns |
+| **Django REST** | Full parser | `urlpatterns`, `ViewSet`, `permission_classes` |
+| **NestJS** | Full parser | `@Controller`, `@Get/@Post`, `@UseGuards`, `@Roles` |
+| **Next.js API** | Full parser | `app/api/` route handlers (`GET`, `POST` exports) |
+| **Flask** | Detected | Detection only — manual entries needed |
+| **Hono** / **Koa** | Detected | Detection only — manual entries needed |
+
+### Schema Validation
+
+| System | Status | Source |
+|--------|--------|--------|
+| **Pydantic v2** | Full parser | `BaseModel` classes with field annotations |
+| **Zod** | Full parser | `z.object()` definitions with chain methods |
+| **TypeScript** | Full parser | `interface` and `type` declarations |
+| **Django serializers** | Full parser | `ModelSerializer` with Meta class |
+
+### Auth Methods
+
+| Method | API Sweep | Browser Sweep |
+|--------|-----------|---------------|
+| **JWT** | `Authorization: Bearer` header | Token injection |
+| **NextAuth / Auth.js** | Session cookie from login | Form-based sign-in |
+| **Session / cookie** | `Cookie` header from login | Form-based login |
+| **API key** | `x-api-key` header | N/A |
+
+### ORM Cascade Detection
+
+| ORM | Cascade Pattern |
+|-----|----------------|
+| **SQLAlchemy** | `relationship(cascade="all, delete-orphan")` |
+| **Django ORM** | `ForeignKey(on_delete=models.CASCADE)` |
+| **Prisma** | `@relation(onDelete: Cascade)` |
+| **TypeORM** | `@ManyToOne({ onDelete: 'CASCADE' })` |
+| **Mongoose** | `pre('deleteOne')` hooks |
+
+### Browser Automation
+
+Playwright MCP (Chromium, Firefox, WebKit)
+
+### Planned
+
+- Angular route parser
+- Flask / Hono / Koa endpoint parsers
 - OpenAPI spec import (skip manifest generation)
+- Static i18n analysis
+- OAuth PKCE browser flow
 
 ---
 

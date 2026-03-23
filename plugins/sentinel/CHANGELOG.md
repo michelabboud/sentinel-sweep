@@ -2,6 +2,34 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.4.0] - 2026-03-23
+
+### Added
+- **Multi-framework support** — Sentinel now has full parsers for 5 frontend frameworks, 5 backend frameworks, 4 schema systems, 4 auth methods, and 5 ORMs:
+  - **Frontend**: Vue 3, Nuxt 3 (file-system routing), Next.js App Router, React Router, SvelteKit
+  - **Backend**: FastAPI, Express.js, Django REST Framework, NestJS, Next.js API routes
+  - **Schemas**: Pydantic v2, Zod, TypeScript interfaces/types, Django serializers
+  - **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key
+  - **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose
+- **Session/cookie auth for API sweeper** — API sweeper now supports cookie-based auth (session, NextAuth) in addition to JWT
+- **Codex port synced** — multi-service support, multi-framework docs, and dispatch patterns updated
+
+## [1.3.0] - 2026-03-18
+
+### Added
+- **Multi-service architecture support** — sweep projects with multiple APIs and frontends (e.g., Internal Archive + Public Portal)
+  - New `services` array in `settings.json` for explicit service configuration
+  - Auto-detection from multiple `docker-compose.yml` files
+  - Per-service manifest tagging (routes/endpoints tagged with `"service"` field)
+  - Parallel sweeper dispatch per service (one api-sweeper + one browser-sweeper each)
+  - Report findings grouped by service name
+  - Full backward compatibility — single-service projects work unchanged
+
+## [1.2.2] - 2026-03-16
+
+### Fixed
+- **Enforce parallel sweep dispatch** — added explicit parallelism instruction so browser and API sweepers run concurrently during `/sentinel:run sweep`
+
 ## [1.2.1] - 2026-03-16
 
 ### Changed
