@@ -1,7 +1,7 @@
 ---
 name: api-sweeper-codex
-version: 1.4.0-codex.1
-description: Codex-native API QA sweeper contract with multi-auth and multi-service support.
+version: 1.5.0-codex.1
+description: Codex-native API QA sweeper contract with multi-auth (incl. OAuth PKCE) and multi-service support.
 ---
 
 # API Sweeper (Codex Port)
@@ -31,9 +31,12 @@ Authenticate per role using the method declared in `manifest.auth.method`:
 | `"jwt"` | POST to `loginEndpoint`, parse `access_token`/`token` | `Authorization: Bearer {token}` header |
 | `"nextauth"` / `"session"` | POST with `-c /tmp/sentinel-cookies-{role}.txt` | `-b /tmp/sentinel-cookies-{role}.txt` (cookie jar) |
 | `"apikey"` | No login needed | `x-api-key: {credential}` header |
+| `"oauth_pkce"` | Generate PKCE verifier/challenge, build authorize URL, exchange code for token | `Authorization: Bearer {token}` header |
 | `"none"` | No login needed | No auth headers |
 
 Cookie jar approach uses `curl -c` (save) and `curl -b` (send) for session-based auth.
+
+OAuth PKCE uses `openssl dgst -sha256` for challenge generation and `curl` POST to token endpoint for code exchange.
 
 ## Behavior
 

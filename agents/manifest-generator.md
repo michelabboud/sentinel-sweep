@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.4.0
+version: 1.5.0
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -43,6 +43,8 @@ Check in this order. Use the FIRST match:
    - Key `@angular/core` present → `"angular"`
 7. If no frontend framework is detected, set `app.framework.frontend` to `"none"`.
 
+**Note on Angular**: Unlike the "detected only" status in v1.3, Angular now has a full route parser (Section 3F).
+
 ### Backend Detection
 
 Check in this order. Use the FIRST match:
@@ -51,16 +53,24 @@ Check in this order. Use the FIRST match:
 2. Use Glob for `**/*.controller.ts`. If found and files contain `@Controller(`, `@Get(`, `@Post(` decorators → `"nestjs"`.
 3. Use Glob for `**/routes/*.js` or `**/routes/*.ts`. If found and files contain `express.Router()` or `router.get(` → `"express"`.
 4. Use Glob for `**/urls.py`. If found and it contains `urlpatterns` → `"django"`.
-5. Use Glob for `requirements.txt` or `pyproject.toml`. Check for:
+5. Use Glob for `**/src/main.rs` or `**/src/lib.rs`. Read the file. Check for:
+   - `actix_web` import or `HttpServer::new` → `"actix"`
+   - `axum::Router` import or `axum::routing` → `"axum"`
+   - `#[launch]` or `rocket::build()` → `"rocket"`
+6. Use Glob for `Cargo.toml`. Read it. Check `[dependencies]`:
+   - `actix-web` → `"actix"`
+   - `axum` → `"axum"`
+   - `rocket` → `"rocket"`
+7. Use Glob for `requirements.txt` or `pyproject.toml`. Check for:
    - `fastapi` → `"fastapi"`
    - `django` or `djangorestframework` → `"django"`
    - `flask` → `"flask"`
-6. Use Glob for `package.json`. Check for:
+8. Use Glob for `package.json`. Check for:
    - `@nestjs/core` → `"nestjs"`
    - `express` → `"express"`
    - `hono` → `"hono"`
    - `koa` → `"koa"`
-7. If no backend framework is detected, set `app.framework.backend` to `"none"`.
+9. If no backend framework is detected, set `app.framework.backend` to `"none"`.
 
 Store the detected values as `frontendFramework` and `backendFramework`.
 
@@ -106,7 +116,8 @@ Determine authentication method by checking for evidence in this order:
 2. **NextAuth / Auth.js**: Use Glob for `**/auth.ts`, `**/auth.js`, `**/**/[...nextauth]/route.ts`, `**/auth.config.ts`. If found and contains `NextAuth` or `authConfig` → `"nextauth"`. Check `package.json` for `next-auth` or `@auth/core`.
 3. **Session/cookie**: Use Grep to search for `express-session`, `cookie-session`, `connect-session`, `SESSION_SECRET`, `req.session`, `ctx.session`, `passport.session()`. Check Python files for `SessionMiddleware`, `session_cookie`. If found → `"session"`.
 4. **API key**: Use Grep for `x-api-key`, `apiKey`, `API_KEY` header patterns in middleware/auth files. If found → `"apikey"`.
-5. If no auth method detected → `"none"`.
+5. **OAuth PKCE**: Use Grep for `authorization_code`, `code_verifier`, `code_challenge`, `pkce`, `oauth2`, `openid-connect`. Check `package.json` for `openid-client`, `oauth4webapi`, `oidc-client-ts`. Check Python deps for `authlib`, `oauthlib`. If found → `"oauth_pkce"`.
+6. If no auth method detected → `"none"`.
 
 **Auth method handling for sweepers:**
 
@@ -116,6 +127,7 @@ Determine authentication method by checking for evidence in this order:
 | `"nextauth"` | Login → extract session cookie → send `Cookie` header | Navigate to sign-in page → fill form → session cookie auto-set |
 | `"session"` | Login → extract `Set-Cookie` → send `Cookie` header | Navigate to login page → fill form → session cookie auto-set |
 | `"apikey"` | Send `x-api-key` header (from manifest credentials) | Not applicable for browser |
+| `"oauth_pkce"` | Generate PKCE challenge → redirect to authorize → exchange code for token → send `Authorization: Bearer` header | Navigate to authorize URL → fill login form → handle redirect → token auto-stored |
 | `"none"` | No auth headers | No login required |
 
 Print a note for non-JWT auth:
@@ -324,6 +336,29 @@ React Router uses code-based routing. Look for route definitions.
    - If no auth patterns → `null`.
 5. **Handle lazy routes**: `lazy: () => import('./pages/Users')` → extract view from import path.
 
+### 3F: Angular (`frontendFramework = "angular"`)
+
+Angular uses module-based or standalone routing.
+
+1. Use Glob for `**/app-routing.module.ts`, `**/app.routes.ts`, `**/*.routes.ts`, `**/routing/*.ts`. Also check for `**/app.config.ts` (standalone API with `provideRouter`).
+2. Read matching files. Parse route definitions:
+   - `{ path: 'users', component: UsersComponent }` → `/users`
+   - `{ path: 'users/:id', component: UserDetailComponent }` → `/users/{id}`
+   - `{ path: 'admin', loadChildren: () => import('./admin/admin.module') }` → lazy-loaded module — follow the import and read child routes.
+   - `{ path: '', redirectTo: '/dashboard', pathMatch: 'full' }` → skip (redirect).
+   - `{ path: '**', component: NotFoundComponent }` → skip (wildcard).
+3. **Convert params**: Angular `:param` → `{param}`.
+4. **Handle nested routes (`children`)**: Prefix child paths with parent path.
+5. **Extract `requiredRole`**: Look for:
+   - `canActivate: [AuthGuard]` or `canActivate: [authGuard]` (functional) → `"user"`
+   - `canActivate: [AdminGuard]` or `canActivate: [RoleGuard]` with `data: { role: 'admin' }` → extract role from `data`.
+   - `canActivateChild` → applies to all children.
+   - If no guards → `null`.
+6. **Extract `view`**: From the component name (e.g., `UsersComponent` → `Users`).
+7. **Lazy-loaded modules**: For `loadChildren` or `loadComponent`, follow the import path and recursively parse routes from the lazy module.
+
+---
+
 ### Generate Route Parameters
 
 For routes with `{param}` placeholders in their path, generate a `params` object with lookup expressions:
@@ -497,6 +532,163 @@ If the project uses Next.js, also check for API routes:
 
 ---
 
+### 4F: Flask (`backendFramework = "flask"`)
+
+**Find files**: Use Glob for `**/app.py`, `**/views.py`, `**/routes.py`, `**/__init__.py` (in app packages), `**/blueprints/*.py`, `**/api/*.py`.
+
+**Parse each file**:
+1. Read the file. Look for Flask app instance (`app = Flask(__name__)`) or Blueprint (`bp = Blueprint('name', __name__)`).
+2. Find route decorators:
+   - `@app.route('/users', methods=['GET', 'POST'])` → separate entries for each method.
+   - `@bp.route('/users/<int:user_id>')` → parameterized route.
+   - `@app.get('/users')`, `@app.post('/users')` (Flask 2.0+ shorthand).
+3. For each route:
+   - **`method`**: From the `methods` list or shorthand decorator name.
+   - **`path`**: Combine blueprint prefix + route path. Convert Flask `<int:param>` / `<param>` → `{param}`.
+   - **`requiredRole`**: Look for:
+     - `@login_required` decorator → `"user"`
+     - `@roles_required('admin')` or `@admin_required` → `"admin"`
+     - `flask_login` or `flask-jwt-extended` decorators: `@jwt_required()` → `"user"`.
+     - Custom decorators: read them for role checks.
+     - No auth decorators → `null`.
+   - **`responseSchema`**: Flask doesn't declare response schemas natively. Check for `flask-marshmallow` (`@marshal_with(UserSchema)`), or `flask-pydantic` usage. Set to `null` if none found.
+   - **`description`**: From docstring or function name.
+
+**Determine prefix**: Look for `app.register_blueprint(bp, url_prefix='/api/v1')`.
+
+---
+
+### 4G: Hono (`backendFramework = "hono"`)
+
+**Find files**: Use Glob for `**/index.ts`, `**/index.js`, `**/app.ts`, `**/app.js`, `**/routes/*.ts`, `**/routes/*.js`. Also check `**/src/**/*.ts`.
+
+**Parse each file**:
+1. Read the file. Look for `new Hono()` or `Hono()` app instance.
+2. Find route definitions:
+   - `app.get('/users', (c) => ...)` → GET `/users`
+   - `app.post('/users', ...)` → POST `/users`
+   - `app.route('/api', apiRoutes)` → sub-app mounting with prefix.
+   - `app.on('GET', '/users/:id', ...)` → GET with param.
+3. For each route:
+   - **`method`**: From method call name.
+   - **`path`**: Combine mount prefix + route path. Convert Hono `:param` → `{param}`.
+   - **`requiredRole`**: Look for middleware:
+     - `jwt()` middleware from `hono/jwt` → `"user"`
+     - `bearerAuth()` middleware → `"user"`
+     - Custom auth middleware checking roles → extract role.
+     - No auth → `null`.
+   - **`responseSchema`**: Check for Zod validators with `zValidator()` middleware. If present, link to the Zod schema.
+   - **`description`**: From comments or function name.
+
+---
+
+### 4H: Koa (`backendFramework = "koa"`)
+
+**Find files**: Use Glob for `**/routes/*.js`, `**/routes/*.ts`, `**/router/*.js`, `**/router/*.ts`, `**/app.js`, `**/app.ts`.
+
+**Parse each file**:
+1. Read the file. Look for `new Router()` (from `@koa/router` or `koa-router`).
+2. Find route definitions:
+   - `router.get('/users', ...)` → GET `/users`
+   - `router.post('/users', ...)` → POST
+   - `router.param('id', ...)` → parameter middleware
+3. For each route:
+   - **`method`**: From method call name.
+   - **`path`**: Combine mount prefix + route path. Convert Koa `:param` → `{param}`.
+   - **`requiredRole`**: Look for middleware in the route handler chain:
+     - `koa-passport`, `koa-jwt`, `koa-session` middleware → `"user"`
+     - Custom auth middleware with role checks → extract role.
+     - No auth → `null`.
+   - **`responseSchema`**: Check for validation middleware (Joi, Zod). Set to `null` if none.
+   - **`description`**: From comments or function name.
+
+**Determine mount prefix**: Look for `app.use(router.routes())` or `app.use(mount('/api', router))`.
+
+---
+
+### 4I: Actix-web (`backendFramework = "actix"`)
+
+**Find files**: Use Glob for `**/src/**/*.rs`. Exclude `target/`.
+
+**Parse each file**:
+1. Read the file. Find route macros:
+   - `#[get("/users")]` → GET `/users`
+   - `#[post("/users")]` → POST `/users`
+   - `#[put("/users/{id}")]` → PUT `/users/{id}`
+   - `#[delete("/users/{id}")]` → DELETE `/users/{id}`
+   - `#[route("/users", method = "GET", method = "POST")]` → multiple methods.
+2. Also check for programmatic routes:
+   - `web::resource("/users").route(web::get().to(list_users))` → GET `/users`
+   - `web::scope("/api").service(...)` → scoped prefix.
+3. For each route:
+   - **`method`**: From the macro name or `.route()` call.
+   - **`path`**: Actix already uses `{param}` notation. Combine scope prefix + route path.
+   - **`requiredRole`**: Look for:
+     - `HttpRequest` with `.extensions().get::<Claims>()` → `"user"`
+     - `web::Data<AuthConfig>` or custom extractors for auth → `"user"`
+     - Guard middleware: `.guard(guard::fn_guard(|req| ...))` with role checks → extract role.
+     - `#[has_role("admin")]` or `#[has_any_role("admin", "manager")]` from `actix-web-grants` → extract role.
+     - No auth → `null`.
+   - **`responseSchema`**: Check return type. If `impl Responder` wraps a struct with `#[derive(Serialize)]`, note the struct name.
+   - **`description`**: From `/// doc comment` above the handler function.
+
+**Determine scope prefix**: Look in `main.rs` for `App::new().service(web::scope("/api/v1").service(...))`.
+
+---
+
+### 4J: Axum (`backendFramework = "axum"`)
+
+**Find files**: Use Glob for `**/src/**/*.rs`. Exclude `target/`.
+
+**Parse each file**:
+1. Read the file. Find `Router::new()` and chained `.route()` calls:
+   - `.route("/users", get(list_users).post(create_user))` → GET and POST `/users`
+   - `.route("/users/:id", get(get_user).put(update_user).delete(delete_user))` → GET, PUT, DELETE
+2. Also check for:
+   - `.nest("/api/v1", api_router)` → nested router with prefix.
+   - `.merge(other_router)` → merged routes.
+   - `Router::new().route("/users", get(handler))` in sub-modules.
+3. For each route:
+   - **`method`**: From the function (`get`, `post`, `put`, `patch`, `delete`).
+   - **`path`**: Combine nest prefix + route path. Convert Axum `:param` → `{param}`.
+   - **`requiredRole`**: Look for:
+     - `Extension<Claims>` or `State<AuthState>` extractor in handler signature → `"user"`
+     - `.layer(middleware::from_fn(auth_middleware))` → `"user"`
+     - Custom extractors with role validation → extract role from the extractor implementation.
+     - `#[has_role("admin")]` from authorization crates → extract role.
+     - No auth → `null`.
+   - **`responseSchema`**: Check return type. `Json<Vec<User>>` → `"User"`. `Json<UserResponse>` → `"UserResponse"`.
+   - **`description`**: From `/// doc comment` above the handler.
+
+**Determine prefix**: Look for `.nest("/api/v1", ...)` or `Router::new()` in `main.rs`.
+
+---
+
+### 4K: Rocket (`backendFramework = "rocket"`)
+
+**Find files**: Use Glob for `**/src/**/*.rs`. Exclude `target/`.
+
+**Parse each file**:
+1. Read the file. Find route attribute macros:
+   - `#[get("/users")]` → GET `/users`
+   - `#[post("/users", data = "<input>")]` → POST `/users`
+   - `#[put("/users/<id>", data = "<input>")]` → PUT `/users/{id}`
+   - `#[delete("/users/<id>")]` → DELETE `/users/{id}`
+2. For each route:
+   - **`method`**: From the attribute macro name.
+   - **`path`**: Rocket uses `<param>` notation. Convert to `{param}`.
+   - **`requiredRole`**: Look for request guards in function parameters:
+     - `user: AuthenticatedUser` or `_user: Token` → `"user"`
+     - `admin: AdminUser` or guards with "admin" in the type name → `"admin"`
+     - Custom `FromRequest` implementations — read them for role logic.
+     - No auth guards → `null`.
+   - **`responseSchema`**: Check return type. `Json<Vec<User>>` → `"User"`. `Json<UserResponse>` → `"UserResponse"`.
+   - **`description`**: From `/// doc comment` above the handler.
+
+**Determine mount prefix**: Look in `main.rs` for `rocket::build().mount("/api/v1", routes![...])`.
+
+---
+
 ### Endpoint Parameters (all frameworks)
 
 For endpoints with `{param}` placeholders, generate a `params` object using lookup syntax:
@@ -529,6 +721,56 @@ Each endpoint entry:
 The `service` field is `null` in single-service mode. In multi-service mode, it contains the service name.
 
 Store all endpoints in an array called `endpoints`.
+
+---
+
+## Section 4.5: OpenAPI / Swagger Spec Import
+
+If the project contains an OpenAPI or Swagger spec file, use it as a supplementary (or primary) source of endpoints and schemas. This can **replace** framework-based parsing when the spec is the authoritative source.
+
+### Detect OpenAPI Files
+
+Use Glob to find: `**/openapi.json`, `**/openapi.yaml`, `**/openapi.yml`, `**/swagger.json`, `**/swagger.yaml`, `**/swagger.yml`, `**/api-spec.json`, `**/api-spec.yaml`, `**/docs/openapi.*`. Exclude `node_modules/` and `target/`.
+
+If no spec file is found, skip this section entirely.
+
+### Parse the Spec
+
+Read the first matching spec file. If YAML, use the Bash tool with `python3 -c "import yaml,json,sys; print(json.dumps(yaml.safe_load(sys.stdin)))"` to convert to JSON.
+
+Extract the OpenAPI version: `openapi` field (3.x) or `swagger` field (2.x).
+
+### Extract Endpoints from `paths`
+
+For each entry in `paths`:
+- Key is the path (e.g., `/api/v1/users/{id}`). OpenAPI already uses `{param}` notation.
+- For each HTTP method (`get`, `post`, `put`, `patch`, `delete`) defined on the path:
+  - **`method`**: Uppercase the method.
+  - **`path`**: Use the path key. Prepend the `servers[0].url` base path if present.
+  - **`requiredRole`**: Check for `security` on the operation or globally. If `security: [{ bearerAuth: [] }]` → `"user"`. If `security: [{ adminAuth: [] }]` or operation has `x-roles: ["admin"]` → `"admin"`. No security → `null`.
+  - **`responseSchema`**: From `responses.200.content.application/json.schema.$ref` → resolve the `$ref` to a schema name (e.g., `#/components/schemas/User` → `"User"`).
+  - **`description`**: From `summary` or `description` field on the operation.
+  - **`params`**: Generate lookup expressions from path parameters using the same logic as Section 4.
+
+### Extract Schemas from `components.schemas` (OpenAPI 3.x) or `definitions` (Swagger 2.x)
+
+For each schema definition:
+- Schema name: the key in the schemas object.
+- For each `properties` entry:
+  - `type: "string"` → `"string"`
+  - `type: "integer"` / `type: "number"` → `"number"`
+  - `type: "boolean"` → `"boolean"`
+  - `type: "array"` → `"array"`
+  - `type: "object"` → `"object"`
+  - `$ref` → reference to another schema (note as nested type).
+  - `nullable: true` → nullable.
+- Check `required` array to determine which fields are required.
+
+### Merge Strategy
+
+- If `backendFramework` is `"none"` (no source code framework detected), the OpenAPI endpoints become the **primary** endpoint source.
+- If a backend framework WAS detected, **merge** OpenAPI endpoints with code-parsed endpoints. For duplicate `{method} {path}` pairs, prefer the code-parsed version (it has richer auth/schema data), but fill in missing fields from OpenAPI.
+- OpenAPI-derived schemas are merged into the `schemas` dictionary alongside code-parsed schemas, with the same deduplication rule.
 
 ---
 
@@ -633,6 +875,37 @@ If `fields = '__all__'`, read the referenced model file to discover field names 
 
 ---
 
+### 5E: Rust Serde Structs
+
+**Find files**: Use Glob for `**/src/**/*.rs`. Exclude `target/`. Focus on files in `models/`, `schemas/`, `dto/`, `types/`, or files with `#[derive(Serialize` patterns.
+
+**Parse each file**: Find structs with serde derives:
+- `#[derive(Serialize, Deserialize)]` or `#[derive(serde::Serialize)]`
+
+For each struct, extract fields:
+- `field: String` → `"string"`, required, not nullable
+- `field: i32` / `field: i64` / `field: f32` / `field: f64` / `field: u32` / `field: usize` → `"number"`
+- `field: bool` → `"boolean"`
+- `field: Vec<X>` → `"array"`
+- `field: HashMap<K, V>` / `field: BTreeMap<K, V>` → `"object"`
+- `field: Option<X>` → nullable (type of inner `X`)
+- `field: Uuid` / `field: NaiveDateTime` / `field: DateTime<Utc>` / `field: chrono::NaiveDate` → `"string"`
+- `field: serde_json::Value` → `"object"`
+
+**Serde attributes**:
+- `#[serde(rename = "fieldName")]` → use the renamed name as the field key.
+- `#[serde(skip_serializing)]` → skip this field (not in response).
+- `#[serde(skip_deserializing)]` → read-only field.
+- `#[serde(default)]` → not required.
+- `#[serde(flatten)]` → inline the nested struct's fields.
+- `#[serde(rename_all = "camelCase")]` on struct → convert all field names.
+
+**Schema name**: Use the struct name directly (e.g., `UserResponse`).
+
+**Utoipa/Aide annotations**: If `#[derive(ToSchema)]` (utoipa) or `#[derive(JsonSchema)]` (schemars) is present, the struct is explicitly intended as an API schema — prioritize these.
+
+---
+
 ### Schema Output Format (all parsers)
 
 Store schemas in a dictionary keyed by class/schema name:
@@ -690,6 +963,19 @@ Before scoring, gather cascade relationship data from the applicable ORM:
 1. Use Glob for `**/models/*.js`, `**/models/*.ts`.
 2. Mongoose doesn't have native cascades — check for `pre('deleteOne')` or `pre('remove')` hooks that delete related documents.
 
+**Diesel (Rust)**:
+1. Use Glob for `**/schema.rs`, `**/models.rs`, `**/src/models/*.rs`.
+2. Look for `joinable!` macros (indicate foreign key relationships).
+3. Check migrations in `**/migrations/**/*.sql` for `ON DELETE CASCADE`.
+4. Look for `#[diesel(on_delete = "cascade")]` on association macros.
+5. Check for `deleted_at` columns (`diesel::sql_types::Nullable<Timestamp>`) for soft-delete.
+
+**SeaORM (Rust)**:
+1. Use Glob for `**/entity/*.rs`, `**/entities/*.rs`, `**/src/entities/**/*.rs`.
+2. Look for `Relation` enum implementations with `Entity::has_many()` or `Entity::belongs_to()`.
+3. Check for `#[sea_orm(on_delete = "Cascade")]` or `.on_delete(ForeignKeyAction::Cascade)` → cascade.
+4. Check for `deleted_at` column definitions for soft-delete.
+
 Store cascade info as `cascadeMap` and soft-delete presence as `hasSoftDelete`.
 
 ### Score Endpoints
@@ -746,6 +1032,76 @@ For each route in the `routes` array:
 ### Update Arrays
 
 Write the computed `riskScore` and `riskLevel` back into each entry in the `routes` and `endpoints` arrays.
+
+---
+
+## Section 6.5: Static i18n Analysis
+
+Detect missing or unused internationalization (i18n) keys by cross-referencing locale files with code usage. This section populates an `i18n` field in the manifest.
+
+### Detect i18n System
+
+Check in order:
+
+1. **vue-i18n / @intlify/vue-i18n**: Use Glob for `**/locales/*.json`, `**/locales/*.yaml`, `**/i18n/*.json`, `**/lang/*.json`. Check `package.json` for `vue-i18n` or `@intlify`.
+2. **next-intl / react-intl / react-i18next**: Use Glob for `**/messages/*.json`, `**/translations/*.json`, `**/public/locales/**/*.json`. Check `package.json` for `next-intl`, `react-intl`, `react-i18next`, `i18next`.
+3. **svelte-i18n / typesafe-i18n**: Check `package.json` for `svelte-i18n`, `typesafe-i18n`.
+4. **Angular i18n / @ngx-translate**: Check for `**/assets/i18n/*.json`, `**/locale/*.json`. Check `package.json` for `@ngx-translate/core`.
+5. **Rust (fluent-rs)**: Check `Cargo.toml` for `fluent` or `fluent-bundle`. Look for `**/locales/*.ftl` files.
+
+If no i18n system detected, skip this section and set `i18n` to `null` in the manifest.
+
+### Parse Locale Files
+
+Read all locale files for the **default locale** (typically `en.json`, `en.yaml`, or the first locale alphabetically). Build a flat key set by traversing nested JSON:
+
+- `{ "nav": { "home": "Home", "about": "About" } }` → keys: `nav.home`, `nav.about`
+- Support dot-notation keys in flat files: `"nav.home": "Home"` → key: `nav.home`
+
+Store as `definedKeys` (Set of all keys in locale files).
+
+### Scan Code for Used Keys
+
+Use Grep across frontend source files (`.vue`, `.tsx`, `.jsx`, `.ts`, `.js`, `.svelte`) for these patterns:
+
+| i18n System | Usage Patterns |
+|-------------|---------------|
+| vue-i18n | `$t('key')`, `t('key')`, `i18n.t('key')`, `{{ $t('key') }}` |
+| react-i18next | `t('key')`, `useTranslation()` + `t('key')` |
+| react-intl | `<FormattedMessage id="key" />`, `intl.formatMessage({ id: 'key' })` |
+| next-intl | `t('key')`, `useTranslations()` + `t('key')` |
+| Angular | `'key' \| translate`, `translate.instant('key')` |
+| svelte-i18n | `$_('key')`, `$t('key')` |
+| Rust fluent | `bundle.get_message("key")`, `fl!("key")` |
+
+Extract all referenced key strings. Store as `usedKeys` (Set of all keys used in code).
+
+### Compute Findings
+
+- **Missing keys**: `usedKeys - definedKeys` → keys used in code but not in locale files. These will cause runtime i18n errors.
+- **Unused keys**: `definedKeys - usedKeys` → keys in locale files never referenced in code. These are dead translations.
+
+### Manifest Output
+
+Add an `i18n` field to the manifest:
+
+```json
+{
+  "i18n": {
+    "system": "vue-i18n",
+    "defaultLocale": "en",
+    "localeFiles": ["src/locales/en.json", "src/locales/fr.json"],
+    "totalKeys": 245,
+    "missingKeys": ["nav.settings", "errors.notFound"],
+    "unusedKeys": ["legacy.oldFeature"],
+    "coverage": 0.98
+  }
+}
+```
+
+`coverage` = `1 - (missingKeys.length / usedKeys.size)`. A coverage of 1.0 means every used key has a translation.
+
+If the i18n system is detected but no locale files are found, set `missingKeys` to `["*"]` and `coverage` to `0`.
 
 ---
 
@@ -955,8 +1311,8 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.4.0
-- **Specialty**: Codebase analysis for QA manifest generation (Vue 3 routes, FastAPI endpoints, Pydantic schemas, risk scoring)
+- **Name**: Manifest Generator v1.5.0
+- **Specialty**: Codebase analysis for QA manifest generation — 6 frontend parsers, 8 backend parsers (incl. Rust), 5 schema systems, OpenAPI import, static i18n analysis, 5 auth methods, 7 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus
 - **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

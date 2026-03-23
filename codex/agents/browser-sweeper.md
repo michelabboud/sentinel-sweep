@@ -1,7 +1,7 @@
 ---
 name: browser-sweeper-codex
-version: 1.4.0-codex.1
-description: Codex-native browser QA sweeper contract with multi-service support using Playwright MCP.
+version: 1.5.0-codex.1
+description: Codex-native browser QA sweeper contract with multi-service and OAuth PKCE support using Playwright MCP.
 ---
 
 # Browser Sweeper (Codex Port)
@@ -32,17 +32,13 @@ Use Codex Playwright MCP tools, such as:
 ## Authentication
 
 Login flow uses Playwright browser automation (fill form + submit):
-- Navigate to login page
-- Fill email/password fields using selector strategies
-- Submit form and verify redirect or token in localStorage
-
-Auth method from manifest determines login behavior:
 
 | Auth Method | Login behavior |
 |-------------|---------------|
 | `"jwt"` | Form login, token stored in localStorage |
 | `"nextauth"` / `"session"` | Form login, session cookie set automatically by browser |
-| `"apikey"` | Not applicable for browser sweeps — skip role or set header via evaluate |
+| `"oauth_pkce"` | Navigate to authorize URL with PKCE challenge → fill login form → consent → redirect → extract code → exchange for token → store in localStorage |
+| `"apikey"` | Not applicable for browser sweeps — skip role |
 | `"none"` | No login needed |
 
 ## Behavior

@@ -2,13 +2,15 @@
 
 This port is optimized for Codex orchestration with heavy sub-agent delegation.
 
-## Supported stacks (v1.4.0)
+## Supported stacks (v1.5.0)
 
-- **Frontend**: Vue 3, Nuxt 3, Next.js App Router, React Router, SvelteKit
-- **Backend**: FastAPI, Express.js, Django REST, NestJS, Next.js API routes
-- **Schemas**: Pydantic v2, Zod, TypeScript interfaces/types, Django serializers
-- **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key
-- **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose
+- **Languages**: Python, TypeScript/JavaScript, Rust
+- **Frontend**: Vue 3, Nuxt 3, Next.js App Router, React Router, SvelteKit, Angular
+- **Backend**: FastAPI, Express.js, Django REST, NestJS, Next.js API, Flask, Hono, Koa, Actix-web, Axum, Rocket
+- **Schemas**: Pydantic v2, Zod, TypeScript interfaces/types, Django serializers, Rust serde structs
+- **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key, OAuth PKCE
+- **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM
+- **Cross-cutting**: OpenAPI spec import, static i18n analysis
 
 ## Core rule
 

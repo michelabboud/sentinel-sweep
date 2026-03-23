@@ -1,6 +1,6 @@
 ---
 name: manifest-generator-codex
-version: 1.4.0-codex.1
+version: 1.5.0-codex.1
 description: Codex-native manifest generation contract for sentinel-manifest.json.
 ---
 
@@ -26,6 +26,7 @@ Top-level required keys:
 - `endpoints`
 - `crudFlows`
 - `schemas`
+- `i18n` (null if no i18n system detected)
 
 ## Framework detection
 
@@ -36,7 +37,8 @@ Check in order, use first match:
 3. `**/src/routes/**/+page.svelte` → `"sveltekit"`
 4. `**/app/**/page.{tsx,jsx}` + `next` in deps → `"nextjs"`
 5. `**/src/App.{tsx,jsx}` + `react-router-dom` → `"react"`
-6. `package.json` deps: `nuxt`/`next`/`vue`/`react`/`svelte`/`@angular/core`
+6. `**/app-routing.module.ts` or `**/app.routes.ts` + `@angular/core` → `"angular"`
+7. `package.json` deps: `nuxt`/`next`/`vue`/`react`/`svelte`/`@angular/core`
 
 ### Backend
 Check in order, use first match:
@@ -44,8 +46,10 @@ Check in order, use first match:
 2. `**/*.controller.ts` with `@Controller` → `"nestjs"`
 3. `**/routes/*.{js,ts}` with `express.Router()` → `"express"`
 4. `**/urls.py` with `urlpatterns` → `"django"`
-5. `requirements.txt`/`pyproject.toml`: `fastapi`/`django`/`flask`
-6. `package.json`: `@nestjs/core`/`express`/`hono`/`koa`
+5. `**/src/main.rs` with `actix_web` → `"actix"` | `axum::Router` → `"axum"` | `rocket::build()` → `"rocket"`
+6. `Cargo.toml`: `actix-web`/`axum`/`rocket`
+7. `requirements.txt`/`pyproject.toml`: `fastapi`/`django`/`flask`
+8. `package.json`: `@nestjs/core`/`express`/`hono`/`koa`
 
 ## Route extraction (per frontend framework)
 
@@ -56,6 +60,7 @@ Check in order, use first match:
 | Next.js | `app/` file system | `[param]` → `{param}` | layout auth, `middleware.ts` |
 | React | `createBrowserRouter`, `<Route>` | `:param` → `{param}` | Wrapper components |
 | SvelteKit | `src/routes/` file system | `[param]` → `{param}` | `+page.server.ts`, `hooks.server.ts` |
+| Angular | `Routes` arrays, lazy modules | `:param` → `{param}` | `canActivate` guards, `data.role` |
 
 ## Endpoint extraction (per backend framework)
 
@@ -66,6 +71,16 @@ Check in order, use first match:
 | Django REST | `urlpatterns` + ViewSets | `permission_classes` | `serializer_class` |
 | NestJS | `@Get/@Post` decorators | `@UseGuards`, `@Roles` | `@ApiResponse({ type })` |
 | Next.js API | `app/api/**/route.ts` exports | Handler auth checks | null |
+| Flask | `@app.route()`, Blueprints | `@login_required`, `@roles_required` | `flask-marshmallow` |
+| Hono | `app.get/post/...` | `jwt()`, `bearerAuth()` | `zValidator()` |
+| Koa | `router.get/post/...` | `koa-jwt`, `koa-passport` | null |
+| Actix-web | `#[get]`/`#[post]` macros | `actix-web-grants`, extractors | Return type structs |
+| Axum | `Router::new().route()` | `Extension<Claims>`, middleware | `Json<Type>` return |
+| Rocket | `#[get]`/`#[post]` attributes | Request guards | `Json<Type>` return |
+
+## OpenAPI / Swagger spec import
+
+If `openapi.json`/`.yaml`/`swagger.json` exists, parse `paths` for endpoints and `components.schemas` for schemas. Merge with code-parsed data (code takes precedence for duplicates).
 
 ## Schema extraction
 
@@ -74,6 +89,11 @@ Run ALL applicable parsers:
 - **Zod**: `z.object({})` → chain methods (`.optional()`, `.nullable()`)
 - **TypeScript**: `interface X {}` / `type X = {}` → TS field types
 - **Django serializers**: `class X(ModelSerializer)` → Meta.fields
+- **Rust serde**: `#[derive(Serialize)]` structs → Rust field types, serde attributes
+
+## Static i18n analysis
+
+Detect i18n system (vue-i18n, react-i18next, next-intl, @ngx-translate, fluent-rs). Parse locale files for defined keys. Scan code for used keys. Compute missing/unused keys and coverage metric. Output `i18n` manifest field.
 
 ## Multi-service detection
 
@@ -85,15 +105,16 @@ Run ALL applicable parsers:
 ## Auth methods
 
 | Method | Detection | Credential handling |
-|--------|-----------|-------------------|
+|--------|-----------|-------------------:|
 | JWT | `python-jose`, `jsonwebtoken`, `@auth/core` | Extract `access_token` from login response |
 | NextAuth | `next-auth` deps, `[...nextauth]/route.ts` | Session cookie from login |
 | Session | `express-session`, `SessionMiddleware` | Session cookie from login |
 | API key | `x-api-key` patterns | Send header directly |
+| OAuth PKCE | `authorization_code`, `code_verifier`, `openid-client` | PKCE challenge → code exchange → Bearer token |
 
 ## ORM cascade detection
 
-SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose — extract cascade relationships for risk scoring.
+SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM — extract cascade relationships for risk scoring.
 
 ## Output path
 

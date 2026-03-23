@@ -2,6 +2,23 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.5.0] - 2026-03-24
+
+### Added
+- **Rust full support** — Actix-web, Axum, and Rocket endpoint parsers; Rust serde struct schema parser (`#[derive(Serialize)]` with serde attributes, utoipa `ToSchema`); Diesel and SeaORM cascade detection
+- **Angular route parser** — full parser for `Routes` arrays, `canActivate`/`canActivateChild` guards, lazy-loaded modules
+- **Flask endpoint parser** — `@app.route()`, Blueprints, `flask-login`, `flask-jwt-extended`, `flask-marshmallow`
+- **Hono endpoint parser** — `app.get/post/...`, `jwt()` middleware, `zValidator()` schema linking
+- **Koa endpoint parser** — `koa-router`, `koa-jwt`/`koa-passport`/`koa-session` middleware
+- **OpenAPI / Swagger spec import** — reads `openapi.json`/`.yaml` as primary or supplementary endpoint and schema source; merges with code-parsed data
+- **Static i18n analysis** — cross-references locale files (JSON/YAML/FTL) with code usage (`$t()`, `t()`, `useTranslation()`, etc.) to find missing and unused translation keys; adds `i18n` manifest section with coverage metric
+- **OAuth PKCE auth** — full Authorization Code with PKCE flow for both API sweeper (curl-based code exchange) and browser sweeper (Playwright-based authorize → consent → redirect → token)
+- **Diesel ORM cascade detection** — `ON DELETE CASCADE` in migrations, `joinable!` macros
+- **SeaORM cascade detection** — `#[sea_orm(on_delete = "Cascade")]`, relation enums
+
+### Fixed
+- **Known Limitations table** — removed stale v1.0.0 entries ("JWT auth only", "Vue 3 + FastAPI only") that no longer apply
+
 ## [1.4.0] - 2026-03-23
 
 ### Added

@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.4.0** | Vue 3 + FastAPI | JWT auth | Playwright MCP
+> **v1.5.0** | Python + TypeScript + Rust | 8 backend frameworks + OpenAPI | 5 auth methods | Playwright MCP
 
 ---
 
@@ -417,56 +417,72 @@ After each sweep, you get a quick summary:
 
 ## Framework Support
 
-### Frontend Routing
+### Frontend Routing (6 parsers)
 
-| Framework | Status | Route Source |
-|-----------|--------|-------------|
-| **Vue 3** | Full parser | Vue Router (`router/index.ts`) with `meta.role` guards |
-| **Nuxt 3** | Full parser | File-system routing (`pages/`) with `definePageMeta` |
-| **Next.js** | Full parser | App Router (`app/`) with layout auth, also API routes |
-| **React Router** | Full parser | `createBrowserRouter`, `<Route>` JSX, wrapper auth |
-| **SvelteKit** | Full parser | File-system routing (`src/routes/`) with server hooks |
-| **Angular** | Detected | Detection only — manual entries needed |
+| Framework | Language | Status | Route Source |
+|-----------|----------|--------|-------------|
+| **Vue 3** | JS/TS | Full parser | Vue Router (`router/index.ts`) with `meta.role` guards |
+| **Nuxt 3** | JS/TS | Full parser | File-system routing (`pages/`) with `definePageMeta` |
+| **Next.js** | JS/TS | Full parser | App Router (`app/`) with layout auth, also API routes |
+| **React Router** | JS/TS | Full parser | `createBrowserRouter`, `<Route>` JSX, wrapper auth |
+| **SvelteKit** | JS/TS | Full parser | File-system routing (`src/routes/`) with server hooks |
+| **Angular** | TypeScript | Full parser | `Routes` arrays, `canActivate` guards, lazy-loaded modules |
 
-### Backend API
+### Backend API (8 parsers + OpenAPI)
 
-| Framework | Status | Endpoint Source |
-|-----------|--------|----------------|
-| **FastAPI** | Full parser | `@router` decorators, `Depends()` auth, `response_model` |
-| **Express.js** | Full parser | `router.get/post/...`, middleware auth patterns |
-| **Django REST** | Full parser | `urlpatterns`, `ViewSet`, `permission_classes` |
-| **NestJS** | Full parser | `@Controller`, `@Get/@Post`, `@UseGuards`, `@Roles` |
-| **Next.js API** | Full parser | `app/api/` route handlers (`GET`, `POST` exports) |
-| **Flask** | Detected | Detection only — manual entries needed |
-| **Hono** / **Koa** | Detected | Detection only — manual entries needed |
+| Framework | Language | Status | Endpoint Source |
+|-----------|----------|--------|----------------|
+| **FastAPI** | Python | Full parser | `@router` decorators, `Depends()` auth, `response_model` |
+| **Express.js** | JS/TS | Full parser | `router.get/post/...`, middleware auth patterns |
+| **Django REST** | Python | Full parser | `urlpatterns`, `ViewSet`, `permission_classes` |
+| **NestJS** | TypeScript | Full parser | `@Controller`, `@Get/@Post`, `@UseGuards`, `@Roles` |
+| **Next.js API** | JS/TS | Full parser | `app/api/` route handlers (`GET`, `POST` exports) |
+| **Flask** | Python | Full parser | `@app.route()`, Blueprints, `flask-login`/`flask-jwt-extended` |
+| **Hono** | JS/TS | Full parser | `app.get/post/...`, `jwt()` middleware, `zValidator()` |
+| **Koa** | JS/TS | Full parser | `koa-router`, `koa-jwt`/`koa-passport` middleware |
+| **Actix-web** | Rust | Full parser | `#[get]`/`#[post]` macros, `web::scope`, `actix-web-grants` |
+| **Axum** | Rust | Full parser | `Router::new().route()`, `Extension<Claims>`, tower middleware |
+| **Rocket** | Rust | Full parser | `#[get]`/`#[post]` attributes, request guards, `.mount()` |
+| **OpenAPI/Swagger** | Any | Full import | `openapi.json`/`.yaml` — paths, schemas, security defs |
 
-### Schema Validation
+### Schema Validation (5 parsers)
 
-| System | Status | Source |
-|--------|--------|--------|
-| **Pydantic v2** | Full parser | `BaseModel` classes with field annotations |
-| **Zod** | Full parser | `z.object()` definitions with chain methods |
-| **TypeScript** | Full parser | `interface` and `type` declarations |
-| **Django serializers** | Full parser | `ModelSerializer` with Meta class |
+| System | Language | Source |
+|--------|----------|--------|
+| **Pydantic v2** | Python | `BaseModel` classes with field annotations |
+| **Zod** | TypeScript | `z.object()` definitions with chain methods |
+| **TypeScript** | TypeScript | `interface` and `type` declarations |
+| **Django serializers** | Python | `ModelSerializer` with Meta class |
+| **Rust serde** | Rust | `#[derive(Serialize)]` structs, serde attributes, utoipa `ToSchema` |
 
-### Auth Methods
+### Auth Methods (5)
 
 | Method | API Sweep | Browser Sweep |
 |--------|-----------|---------------|
-| **JWT** | `Authorization: Bearer` header | Token injection |
-| **NextAuth / Auth.js** | Session cookie from login | Form-based sign-in |
-| **Session / cookie** | `Cookie` header from login | Form-based login |
+| **JWT** | `Authorization: Bearer` header | Token injection via localStorage |
+| **NextAuth / Auth.js** | Session cookie from login (cookie jar) | Form-based sign-in |
+| **Session / cookie** | `Cookie` header from login (cookie jar) | Form-based login |
 | **API key** | `x-api-key` header | N/A |
+| **OAuth PKCE** | PKCE challenge + code exchange → Bearer token | Navigate to authorize → fill form → consent → redirect → token |
 
-### ORM Cascade Detection
+### ORM Cascade Detection (7)
 
-| ORM | Cascade Pattern |
-|-----|----------------|
-| **SQLAlchemy** | `relationship(cascade="all, delete-orphan")` |
-| **Django ORM** | `ForeignKey(on_delete=models.CASCADE)` |
-| **Prisma** | `@relation(onDelete: Cascade)` |
-| **TypeORM** | `@ManyToOne({ onDelete: 'CASCADE' })` |
-| **Mongoose** | `pre('deleteOne')` hooks |
+| ORM | Language | Cascade Pattern |
+|-----|----------|----------------|
+| **SQLAlchemy** | Python | `relationship(cascade="all, delete-orphan")` |
+| **Django ORM** | Python | `ForeignKey(on_delete=models.CASCADE)` |
+| **Prisma** | TypeScript | `@relation(onDelete: Cascade)` |
+| **TypeORM** | TypeScript | `@ManyToOne({ onDelete: 'CASCADE' })` |
+| **Mongoose** | JS/TS | `pre('deleteOne')` hooks |
+| **Diesel** | Rust | `ON DELETE CASCADE` in migrations, `joinable!` macros |
+| **SeaORM** | Rust | `#[sea_orm(on_delete = "Cascade")]`, relation enums |
+
+### Cross-Cutting Analysis
+
+| Feature | Description |
+|---------|-------------|
+| **Static i18n analysis** | Cross-references locale files with code usage (`$t()`, `t()`, `useTranslation()`, etc.) to find missing and unused translation keys |
+| **OpenAPI spec import** | Reads `openapi.json`/`.yaml` as primary or supplementary endpoint/schema source |
 
 ### Browser Automation
 
@@ -474,11 +490,10 @@ Playwright MCP (Chromium, Firefox, WebKit)
 
 ### Planned
 
-- Angular route parser
-- Flask / Hono / Koa endpoint parsers
-- OpenAPI spec import (skip manifest generation)
-- Static i18n analysis
-- OAuth PKCE browser flow
+- Remix route/action parser
+- gRPC / tRPC endpoint discovery
+- GraphQL schema introspection
+- OpenAPI auto-generation from code annotations
 
 ---
 
@@ -533,11 +548,11 @@ Sandbox mode (`--sandbox`) executes destructive actions (DELETE, bulk operations
 
 | Limitation | Workaround |
 |------------|------------|
-| **JWT auth only** (v1) | Session cookies, CSRF tokens, and OAuth PKCE are not supported |
-| **Vue 3 + FastAPI only** (v1) | Other frameworks produce empty manifests — endpoints/routes must be added manually |
-| **i18n coverage** | Browser sweep catches missing keys during navigation; keys behind modals or conditional UI may not trigger |
-| **Complex Pydantic models** | Deep inheritance, `computed_field`, and runtime validators may not parse — use `schemaOverride` |
+| **i18n coverage** | Static analysis catches most missing keys; keys behind modals or conditional UI may be missed — browser sweep provides additional runtime coverage |
+| **Complex Pydantic/serde models** | Deep inheritance, `computed_field`, and complex serde attributes may not fully parse — use `schemaOverride` |
 | **Playwright required for browser sweep** | Falls back to API-only mode if Playwright MCP is unavailable |
+| **OAuth PKCE provider variance** | OAuth login form differs per provider; Sentinel uses heuristic selectors — may need manual credential configuration for non-standard providers |
+| **OpenAPI spec completeness** | If the spec is partial or outdated, some endpoints may be missed or have incorrect schemas — code-parsed endpoints take precedence when both sources exist |
 
 ---
 
