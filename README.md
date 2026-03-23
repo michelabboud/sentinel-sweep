@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.7.0** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
+> **v1.7.1** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
 
 ---
 
@@ -504,6 +504,7 @@ After each sweep, you get a quick summary:
 | **Migration drift detection** | Compares ORM models against migrations for Alembic, Django, Prisma, Laravel, Diesel — flags missing migrations and orphaned columns |
 | **Rate limiting detection** | Maps protected vs unprotected endpoints, flags public endpoints without rate limits |
 | **Security headers audit** | Checks HSTS, CSP, X-Content-Type-Options, CORS wildcards, cookie flags, server info disclosure |
+| **CSS/Tailwind dead class analysis** | Detects unused Tailwind utilities, CSS Module dead classes, plain CSS orphaned selectors; coverage metric |
 
 ### Platform Features
 
@@ -524,10 +525,10 @@ Playwright MCP (Chromium, Firefox, WebKit)
 
 ### Planned
 
-- CSS/Tailwind dead class analysis
 - Database query N+1 detection
 - API response time percentile tracking
 - Multi-language i18n completeness matrix
+- Dependency vulnerability scanning
 
 ---
 

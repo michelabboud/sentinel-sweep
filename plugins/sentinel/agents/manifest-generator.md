@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.7.0
+version: 1.7.1
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -1627,6 +1627,75 @@ Add `rateLimiting` field to manifest. Set to `null` if no rate limiting detected
 
 ---
 
+## Section 6.12: CSS / Tailwind Dead Class Analysis
+
+Detect unused CSS classes and Tailwind utilities in the codebase. This helps identify bloated stylesheets and stale design tokens.
+
+### Detect CSS System
+
+1. **Tailwind CSS**: Check `package.json` for `tailwindcss`. Use Glob for `**/tailwind.config.*`, `**/postcss.config.*` with Tailwind plugin.
+2. **CSS Modules**: Use Glob for `**/*.module.css`, `**/*.module.scss`.
+3. **Plain CSS / SCSS**: Use Glob for `**/styles/*.css`, `**/styles/*.scss`, `**/globals.css`, `**/app.css`.
+4. **Styled-components / Emotion**: Check `package.json` for `styled-components` or `@emotion/styled`. These are runtime — skip dead class analysis (classes are generated dynamically).
+
+If no CSS system detected or only runtime CSS-in-JS, skip this section and set `deadCss` to `null`.
+
+### Tailwind Dead Class Analysis
+
+1. **Extract all used Tailwind classes from templates**: Scan all component files (`**/*.tsx`, `**/*.jsx`, `**/*.vue`, `**/*.svelte`, `**/*.html`) for `class=`, `className=`, `classList`, `cn(`, `clsx(`, `cva(`, `tv(` patterns. Extract all class name strings.
+
+2. **Parse template literals and conditional classes**: Handle:
+   - Static: `className="flex items-center gap-2"`
+   - Conditional: `className={active ? 'bg-blue-500' : 'bg-gray-500'}`
+   - `cn()` / `clsx()` calls: `cn('flex', isOpen && 'block', 'hidden')`
+   - `cva()` variants: extract all variant class values
+
+3. **Build used-classes set**: Flatten all extracted class names into a single set. Store as `usedClasses`.
+
+4. **Check Tailwind safelist**: Read `tailwind.config.*` for `safelist` entries — these classes are intentionally preserved even if unused in templates.
+
+5. **Check for dynamic class construction**: Use Grep for patterns like `` `text-${color}-500` `` or `'bg-' + variant`. If dynamic construction is found, add a caveat to the output — dynamic classes cannot be statically analyzed.
+
+### CSS Module Dead Class Analysis
+
+1. For each `.module.css` / `.module.scss` file, extract all class definitions (`.className { ... }`).
+2. Find the importing component file (the file that `import styles from './Component.module.css'`).
+3. Scan the component for `styles.className` references.
+4. Classes defined in the module but never referenced as `styles.X` → dead class.
+
+### Plain CSS / SCSS Dead Class Analysis
+
+1. Parse all `.css` / `.scss` files for class selectors (`.className`, `.btn-primary`, etc.).
+2. Build a `definedClasses` set from all stylesheets.
+3. Scan all template/component files for references to these class names.
+4. Classes in `definedClasses` but never referenced in any template → candidate dead class.
+
+**Caveat**: Plain CSS analysis has higher false-positive rates because classes may be used dynamically, in third-party components, or in server-rendered HTML. Mark results as `"confidence": "low"` for plain CSS vs `"confidence": "high"` for CSS Modules.
+
+### Manifest Output
+
+```json
+{
+  "deadCss": {
+    "system": "tailwind",
+    "totalClasses": 342,
+    "usedClasses": 298,
+    "deadClasses": [
+      { "class": "text-purple-900", "source": "globals.css:45", "confidence": "high" },
+      { "class": "animate-pulse-slow", "source": "tailwind.config.ts (custom)", "confidence": "high" }
+    ],
+    "dynamicWarning": true,
+    "coverage": 0.87
+  }
+}
+```
+
+`coverage` = `usedClasses / totalClasses`. A coverage of 1.0 means no dead classes detected.
+
+Set `deadCss` to `null` if no CSS system detected or only runtime CSS-in-JS is used.
+
+---
+
 ## Section 7: CRUD Flow Detection
 
 Automatically detect CRUD flows by analyzing the `endpoints` array.
@@ -1833,7 +1902,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.7.0
+- **Name**: Manifest Generator v1.7.1
 - **Specialty**: Codebase analysis for QA manifest generation — 7 frontend, 14+ backend (5 languages + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, 8 analyzers (i18n, a11y, dead code, WebSocket, versioning, migration drift, rate limiting), 5 auth methods, 9 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus

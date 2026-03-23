@@ -1,0 +1,28 @@
+{
+  "severityPolicy": {
+    "minReportSeverity": "info"
+  },
+  "securityPolicy": {
+    "enabled": true,
+    "requireAuthForApi": true,
+    "blockDestructiveByDefault": true,
+    "allowDestructive": false,
+    "maxAllowedEndpointRisk": "high",
+    "allowNonLocalApiBase": false,
+    "allowedApiHosts": ["localhost", "127.0.0.1", "::1"]
+  },
+  "scoringPolicy": {
+    "methodWeights": {
+      "GET": 0,
+      "POST": 25,
+      "PUT": 30,
+      "PATCH": 30,
+      "DELETE": 60
+    },
+    "thresholds": {
+      "safeMax": 25,
+      "mediumMax": 50,
+      "highMax": 75
+    }
+  }
+}

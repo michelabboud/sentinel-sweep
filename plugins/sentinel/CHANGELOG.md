@@ -2,6 +2,11 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.7.1] - 2026-03-24
+
+### Added
+- **CSS/Tailwind dead class analysis** — Section 6.12: detects unused Tailwind utilities (via template scanning of `className`, `cn()`, `clsx()`, `cva()`, `tv()`), CSS Module dead classes (`styles.X` reference checking), and plain CSS orphaned selectors. Handles safelists, dynamic class warnings, and confidence levels. Produces `deadCss` manifest field with coverage metric.
+
 ## [1.7.0] - 2026-03-24
 
 ### Added
