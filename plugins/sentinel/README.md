@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.6.0** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
+> **v1.6.1** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
 
 ---
 

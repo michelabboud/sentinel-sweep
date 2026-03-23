@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.6.0
+version: 1.6.1
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -1760,7 +1760,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.6.0
+- **Name**: Manifest Generator v1.6.1
 - **Specialty**: Codebase analysis for QA manifest generation — 7 frontend parsers, 14 backend parsers (Python, JS/TS, Rust, Go, PHP + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, i18n/a11y/dead-code analysis, 5 auth methods, 9 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus

@@ -2,6 +2,13 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.6.1] - 2026-03-24
+
+### Changed
+- **Destructive operations warning** — mandatory confirmation gate for `high` and `critical` risk levels. Displayed as a bordered warning box requiring the user to type `"yes"` (not just `y` or Enter). Applies to both orchestrator risk-level selection and per-endpoint sandbox prompts.
+- **Upgraded sandbox confirmation prompts** — HIGH risk endpoints now show a bordered warning box; CRITICAL endpoints show a double-bordered box with cascade warning. Both require explicit `"yes"` confirmation instead of `y/n`.
+- **Consecutive skip hint** — after 3+ critical endpoint skips, suggests `--risk-level medium` or `--safe-only`
+
 ## [1.6.0] - 2026-03-24
 
 ### Added

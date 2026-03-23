@@ -1,6 +1,6 @@
 ---
 name: run
-version: 1.6.0
+version: 1.6.1
 description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:sentinel-setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
 argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
@@ -32,7 +32,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.6.0 — Automated QA Sweep for Web Applications
+Sentinel v1.6.1 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -158,7 +158,7 @@ Set `isMultiService = true` if `settings.services` has 2+ entries OR if the mani
 
 If `safeOnly` is `true`, set `settings.riskPolicy.maxRiskLevel = "safe"`.
 
-Otherwise, if `riskLevelOverride` is not null, set `settings.riskPolicy.maxRiskLevel = riskLevelOverride`.
+Otherwise, if `riskLevelOverride` is not null, set `settings.riskPolicy.maxRiskLevel = riskLevelOverride`. **If the override is `"high"` or `"critical"`, show the Destructive Operations Warning** (defined below) and wait for explicit `"yes"` confirmation before proceeding.
 
 Otherwise (no flag provided), prompt the user to choose a risk level:
 
@@ -176,8 +176,50 @@ Choose [1-4] (press Enter for medium):
 Wait for the user's response:
 - If the user presses Enter (empty input) or chooses `2`: keep `settings.riskPolicy.maxRiskLevel = "medium"`.
 - If the user chooses `1`: set `settings.riskPolicy.maxRiskLevel = "safe"`.
-- If the user chooses `3`: set `settings.riskPolicy.maxRiskLevel = "high"`.
-- If the user chooses `4`: set `settings.riskPolicy.maxRiskLevel = "critical"`.
+- If the user chooses `3`: set `settings.riskPolicy.maxRiskLevel = "high"`. **Show the destructive operations warning** (see below).
+- If the user chooses `4`: set `settings.riskPolicy.maxRiskLevel = "critical"`. **Show the destructive operations warning** (see below).
+
+### Destructive Operations Warning
+
+**MANDATORY**: Whenever the effective risk level is set to `"high"` or `"critical"` — whether by interactive prompt (choices 3/4), by `--risk-level high`/`--risk-level critical` flag, or by `--sandbox` mode — you MUST display this warning and wait for explicit confirmation before proceeding:
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║   ⚠  WARNING — DESTRUCTIVE OPERATIONS AHEAD  ⚠                      ║
+║                                                                      ║
+║   Risk level: {effectiveRiskLevel}                                   ║
+║                                                                      ║
+║   THIS SWEEP WILL EXECUTE DELETE, BULK, AND CASCADE OPERATIONS       ║
+║   AGAINST YOUR DATABASE. DATA LOSS IS POSSIBLE AND MAY BE            ║
+║   IRREVERSIBLE.                                                      ║
+║                                                                      ║
+║   BEFORE CONTINUING, VERIFY:                                         ║
+║                                                                      ║
+║     1. You are NOT connected to a production database                ║
+║     2. You have a recent backup or can re-seed your data             ║
+║     3. No other users are relying on this environment right now      ║
+║                                                                      ║
+║   Sentinel will test DELETE endpoints, cascade deletions, bulk       ║
+║   operations, and purge actions at this risk level. Test records     ║
+║   will be created and destroyed. Existing data may be affected       ║
+║   by cascade relationships.                                          ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+Type "yes" to confirm, or anything else to abort:
+```
+
+Wait for the user's response. If the user types exactly `yes` (case-insensitive), proceed. For ANY other response (including `y`, `ok`, Enter, etc.), abort the sweep:
+
+```
+Sweep aborted. No actions were taken.
+
+To run a safe sweep instead: /sentinel:run sweep --safe-only
+To run with medium risk (no deletes): /sentinel:run sweep
+```
+
+**This warning cannot be skipped, suppressed, or auto-confirmed.** It applies to both `api` and `sweep` subcommands.
 
 Store the final effective risk level as `effectiveRiskLevel = settings.riskPolicy.maxRiskLevel` for display in the report.
 
@@ -777,7 +819,7 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.6.0
+**Name**: Sentinel v1.6.1
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, i18n gaps, a11y issues, dead endpoints
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -808,7 +850,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.6.0. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.6.1. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---
