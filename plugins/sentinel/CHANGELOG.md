@@ -2,6 +2,12 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.7.2] - 2026-03-24
+
+### Changed
+- **Tailwind v3 + v4 explicit support** — Dead class analysis now differentiates between Tailwind v3 (JS config, `content` array, `theme.extend`, `safelist`) and v4 (CSS-first `@theme`, `@utility`, `@variant`, `@source`). v4 analysis parses `--color-*`, `--font-*`, `--breakpoint-*`, `--animate-*` tokens, `@utility` custom classes, `@variant` custom prefixes, and handles `@theme reference`/`@theme inline` modifiers. Breakpoint detection also updated with explicit v3 vs v4 paths.
+- **`deadCss` manifest output expanded** — Now includes `tailwindVersion` (3 or 4), `deadTokens` (v4 `@theme` tokens never used), `customUtilities` (v4 `@utility`), `customVariants` (v4 `@variant`), `safelistCount` (v3), `configExtensions` (v3).
+
 ## [1.7.1] - 2026-03-24
 
 ### Added

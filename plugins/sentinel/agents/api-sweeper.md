@@ -3,7 +3,7 @@ name: api-sweeper
 description: "Use this agent to perform API-only QA sweeps. Tests endpoint health, RBAC enforcement, CRUD flow correctness, and response schema compliance. Reads sentinel-manifest.json for configuration. Examples: <example>Context: User runs /sentinel api\\nassistant: Dispatching api-sweeper for endpoint testing\\n<commentary>API sweep triggered directly.</commentary></example>"
 model: sonnet
 tools: ["Read", "Bash", "Write", "Glob", "Grep"]
-version: 1.7.1
+version: 1.7.2
 triggers:
   keywords: ["sentinel api", "api sweep", "endpoint testing", "RBAC test", "schema compliance"]
   files: ["sentinel-manifest.json", "api-findings.json"]
@@ -263,7 +263,7 @@ echo $DATABASE_URL | grep -oP '\/([^?]+)' | tail -1
 ```
 If the database name does NOT contain `dev`, `test`, `staging`, or `local`, sandbox mode is blocked.
 
-3. Check if the API base URL (from manifest) is `localhost`, `1.7.1.0.1`, or contains `dev` or `staging`. If none of these match, sandbox mode is blocked.
+3. Check if the API base URL (from manifest) is `localhost`, `1.7.2.0.1`, or contains `dev` or `staging`. If none of these match, sandbox mode is blocked.
 
 If ANY check fails, print:
 
@@ -756,7 +756,7 @@ Respond: "🔌 Hello! I'm **API Sweeper** — I test endpoints for health, RBAC,
 
 If the user's message is `hello api-sweeper ID`:
 Respond with full profile:
-- **Name**: API Sweeper v1.7.1
+- **Name**: API Sweeper v1.7.2
 - **Specialty**: API-only QA sweeps — endpoint health, RBAC enforcement, CRUD flow correctness, response schema validation, multi-auth (JWT, session, API key, OAuth PKCE)
 - **When to use me**: When you need to test API endpoints without browser automation
 - **Tools/Models**: Read, Bash, Write, Glob, Grep / sonnet

@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.7.1
+version: 1.7.2
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -1631,30 +1631,107 @@ Add `rateLimiting` field to manifest. Set to `null` if no rate limiting detected
 
 Detect unused CSS classes and Tailwind utilities in the codebase. This helps identify bloated stylesheets and stale design tokens.
 
-### Detect CSS System
+### Detect CSS System and Tailwind Version
 
-1. **Tailwind CSS**: Check `package.json` for `tailwindcss`. Use Glob for `**/tailwind.config.*`, `**/postcss.config.*` with Tailwind plugin.
-2. **CSS Modules**: Use Glob for `**/*.module.css`, `**/*.module.scss`.
-3. **Plain CSS / SCSS**: Use Glob for `**/styles/*.css`, `**/styles/*.scss`, `**/globals.css`, `**/app.css`.
-4. **Styled-components / Emotion**: Check `package.json` for `styled-components` or `@emotion/styled`. These are runtime — skip dead class analysis (classes are generated dynamically).
+1. **Tailwind CSS v4**: Use Grep across CSS files for `@import "tailwindcss"` or `@import 'tailwindcss'` or `@theme {`. Also check `package.json` — if `tailwindcss` version starts with `4.` → v4. If v4 detected, set `tailwindVersion = 4`.
+2. **Tailwind CSS v3**: Use Glob for `**/tailwind.config.js`, `**/tailwind.config.ts`, `**/tailwind.config.cjs`, `**/tailwind.config.mjs`. If found AND not v4 → v3. Check `package.json` for `tailwindcss` version starting with `3.` → v3. Set `tailwindVersion = 3`.
+3. **CSS Modules**: Use Glob for `**/*.module.css`, `**/*.module.scss`.
+4. **Plain CSS / SCSS**: Use Glob for `**/styles/*.css`, `**/styles/*.scss`, `**/globals.css`, `**/app.css`.
+5. **Styled-components / Emotion**: Check `package.json` for `styled-components` or `@emotion/styled`. These are runtime — skip dead class analysis (classes are generated dynamically).
 
 If no CSS system detected or only runtime CSS-in-JS, skip this section and set `deadCss` to `null`.
 
-### Tailwind Dead Class Analysis
+### Tailwind v3 Dead Class Analysis (`tailwindVersion = 3`)
 
-1. **Extract all used Tailwind classes from templates**: Scan all component files (`**/*.tsx`, `**/*.jsx`, `**/*.vue`, `**/*.svelte`, `**/*.html`) for `class=`, `className=`, `classList`, `cn(`, `clsx(`, `cva(`, `tv(` patterns. Extract all class name strings.
+Tailwind v3 uses a JavaScript config file with a `content` array that tells the purger where to scan for classes.
 
-2. **Parse template literals and conditional classes**: Handle:
-   - Static: `className="flex items-center gap-2"`
-   - Conditional: `className={active ? 'bg-blue-500' : 'bg-gray-500'}`
-   - `cn()` / `clsx()` calls: `cn('flex', isOpen && 'block', 'hidden')`
-   - `cva()` variants: extract all variant class values
+**Step 1: Read the content sources.**
+Read `tailwind.config.*` and extract the `content` array (e.g., `['./src/**/*.{js,ts,jsx,tsx}', './index.html']`). These are the files Tailwind scans for class usage. If `content` is empty or missing, this is a misconfiguration — flag it as a warning.
 
-3. **Build used-classes set**: Flatten all extracted class names into a single set. Store as `usedClasses`.
+**Step 2: Extract defined classes (what Tailwind generates).**
+Tailwind v3 generates classes from:
+- **Core utilities**: `flex`, `grid`, `p-4`, `text-lg`, `bg-blue-500`, etc. (standard Tailwind utilities — assume all core utilities are "available").
+- **Custom utilities in config**: Read `theme.extend` in `tailwind.config.*` for custom colors, spacing, fonts, animations. These produce additional classes (e.g., `extend: { colors: { brand: '#ff0000' } }` → `bg-brand`, `text-brand`, `border-brand`).
+- **`@apply` directives**: Use Grep for `@apply` in CSS files. Extract the classes being applied — these count as "used".
+- **Plugins**: Check `plugins` array for Tailwind plugins (`@tailwindcss/forms`, `@tailwindcss/typography`, `daisyui`, etc.). Note them but don't attempt to enumerate their classes.
 
-4. **Check Tailwind safelist**: Read `tailwind.config.*` for `safelist` entries — these classes are intentionally preserved even if unused in templates.
+**Step 3: Extract used classes from templates.**
+Scan all files matching the `content` glob patterns for class usage:
+- `class=`, `className=`, `classList`, `cn(`, `clsx(`, `cva(`, `tv(` patterns.
+- Static: `className="flex items-center gap-2"`
+- Conditional: `className={active ? 'bg-blue-500' : 'bg-gray-500'}`
+- `cn()` / `clsx()` calls: `cn('flex', isOpen && 'block', 'hidden')`
+- `cva()` variants: extract all variant class values from each variant object.
+- `@apply` usage in CSS files also counts as "used".
 
-5. **Check for dynamic class construction**: Use Grep for patterns like `` `text-${color}-500` `` or `'bg-' + variant`. If dynamic construction is found, add a caveat to the output — dynamic classes cannot be statically analyzed.
+**Step 4: Check safelist.**
+Read `safelist` from `tailwind.config.*`. Entries may be strings (`'bg-red-500'`) or regex patterns (`{ pattern: /bg-(red|blue)-(100|200)/ }`). All safelisted classes are considered "used" regardless of template references.
+
+**Step 5: Detect custom classes in config that are never used.**
+For each custom extension in `theme.extend` (colors, spacing, fontSize, animation, etc.), generate the expected utility class names and check if they appear in the used-classes set. Custom classes defined but never used in templates → dead custom classes.
+
+**Step 6: Dynamic class warning.**
+Use Grep for template literal patterns like `` `text-${color}-500` `` or `'bg-' + variant`. If found, set `dynamicWarning = true`.
+
+---
+
+### Tailwind v4 Dead Class Analysis (`tailwindVersion = 4`)
+
+Tailwind v4 is CSS-first — no JavaScript config file. Configuration lives directly in CSS using `@theme`, `@utility`, `@variant`, and `@source` directives.
+
+**Step 1: Read the CSS entry point.**
+Use Glob for `**/app.css`, `**/globals.css`, `**/main.css`, or any CSS file containing `@import "tailwindcss"`. This is the Tailwind entry point.
+
+**Step 2: Parse `@theme` blocks for custom design tokens.**
+Read the entry CSS file and extract `@theme { ... }` blocks:
+```css
+@theme {
+  --color-brand: #ff6600;
+  --font-display: "Cal Sans", sans-serif;
+  --breakpoint-xs: 30rem;
+  --animate-fade-in: fade-in 0.3s ease-out;
+}
+```
+Each `--color-*` token generates utility classes (`bg-brand`, `text-brand`, `border-brand`).
+Each `--font-*` generates `font-display`.
+Each `--breakpoint-*` generates responsive prefixes (`xs:flex`).
+Each `--animate-*` generates `animate-fade-in`.
+
+**Step 3: Parse `@utility` directives for custom utilities.**
+```css
+@utility tab-4 {
+  tab-size: 4;
+}
+```
+Each `@utility` name becomes an available class.
+
+**Step 4: Parse `@variant` directives for custom variants.**
+```css
+@variant hocus (&:hover, &:focus);
+```
+Each `@variant` name becomes a usable prefix (e.g., `hocus:bg-blue-500`).
+
+**Step 5: Parse `@source` directives for content scanning.**
+Tailwind v4 auto-detects content sources, but explicit `@source` directives override:
+```css
+@source "../node_modules/@acme/ui/src/**/*.tsx";
+@source not "../src/legacy/**";
+```
+Use these to determine which files to scan for class usage. If no `@source` directives, scan all files in the project (excluding `node_modules`, `dist`, `.git`).
+
+**Step 6: Extract used classes from templates.**
+Same scanning logic as v3 Step 3 — scan all content source files for `className`, `cn()`, `clsx()`, `cva()`, `tv()` patterns. Also count `@apply` usage in CSS files.
+
+**Step 7: Check for `@theme inline` and `@theme reference`.**
+- `@theme inline` → tokens are inlined, no CSS custom properties generated.
+- `@theme reference` → tokens available as references only, not as utilities.
+- `@theme reference` tokens should NOT generate expected utility classes for dead class checking.
+
+**Step 8: Detect dead custom tokens.**
+For each custom token defined in `@theme` (that is not `reference`-only), generate the expected utility classes and check if they appear in the used-classes set. Tokens defined but never used → dead custom tokens.
+
+**Step 9: Dynamic class warning.**
+Same as v3 Step 6.
 
 ### CSS Module Dead Class Analysis
 
@@ -1678,17 +1755,25 @@ If no CSS system detected or only runtime CSS-in-JS, skip this section and set `
 {
   "deadCss": {
     "system": "tailwind",
+    "tailwindVersion": 4,
     "totalClasses": 342,
     "usedClasses": 298,
     "deadClasses": [
       { "class": "text-purple-900", "source": "globals.css:45", "confidence": "high" },
-      { "class": "animate-pulse-slow", "source": "tailwind.config.ts (custom)", "confidence": "high" }
+      { "class": "animate-fade-in", "source": "@theme (custom token --animate-fade-in)", "confidence": "high" }
     ],
+    "deadTokens": [
+      { "token": "--color-legacy-gray", "source": "app.css:12 (@theme)", "note": "Custom token never used as utility" }
+    ],
+    "customUtilities": ["tab-4"],
+    "customVariants": ["hocus"],
     "dynamicWarning": true,
     "coverage": 0.87
   }
 }
 ```
+
+For Tailwind v3, the output uses `"tailwindVersion": 3` and omits `deadTokens`, `customUtilities`, `customVariants` (these are v4-specific). Instead, v3 includes `"safelistCount": N` and `"configExtensions": ["colors.brand", "animation.fade-in"]`.
 
 `coverage` = `usedClasses / totalClasses`. A coverage of 1.0 means no dead classes detected.
 
@@ -1792,10 +1877,23 @@ Settings values override manifest defaults for `riskPolicy` and `breakpoints`.
 
 If settings.json uses the default breakpoints `[375, 768, 1280]` (i.e., the user hasn't customized them), attempt to auto-detect from Tailwind:
 
-1. Use Glob to find `**/tailwind.config.js` or `**/tailwind.config.ts` (exclude `node_modules`).
-2. If found, read the file and look for `theme.screens` or `theme.extend.screens` — extract numeric pixel values from entries like `'sm': '640px'`.
-3. Also use Grep to search CSS files for `@theme` blocks containing `--breakpoint-` custom properties (TailwindCSS v4 style).
-4. If custom breakpoints are found, use them instead of the defaults. Prioritize mobile-first widths.
+**Tailwind v3**:
+1. Use Glob for `**/tailwind.config.js`, `**/tailwind.config.ts`, `**/tailwind.config.cjs`, `**/tailwind.config.mjs`.
+2. Read the file and look for `theme.screens` or `theme.extend.screens` — extract numeric pixel values from entries like `'sm': '640px'`, `'md': '768px'`.
+3. Convert `rem` values to pixels (1rem = 16px): `'sm': '40rem'` → 640px.
+
+**Tailwind v4**:
+1. Use Grep to search CSS files for `@theme` blocks containing `--breakpoint-` custom properties:
+   ```css
+   @theme {
+     --breakpoint-xs: 30rem;
+     --breakpoint-sm: 40rem;
+     --breakpoint-md: 48rem;
+   }
+   ```
+2. Convert `rem` values to pixels. Extract all `--breakpoint-*` values.
+
+If custom breakpoints are found from either version, use them instead of the defaults. Prioritize mobile-first widths.
 
 **Priority order:** settings.json override > Tailwind auto-detection > hardcoded defaults `[375, 768, 1280]`.
 
@@ -1902,7 +2000,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.7.1
+- **Name**: Manifest Generator v1.7.2
 - **Specialty**: Codebase analysis for QA manifest generation — 7 frontend, 14+ backend (5 languages + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, 8 analyzers (i18n, a11y, dead code, WebSocket, versioning, migration drift, rate limiting), 5 auth methods, 9 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus

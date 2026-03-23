@@ -1,6 +1,6 @@
 ---
 name: sentinel-setup
-version: 1.7.1
+version: 1.7.2
 description: "Set up and configure Sentinel QA plugin — run /sentinel:run setup to check Playwright, detect frameworks, verify services, and configure settings. Use when you say 'sentinel setup', 'configure sentinel', 'check sentinel dependencies', 'install playwright', 'check QA environment'."
 context: fork
 author: Michel Abboud
@@ -12,7 +12,7 @@ license: Apache-2.0
 If `$ARGUMENTS` is `hello ID`, respond with:
 
 ```
-**Name**: Sentinel Setup v1.7.1
+**Name**: Sentinel Setup v1.7.2
 **Description**: Set up and configure Sentinel QA plugin — checks Playwright, detects frameworks, verifies services, and configures settings
 **How to invoke**: `/sentinel setup`
 **Checks performed**:
@@ -28,7 +28,7 @@ If `$ARGUMENTS` is `hello ID`, respond with:
 If `$ARGUMENTS` is `hello` (without `ID`), respond with:
 
 ```
-👋 Hello! I'm **Sentinel Setup** v1.7.1. Environment detection, Playwright check, framework detection, and settings configuration. Use `/sentinel setup hello ID` for the full guide.
+👋 Hello! I'm **Sentinel Setup** v1.7.2. Environment detection, Playwright check, framework detection, and settings configuration. Use `/sentinel setup hello ID` for the full guide.
 ```
 
 If `$ARGUMENTS` is `hello` or `hello ID`, stop after responding — do not proceed to the sections below.
