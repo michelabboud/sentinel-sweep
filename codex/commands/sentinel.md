@@ -1,6 +1,6 @@
 ---
 name: sentinel-codex-orchestrator
-version: 1.5.0-codex.1
+version: 1.6.0-codex.1
 description: Codex-native Sentinel orchestrator contract for setup, manifest, api, sweep, report, trends, diff, fix, and clean.
 ---
 

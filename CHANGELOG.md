@@ -2,6 +2,21 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.6.0] - 2026-03-24
+
+### Added
+- **Go full support** — Gin, Echo, and Chi endpoint parsers; Go struct schema parser (JSON tags, pointer nullability); GORM cascade detection
+- **PHP/Laravel full support** — Laravel route parser (`Route::get/post/apiResource`, Sanctum/Spatie auth); FormRequest validation schema parser; Eloquent API Resource parser; Eloquent cascade detection (migrations + model events)
+- **Remix route/action parser** — file-system routes (v2 flat conventions), `loader` (GET) and `action` (POST) function extraction with auth detection
+- **gRPC endpoint discovery** — `.proto` service/rpc parsing, message type → schema extraction
+- **tRPC endpoint discovery** — router procedure parsing (`query`/`mutation`), `protectedProcedure`/`adminProcedure` auth detection, Zod input/output linking
+- **GraphQL schema introspection** — SDL type/query/mutation parsing, code-first support (type-graphql, NestJS, Pothos), resolver auth detection, GraphQL type → schema extraction
+- **OpenAPI auto-generation from code annotations** — detects and extracts specs from utoipa (Rust), swagger-jsdoc (JS), drf-spectacular (Django), FastAPI auto-docs, NestJS Swagger, swag (Go), @hono/zod-openapi, rocket_okapi, flask-restx
+- **Accessibility (a11y) static analysis** — detects missing alt text, form labels, keyboard handlers, heading hierarchy, button text, tabIndex issues; produces `a11y` manifest section with score
+- **Dead endpoint/route detection** — cross-references frontend API calls (fetch, axios, SWR, tRPC, GraphQL) with backend endpoints to find dead endpoints and phantom frontend references
+- **GORM cascade detection** (Go) — `gorm:"constraint:OnDelete:CASCADE"` tags
+- **Eloquent cascade detection** (PHP) — migration `onDelete('cascade')`, model `deleting` events, `SoftDeletes` trait
+
 ## [1.5.0] - 2026-03-24
 
 ### Added

@@ -1,6 +1,6 @@
 ---
 name: api-sweeper-codex
-version: 1.5.0-codex.1
+version: 1.6.0-codex.1
 description: Codex-native API QA sweeper contract with multi-auth (incl. OAuth PKCE) and multi-service support.
 ---
 

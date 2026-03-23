@@ -1,6 +1,6 @@
 ---
 name: run
-version: 1.5.0
+version: 1.6.0
 description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:sentinel-setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
 argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
@@ -32,7 +32,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.5.0 — Automated QA Sweep for Web Applications
+Sentinel v1.6.0 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -777,8 +777,8 @@ Print: `"Cleaned {removeCount} runs. {remainingCount} runs remaining."`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.5.0
-**Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, missing i18n keys, and more
+**Name**: Sentinel v1.6.0
+**Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, i18n gaps, a11y issues, dead endpoints
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
   - `setup` — Check environment, install Playwright, detect framework, configure settings
@@ -794,19 +794,21 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
   - `hello ID` — This full profile
 **Flags**: `--sandbox`, `--dry-run`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--list`, `--severity`
 **Architecture**: Orchestrator + 3 agents (manifest-generator, api-sweeper, browser-sweeper) + setup skill
-**Languages**: Python, TypeScript/JavaScript, Rust
-**Frontend**: Vue 3, Nuxt 3, Next.js, React, SvelteKit, Angular
-**Backend**: FastAPI, Express, Django REST, NestJS, Next.js API, Flask, Hono, Koa, Actix-web, Axum, Rocket + OpenAPI import
-**Schemas**: Pydantic v2, Zod, TS interfaces, Django serializers, Rust serde structs
+**Languages**: Python, TypeScript/JavaScript, Rust, Go, PHP
+**Frontend**: Vue 3, Nuxt 3, Next.js, React, SvelteKit, Angular, Remix
+**Backend**: FastAPI, Express, Django REST, NestJS, Next.js API, Flask, Hono, Koa, Remix, Actix-web, Axum, Rocket, Gin, Echo, Chi, Laravel
+**API protocols**: REST, GraphQL, gRPC, tRPC + OpenAPI import/auto-gen
+**Schemas**: Pydantic v2, Zod, TS interfaces, Django serializers, Rust serde, Go structs, GraphQL types, Laravel FormRequest
 **Auth**: JWT, NextAuth, session/cookie, API key, OAuth PKCE
-**ORM cascade**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM
+**ORM cascade**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM, GORM, Eloquent
+**Cross-cutting**: i18n analysis, a11y analysis, dead endpoint detection
 **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0
 ```
 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.5.0. Automated QA sweep for Python, TypeScript, and Rust web apps — catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.6.0. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---

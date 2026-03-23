@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.5.0** | Python + TypeScript + Rust | 8 backend frameworks + OpenAPI | 5 auth methods | Playwright MCP
+> **v1.6.0** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
 
 ---
 
@@ -417,7 +417,7 @@ After each sweep, you get a quick summary:
 
 ## Framework Support
 
-### Frontend Routing (6 parsers)
+### Frontend Routing (7 parsers)
 
 | Framework | Language | Status | Route Source |
 |-----------|----------|--------|-------------|
@@ -427,8 +427,9 @@ After each sweep, you get a quick summary:
 | **React Router** | JS/TS | Full parser | `createBrowserRouter`, `<Route>` JSX, wrapper auth |
 | **SvelteKit** | JS/TS | Full parser | File-system routing (`src/routes/`) with server hooks |
 | **Angular** | TypeScript | Full parser | `Routes` arrays, `canActivate` guards, lazy-loaded modules |
+| **Remix** | JS/TS | Full parser | File-system routing (`app/routes/`) with v2 flat conventions, `loader`/`action` auth |
 
-### Backend API (8 parsers + OpenAPI)
+### Backend API (14 parsers + OpenAPI + GraphQL/gRPC/tRPC)
 
 | Framework | Language | Status | Endpoint Source |
 |-----------|----------|--------|----------------|
@@ -440,12 +441,20 @@ After each sweep, you get a quick summary:
 | **Flask** | Python | Full parser | `@app.route()`, Blueprints, `flask-login`/`flask-jwt-extended` |
 | **Hono** | JS/TS | Full parser | `app.get/post/...`, `jwt()` middleware, `zValidator()` |
 | **Koa** | JS/TS | Full parser | `koa-router`, `koa-jwt`/`koa-passport` middleware |
+| **Remix** | JS/TS | Full parser | `loader` (GET) + `action` (POST) exports with auth detection |
 | **Actix-web** | Rust | Full parser | `#[get]`/`#[post]` macros, `web::scope`, `actix-web-grants` |
 | **Axum** | Rust | Full parser | `Router::new().route()`, `Extension<Claims>`, tower middleware |
 | **Rocket** | Rust | Full parser | `#[get]`/`#[post]` attributes, request guards, `.mount()` |
-| **OpenAPI/Swagger** | Any | Full import | `openapi.json`/`.yaml` — paths, schemas, security defs |
+| **Gin** | Go | Full parser | `r.GET/POST/...`, group middleware, handler struct types |
+| **Echo** | Go | Full parser | `e.GET/POST/...`, `middleware.JWT()`, group prefixes |
+| **Chi** | Go | Full parser | `r.Get/Post/...`, `.With()` per-route middleware, `{param}` native |
+| **Laravel** | PHP | Full parser | `Route::get/post/apiResource`, Sanctum/Spatie middleware |
+| **GraphQL** | Any | Full parser | SDL `Query`/`Mutation` types, resolver auth, type-graphql/NestJS/Pothos |
+| **gRPC** | Any | Full parser | `.proto` service/rpc definitions, message types as schemas |
+| **tRPC** | TypeScript | Full parser | `createTRPCRouter` procedures, `protectedProcedure`, Zod I/O |
+| **OpenAPI/Swagger** | Any | Full import | `openapi.json`/`.yaml` + auto-gen from utoipa, swagger-jsdoc, drf-spectacular, swag |
 
-### Schema Validation (5 parsers)
+### Schema Validation (8 parsers)
 
 | System | Language | Source |
 |--------|----------|--------|
@@ -454,6 +463,9 @@ After each sweep, you get a quick summary:
 | **TypeScript** | TypeScript | `interface` and `type` declarations |
 | **Django serializers** | Python | `ModelSerializer` with Meta class |
 | **Rust serde** | Rust | `#[derive(Serialize)]` structs, serde attributes, utoipa `ToSchema` |
+| **GraphQL types** | Any | SDL `type`/`input`/`enum` definitions |
+| **Go structs** | Go | Structs with `json:` tags, pointer nullability |
+| **Laravel** | PHP | `FormRequest` validation rules, API Resources, Eloquent `$casts` |
 
 ### Auth Methods (5)
 
@@ -465,7 +477,7 @@ After each sweep, you get a quick summary:
 | **API key** | `x-api-key` header | N/A |
 | **OAuth PKCE** | PKCE challenge + code exchange → Bearer token | Navigate to authorize → fill form → consent → redirect → token |
 
-### ORM Cascade Detection (7)
+### ORM Cascade Detection (9)
 
 | ORM | Language | Cascade Pattern |
 |-----|----------|----------------|
@@ -476,13 +488,17 @@ After each sweep, you get a quick summary:
 | **Mongoose** | JS/TS | `pre('deleteOne')` hooks |
 | **Diesel** | Rust | `ON DELETE CASCADE` in migrations, `joinable!` macros |
 | **SeaORM** | Rust | `#[sea_orm(on_delete = "Cascade")]`, relation enums |
+| **GORM** | Go | `gorm:"constraint:OnDelete:CASCADE"` struct tags |
+| **Eloquent** | PHP | Migration `onDelete('cascade')`, model `deleting` events, `SoftDeletes` |
 
-### Cross-Cutting Analysis
+### Cross-Cutting Analysis (4)
 
 | Feature | Description |
 |---------|-------------|
-| **Static i18n analysis** | Cross-references locale files with code usage (`$t()`, `t()`, `useTranslation()`, etc.) to find missing and unused translation keys |
-| **OpenAPI spec import** | Reads `openapi.json`/`.yaml` as primary or supplementary endpoint/schema source |
+| **Static i18n analysis** | Cross-references locale files with code usage to find missing/unused translation keys; coverage metric |
+| **Accessibility (a11y) analysis** | Detects missing alt text, form labels, keyboard handlers, heading hierarchy, button text; a11y score |
+| **Dead endpoint detection** | Cross-references frontend API calls with backend endpoints to find dead code and phantom references |
+| **OpenAPI auto-generation** | Extracts OpenAPI specs from code annotations (utoipa, swagger-jsdoc, drf-spectacular, swag, @hono/zod-openapi) |
 
 ### Browser Automation
 
@@ -490,10 +506,10 @@ Playwright MCP (Chromium, Firefox, WebKit)
 
 ### Planned
 
-- Remix route/action parser
-- gRPC / tRPC endpoint discovery
-- GraphQL schema introspection
-- OpenAPI auto-generation from code annotations
+- WebSocket endpoint detection
+- CSS/Tailwind dead class analysis
+- Database migration drift detection
+- API versioning analysis
 
 ---
 

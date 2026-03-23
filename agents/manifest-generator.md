@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.5.0
+version: 1.6.0
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -30,20 +30,20 @@ Check in this order. Use the FIRST match:
 
 1. Use Glob to search for `**/router/index.js` and `**/router/index.ts`. If found, the frontend framework is `"vue"`.
 2. Use Glob for `**/pages/**/*.vue` (Nuxt-style). If found AND `package.json` has `nuxt` dependency → `"nuxt"`.
-3. Use Glob for `**/src/routes/**/+page.svelte`. If found → `"sveltekit"`.
-4. Use Glob for `**/app/**/page.tsx` or `**/app/**/page.jsx` (Next.js App Router). If found AND `package.json` has `next` → `"nextjs"`.
-5. Use Glob for `**/src/App.tsx` and `**/src/App.jsx`. If found, read `package.json` to confirm:
+3. Use Glob for `**/app/routes/**/*.tsx` or `**/app/routes/**/*.jsx`. If found AND `package.json` has `@remix-run/react` or `remix` → `"remix"`.
+4. Use Glob for `**/src/routes/**/+page.svelte`. If found → `"sveltekit"`.
+5. Use Glob for `**/app/**/page.tsx` or `**/app/**/page.jsx` (Next.js App Router). If found AND `package.json` has `next` → `"nextjs"`.
+6. Use Glob for `**/src/App.tsx` and `**/src/App.jsx`. If found, read `package.json` to confirm:
    - If `react-router-dom` or `@tanstack/react-router` in deps → `"react"`.
-6. Use Glob for `**/package.json` in the project root. Read the file. Check `dependencies` and `devDependencies`:
+7. Use Glob for `**/package.json` in the project root. Read the file. Check `dependencies` and `devDependencies`:
    - Key `nuxt` present → `"nuxt"`
    - Key `next` present → `"nextjs"`
    - Key `vue` present → `"vue"`
    - Key `react` present → `"react"`
    - Key `svelte` or `@sveltejs/kit` present → `"sveltekit"`
    - Key `@angular/core` present → `"angular"`
-7. If no frontend framework is detected, set `app.framework.frontend` to `"none"`.
-
-**Note on Angular**: Unlike the "detected only" status in v1.3, Angular now has a full route parser (Section 3F).
+   - Key `@remix-run/react` or `remix` present → `"remix"`
+8. If no frontend framework is detected, set `app.framework.frontend` to `"none"`.
 
 ### Backend Detection
 
@@ -61,16 +61,22 @@ Check in this order. Use the FIRST match:
    - `actix-web` → `"actix"`
    - `axum` → `"axum"`
    - `rocket` → `"rocket"`
-7. Use Glob for `requirements.txt` or `pyproject.toml`. Check for:
+7. Use Glob for `**/main.go` or `**/cmd/**/*.go`. Read. Check imports:
+   - `github.com/gin-gonic/gin` → `"gin"`
+   - `github.com/labstack/echo` → `"echo"`
+   - `github.com/go-chi/chi` → `"chi"`
+8. Use Glob for `go.mod`. Check `require` block for gin/echo/chi modules.
+9. Use Glob for `**/routes/web.php` or `**/routes/api.php`. If found → `"laravel"`. Also check for `composer.json` with `laravel/framework`.
+10. Use Glob for `requirements.txt` or `pyproject.toml`. Check for:
    - `fastapi` → `"fastapi"`
    - `django` or `djangorestframework` → `"django"`
    - `flask` → `"flask"`
-8. Use Glob for `package.json`. Check for:
+11. Use Glob for `package.json`. Check for:
    - `@nestjs/core` → `"nestjs"`
    - `express` → `"express"`
    - `hono` → `"hono"`
    - `koa` → `"koa"`
-9. If no backend framework is detected, set `app.framework.backend` to `"none"`.
+12. If no backend framework is detected, set `app.framework.backend` to `"none"`.
 
 Store the detected values as `frontendFramework` and `backendFramework`.
 
@@ -356,6 +362,32 @@ Angular uses module-based or standalone routing.
    - If no guards → `null`.
 6. **Extract `view`**: From the component name (e.g., `UsersComponent` → `Users`).
 7. **Lazy-loaded modules**: For `loadChildren` or `loadComponent`, follow the import path and recursively parse routes from the lazy module.
+
+---
+
+### 3G: Remix (`frontendFramework = "remix"`)
+
+Remix uses file-system routing from `app/routes/`.
+
+1. Use Glob for `**/app/routes/**/*.tsx`, `**/app/routes/**/*.jsx`, `**/app/routes/**/*.ts`, `**/app/routes/**/*.js`. Exclude `node_modules`.
+2. For each file, convert the filename to a route path using Remix v2 flat-route conventions:
+   - `app/routes/_index.tsx` → `/`
+   - `app/routes/about.tsx` → `/about`
+   - `app/routes/users.tsx` → `/users` (also a layout if `users/` dir exists)
+   - `app/routes/users.$userId.tsx` → `/users/{userId}` (`$param` → `{param}`)
+   - `app/routes/admin.settings.tsx` → `/admin/settings` (`.` = path separator)
+   - `app/routes/($lang).about.tsx` → `/{lang}/about` (optional param)
+   - `app/routes/$.tsx` → catch-all (splat route)
+   - `app/routes/_auth.login.tsx` → `/login` (pathless layout `_auth` stripped)
+3. **Convert params**: Remix `$param` → `{param}`.
+4. **Extract `view`**: Use the filename without extension.
+5. **Extract `requiredRole`**: Read each route file. Look for:
+   - `loader` function with auth checks — `await requireUser(request)` or `await requireRole(request, 'admin')` → extract role.
+   - `redirect('/login')` in the loader → `"user"`.
+   - Auth utilities imported from `~/utils/auth` or `~/services/session` — read them for role logic.
+   - If no auth patterns → `null`.
+
+**Note**: Remix routes serve as both frontend routes AND API endpoints (via `loader`/`action` exports). The route parser handles the frontend side; backend `action` exports are handled in Section 4L.
 
 ---
 
@@ -689,6 +721,205 @@ If the project uses Next.js, also check for API routes:
 
 ---
 
+### 4L: Remix Actions/Loaders (`backendFramework = "remix"` OR `frontendFramework = "remix"`)
+
+Remix route files export `loader` (GET) and `action` (POST/PUT/PATCH/DELETE) functions that act as API endpoints.
+
+1. Use Glob for `**/app/routes/**/*.tsx`, `**/app/routes/**/*.ts`. Exclude `node_modules`.
+2. Read each file. Look for exported functions:
+   - `export async function loader({ request, params })` → GET endpoint.
+   - `export async function action({ request, params })` → POST endpoint (check `request.method` inside for PUT/PATCH/DELETE).
+   - `export const loader` / `export const action` → same.
+3. For each exported loader/action:
+   - **`method`**: `loader` = `"GET"`. For `action`, check for `request.method` switch — if found, create one endpoint per method. If no switch, default to `"POST"`.
+   - **`path`**: Convert the route filename to URL path (same conventions as Section 3G).
+   - **`requiredRole`**: Look for auth checks at the top of the function — `await requireUser(request)`, `await requireAdmin(request)`.
+   - **`responseSchema`**: Check return type — `json({ users })` or `Response.json()`. If a Zod schema validates the response, link to it.
+   - **`description`**: From comments or function name context.
+
+---
+
+### 4M: gRPC (`backendFramework = "grpc"` or detected via `.proto` files)
+
+**Detection**: Use Glob for `**/*.proto` files. If found, this project uses gRPC. Also check `package.json` for `@grpc/grpc-js` or `go.mod` for `google.golang.org/grpc` or `Cargo.toml` for `tonic`.
+
+**Parse `.proto` files**:
+1. Read each `.proto` file. Find `service` definitions:
+   ```
+   service UserService {
+     rpc GetUser (GetUserRequest) returns (User) {}
+     rpc ListUsers (ListUsersRequest) returns (ListUsersResponse) {}
+     rpc CreateUser (CreateUserRequest) returns (User) {}
+     rpc DeleteUser (DeleteUserRequest) returns (Empty) {}
+   }
+   ```
+2. For each `rpc` method:
+   - **`method`**: Infer from naming convention: `Get*`/`List*` → `"GET"`, `Create*` → `"POST"`, `Update*` → `"PATCH"`, `Delete*` → `"DELETE"`. Default to `"POST"` (gRPC native).
+   - **`path`**: `/{package}.{ServiceName}/{MethodName}` (standard gRPC path).
+   - **`requiredRole`**: Look for comments like `// @auth: admin` or check interceptor configuration in server setup files.
+   - **`responseSchema`**: The `returns (TypeName)` → link to the message type as schema.
+   - **`description`**: From comments above the rpc declaration.
+3. **Parse `message` definitions** as schemas (feed into Section 5):
+   - `string field = 1;` → `"string"`
+   - `int32`/`int64`/`uint32` → `"number"`
+   - `bool` → `"boolean"`
+   - `repeated X` → `"array"`
+   - `map<K, V>` → `"object"`
+   - Messages referenced by `$ref` to other message names.
+
+---
+
+### 4N: tRPC (`backendFramework = "trpc"` or detected via tRPC router files)
+
+**Detection**: Check `package.json` for `@trpc/server`. Use Grep for `initTRPC`, `createTRPCRouter`, `t.router` in `.ts` files.
+
+**Parse tRPC routers**:
+1. Use Glob for `**/trpc/**/*.ts`, `**/server/routers/*.ts`, `**/api/trpc/**/*.ts`.
+2. Read each file. Find router definitions:
+   - `export const userRouter = createTRPCRouter({ ... })` or `t.router({ ... })`
+3. For each procedure:
+   - `query` → `"GET"`: `.query(async ({ ctx, input }) => ...)`
+   - `mutation` → `"POST"`: `.mutation(async ({ ctx, input }) => ...)`
+   - `subscription` → skip (WebSocket, not HTTP).
+4. For each procedure:
+   - **`method`**: `query` → `"GET"`, `mutation` → `"POST"`.
+   - **`path`**: `/api/trpc/{routerName}.{procedureName}` (standard tRPC path convention). If nested via `t.mergeRouters` or router mounting, combine prefixes.
+   - **`requiredRole`**: Look for:
+     - `protectedProcedure` or `adminProcedure` → extract role from the procedure's middleware chain.
+     - `.middleware(isAuthed)` → `"user"`.
+     - `.middleware(isAdmin)` → `"admin"`.
+     - `publicProcedure` → `null`.
+   - **`responseSchema`**: If `.output(z.object({...}))` is defined, link to the Zod schema. If `.input(z.object({...}))` exists, note the input schema too.
+   - **`description`**: From `.meta({ description: '...' })` or comments.
+
+---
+
+### 4O: GraphQL (detected via schema files or resolver files)
+
+**Detection**: Check `package.json` for `graphql`, `@apollo/server`, `type-graphql`, `@nestjs/graphql`, `graphql-yoga`, `mercurius`. Use Glob for `**/*.graphql`, `**/schema.gql`, `**/typeDefs.*`.
+
+**Parse GraphQL schema**:
+1. Use Glob for `**/*.graphql`, `**/*.gql`. Read SDL (Schema Definition Language) files.
+2. Also check for code-first schemas: Use Grep for `@Query()`, `@Mutation()`, `@Resolver()` (type-graphql/NestJS), or `builder.queryField`/`builder.mutationField` (Pothos).
+3. From SDL, find `type Query { ... }` and `type Mutation { ... }`:
+   - `users: [User!]!` in Query → GET-like, returns `User` array.
+   - `createUser(input: CreateUserInput!): User!` in Mutation → POST-like.
+   - `deleteUser(id: ID!): Boolean!` in Mutation → DELETE-like.
+4. For each field in Query/Mutation:
+   - **`method`**: Query fields → `"GET"`, Mutation fields → `"POST"`.
+   - **`path`**: `/graphql` (single endpoint) with `operationName={fieldName}`. Store operation details in `description`.
+   - **`requiredRole`**: Look for `@auth(role: ADMIN)` directives, or check resolver files for auth guards.
+   - **`responseSchema`**: The return type (e.g., `User`, `[User!]!`) → link to the GraphQL type definition as schema (parsed in Section 5F).
+   - **`description`**: From `"""description"""` doc strings in SDL.
+
+**Parse resolvers** (code-first):
+For type-graphql / NestJS GraphQL:
+- `@Query(() => [User])` → Query returning User array.
+- `@Mutation(() => User)` → Mutation returning User.
+- `@UseGuards(AuthGuard)` → `"user"`.
+- `@Roles('admin')` → `"admin"`.
+
+---
+
+### 4P: Gin (`backendFramework = "gin"`)
+
+**Find files**: Use Glob for `**/main.go`, `**/routes.go`, `**/router.go`, `**/handlers/*.go`, `**/api/*.go`, `**/cmd/**/*.go`.
+
+**Parse each file**:
+1. Read the file. Find `gin.Default()` or `gin.New()` for the router instance.
+2. Find route registrations:
+   - `r.GET("/users", listUsers)` → GET `/users`
+   - `r.POST("/users", createUser)` → POST `/users`
+   - `r.PUT("/users/:id", updateUser)` → PUT `/users/{id}`
+   - `r.DELETE("/users/:id", deleteUser)` → DELETE `/users/{id}`
+   - `group := r.Group("/api/v1")` → prefix group.
+   - `group.Use(authMiddleware)` → middleware applied to group.
+3. For each route:
+   - **`method`**: From the method call.
+   - **`path`**: Combine group prefix + route path. Convert Gin `:param` → `{param}`.
+   - **`requiredRole`**: Look for:
+     - `authMiddleware` or `AuthRequired()` in middleware chain → `"user"`.
+     - `AdminOnly()` or `RoleRequired("admin")` → `"admin"`.
+     - No middleware → `null`.
+   - **`responseSchema`**: Check handler for `c.JSON(200, response)` — if the response variable has a known struct type, link it.
+   - **`description`**: From `//` comments above handler function.
+
+---
+
+### 4Q: Echo (`backendFramework = "echo"`)
+
+**Find files**: Use Glob for `**/main.go`, `**/routes.go`, `**/handler*.go`, `**/api/*.go`.
+
+**Parse each file**:
+1. Read the file. Find `echo.New()` for the Echo instance.
+2. Find route registrations:
+   - `e.GET("/users", listUsers)` → GET `/users`
+   - `e.POST("/users", createUser)` → POST
+   - `g := e.Group("/api/v1")` → group with prefix.
+   - `g.Use(middleware.JWT([]byte("secret")))` → JWT middleware.
+3. For each route:
+   - **`method`**: From method call.
+   - **`path`**: Combine group prefix + route path. Convert Echo `:param` → `{param}`.
+   - **`requiredRole`**: Look for:
+     - `middleware.JWT()` or `middleware.KeyAuth()` → `"user"`.
+     - Custom middleware with role checks → extract role.
+     - No middleware → `null`.
+   - **`responseSchema`**: Check handler for `c.JSON(http.StatusOK, resp)` — link struct type.
+   - **`description`**: From comments above handler.
+
+---
+
+### 4R: Chi (`backendFramework = "chi"`)
+
+**Find files**: Use Glob for `**/main.go`, `**/routes.go`, `**/router.go`, `**/handlers/*.go`.
+
+**Parse each file**:
+1. Read the file. Find `chi.NewRouter()` for the router instance.
+2. Find route registrations:
+   - `r.Get("/users", listUsers)` → GET `/users`
+   - `r.Post("/users", createUser)` → POST
+   - `r.Route("/api/v1", func(r chi.Router) { ... })` → nested routes with prefix.
+   - `r.Group(func(r chi.Router) { r.Use(authMiddleware); ... })` → grouped middleware.
+   - `r.With(adminOnly).Get("/admin", handler)` → per-route middleware.
+3. For each route:
+   - **`method`**: From method call (`.Get` → `"GET"`, etc.).
+   - **`path`**: Combine route prefix + path. Convert Chi `{param}` notation (already matches target format).
+   - **`requiredRole`**: Look for `r.Use(auth)` or `.With(adminOnly)` middleware → extract role.
+   - **`responseSchema`**: Check handler for `render.JSON(w, r, resp)` or `json.NewEncoder(w).Encode(resp)` — link struct type.
+   - **`description`**: From comments above handler.
+
+---
+
+### 4S: Laravel (`backendFramework = "laravel"`)
+
+**Find files**: Use Glob for `**/routes/api.php`, `**/routes/web.php`, `**/app/Http/Controllers/*.php`, `**/app/Http/Controllers/**/*.php`.
+
+**Parse route files**:
+1. Read `routes/api.php` and `routes/web.php`.
+2. Find route registrations:
+   - `Route::get('/users', [UserController::class, 'index'])` → GET `/api/users` (api.php routes auto-prefix with `/api`).
+   - `Route::post('/users', [UserController::class, 'store'])` → POST.
+   - `Route::apiResource('users', UserController::class)` → standard CRUD set (index, store, show, update, destroy).
+   - `Route::middleware('auth:sanctum')->group(function () { ... })` → auth group.
+   - `Route::prefix('v1')->group(...)` → prefix group.
+3. For each route:
+   - **`method`**: From the static method name.
+   - **`path`**: Combine prefix + route path. Convert Laravel `{param}` notation (already matches target format).
+   - **`requiredRole`**: Look for:
+     - `->middleware('auth:sanctum')` or `->middleware('auth')` → `"user"`.
+     - `->middleware('role:admin')` or `->middleware('can:admin')` → `"admin"`.
+     - Spatie permission middleware: `->middleware('permission:manage-users')` → `"admin"`.
+     - No middleware → `null`.
+   - **`responseSchema`**: Check controller method for `UserResource::collection($users)` → `"UserResource"`. Or `FormRequest` validation class → link as input schema.
+   - **`description`**: From PHPDoc comments on controller methods.
+
+**Parse Controllers**:
+For `apiResource` routes, read the controller file and extract:
+- `index()` → GET (list), `store()` → POST, `show()` → GET (single), `update()` → PUT/PATCH, `destroy()` → DELETE.
+- Look for `$this->authorize('viewAny', User::class)` for per-method auth.
+
+---
+
 ### Endpoint Parameters (all frameworks)
 
 For endpoints with `{param}` placeholders, generate a `params` object using lookup syntax:
@@ -771,6 +1002,36 @@ For each schema definition:
 - If `backendFramework` is `"none"` (no source code framework detected), the OpenAPI endpoints become the **primary** endpoint source.
 - If a backend framework WAS detected, **merge** OpenAPI endpoints with code-parsed endpoints. For duplicate `{method} {path}` pairs, prefer the code-parsed version (it has richer auth/schema data), but fill in missing fields from OpenAPI.
 - OpenAPI-derived schemas are merged into the `schemas` dictionary alongside code-parsed schemas, with the same deduplication rule.
+
+### OpenAPI Auto-Generation from Code Annotations
+
+If no static OpenAPI spec file exists, attempt to **generate** one from code annotations. This produces the same output as a static spec file and feeds into the merge strategy above.
+
+**Detection by framework:**
+
+| Framework | Annotation Library | Detection Pattern |
+|-----------|-------------------|-------------------|
+| FastAPI | Built-in (automatic) | FastAPI auto-generates OpenAPI at `/docs` or `/openapi.json`. Use Bash: `curl -s http://localhost:{port}/openapi.json` if the server is running. |
+| NestJS | `@nestjs/swagger` | Check `package.json` for `@nestjs/swagger`. Look for `SwaggerModule.setup()` in `main.ts`. |
+| Django REST | `drf-spectacular` | Check `requirements.txt`/`pyproject.toml` for `drf-spectacular`. Look for `SpectacularAPIView` in `urls.py`. |
+| Express.js | `swagger-jsdoc` | Check `package.json` for `swagger-jsdoc`. Look for `swaggerJsdoc(options)` calls. Parse JSDoc `@openapi` comments above route handlers. |
+| Flask | `flask-restx` / `flasgger` | Check requirements for `flask-restx`, `flasgger`, `flask-smorest`. |
+| Actix-web / Axum | `utoipa` | Check `Cargo.toml` for `utoipa`. Look for `#[utoipa::path(...)]` macros above handlers. |
+| Rocket | `rocket_okapi` | Check `Cargo.toml` for `rocket_okapi`. Look for `#[openapi]` macros. |
+| Gin / Echo / Chi | `swag` | Check `go.mod` for `github.com/swaggo/swag`. Look for `// @Summary` / `// @Router` comments above handlers. |
+| Hono | `@hono/zod-openapi` | Check `package.json` for `@hono/zod-openapi`. Look for `createRoute()` calls. |
+
+**Extraction procedure:**
+
+1. If the annotation library is detected, try to fetch the generated spec:
+   - For FastAPI: `curl -s {apiBaseUrl}/openapi.json --max-time 3`
+   - For NestJS: `curl -s {apiBaseUrl}/api-json --max-time 3` (Swagger default path)
+   - For Django: `curl -s {apiBaseUrl}/api/schema/ --max-time 3`
+2. If the server is not running (curl fails), fall back to **parsing annotations from source code**:
+   - JSDoc `@openapi` blocks: extract YAML embedded in comments.
+   - `utoipa::path` macros: extract `method`, `path`, `responses`, `params`.
+   - `swag` Go comments: extract `@Summary`, `@Router`, `@Param`, `@Success`.
+3. Parse the extracted spec using the same logic as "Extract Endpoints from `paths`" and "Extract Schemas" above.
 
 ---
 
@@ -906,6 +1167,88 @@ For each struct, extract fields:
 
 ---
 
+### 5F: GraphQL Types
+
+**Find files**: Use Glob for `**/*.graphql`, `**/*.gql`. Also use Grep for `@ObjectType()` or `builder.objectType` in `.ts` files (code-first schemas).
+
+**Parse SDL type definitions**:
+- `type User { id: ID!, email: String!, age: Int, active: Boolean! }` → schema `"User"`.
+- `ID` / `String` → `"string"`
+- `Int` / `Float` → `"number"`
+- `Boolean` → `"boolean"`
+- `[X]` / `[X!]` → `"array"`
+- `X` (custom type) → `"object"` with ref to that type
+- `!` suffix → required / non-nullable
+- No `!` → nullable
+
+**Input types**: `input CreateUserInput { ... }` → also parse as schemas (used for mutation inputs).
+
+**Enum types**: `enum Role { ADMIN, USER }` → `"string"` with note `"enum: ADMIN, USER"`.
+
+---
+
+### 5G: Go Structs
+
+**Find files**: Use Glob for `**/models/*.go`, `**/types/*.go`, `**/dto/*.go`, `**/schemas/*.go`, `**/entities/*.go`. Also look for structs with `json:` tags in any `.go` file within `**/api/`, `**/handlers/`, `**/internal/`.
+
+**Parse each file**: Find struct definitions with JSON tags:
+```go
+type User struct {
+    ID    string `json:"id"`
+    Email string `json:"email"`
+    Age   int    `json:"age,omitempty"`
+}
+```
+
+For each struct with `json:` tags:
+- `string` → `"string"`, `int`/`int32`/`int64`/`float32`/`float64` → `"number"`, `bool` → `"boolean"`
+- `[]X` → `"array"`, `map[K]V` → `"object"`
+- `*X` (pointer) → nullable
+- `time.Time` / `uuid.UUID` → `"string"`
+- `json.RawMessage` → `"object"`
+
+**JSON tag parsing**:
+- `json:"fieldName"` → use `fieldName` as the field key.
+- `json:"-"` → skip (not serialized).
+- `json:"name,omitempty"` → not required (omitted when empty).
+- `json:",string"` → type is `"string"` regardless of Go type.
+
+**Schema name**: Use the struct name directly.
+
+---
+
+### 5H: Laravel / PHP Schemas
+
+**Find files**: Use Glob for `**/app/Http/Requests/*.php` (FormRequest), `**/app/Http/Resources/*.php` (API Resources), `**/app/Models/*.php` (Eloquent models with `$casts`).
+
+**Parse FormRequest validation rules**:
+```php
+class StoreUserRequest extends FormRequest {
+    public function rules() {
+        return ['name' => 'required|string|max:255', 'email' => 'required|email|unique:users', 'age' => 'nullable|integer'];
+    }
+}
+```
+- `required` → required field. `nullable` → nullable.
+- `string` → `"string"`, `integer`/`numeric` → `"number"`, `boolean` → `"boolean"`, `array` → `"array"`.
+- `email`/`url`/`uuid`/`date` → `"string"`.
+
+**Parse API Resources**:
+```php
+class UserResource extends JsonResource {
+    public function toArray($request) { return ['id' => $this->id, 'email' => $this->email]; }
+}
+```
+Extract field names from the `toArray` return array. Types inferred from Eloquent `$casts` if available.
+
+**Parse Eloquent `$casts`**:
+```php
+protected $casts = ['email_verified_at' => 'datetime', 'is_admin' => 'boolean', 'settings' => 'array'];
+```
+Map cast types: `datetime`/`date` → `"string"`, `boolean` → `"boolean"`, `integer`/`float`/`decimal` → `"number"`, `array`/`json`/`object` → `"object"`.
+
+---
+
 ### Schema Output Format (all parsers)
 
 Store schemas in a dictionary keyed by class/schema name:
@@ -975,6 +1318,19 @@ Before scoring, gather cascade relationship data from the applicable ORM:
 2. Look for `Relation` enum implementations with `Entity::has_many()` or `Entity::belongs_to()`.
 3. Check for `#[sea_orm(on_delete = "Cascade")]` or `.on_delete(ForeignKeyAction::Cascade)` → cascade.
 4. Check for `deleted_at` column definitions for soft-delete.
+
+**GORM (Go)**:
+1. Use Glob for `**/models/*.go`, `**/model/*.go`, `**/entities/*.go`.
+2. Look for `gorm:"constraint:OnDelete:CASCADE"` struct tags → cascade.
+3. Look for `gorm.Model` embedding (provides `DeletedAt gorm.DeletedAt` for soft-delete).
+4. Check for `db.Preload("Children").Delete(&parent)` patterns in service files.
+
+**Eloquent (PHP/Laravel)**:
+1. Use Glob for `**/app/Models/*.php`.
+2. Look for `$this->hasMany(...)` and `$this->belongsTo(...)` relationship definitions.
+3. Check for `->onDelete('cascade')` on foreign key definitions in migrations (`**/database/migrations/*.php`).
+4. Look for `protected static function booted()` with `static::deleting()` event listeners that cascade-delete related models.
+5. Check for `SoftDeletes` trait usage for soft-delete.
 
 Store cascade info as `cascadeMap` and soft-delete presence as `hasSoftDelete`.
 
@@ -1102,6 +1458,99 @@ Add an `i18n` field to the manifest:
 `coverage` = `1 - (missingKeys.length / usedKeys.size)`. A coverage of 1.0 means every used key has a translation.
 
 If the i18n system is detected but no locale files are found, set `missingKeys` to `["*"]` and `coverage` to `0`.
+
+---
+
+## Section 6.6: Accessibility (a11y) Static Analysis
+
+Detect common accessibility issues in frontend component files. This populates an `a11y` field in the manifest.
+
+### Detect Component Files
+
+Use Glob for `**/*.tsx`, `**/*.jsx`, `**/*.vue`, `**/*.svelte` in the `src/` or `app/` directories. Exclude `node_modules`, test files, and storybook files.
+
+### Run Static Checks
+
+For each component file, use Grep and Read to detect these patterns:
+
+| Check | Pattern to find | Severity | Finding |
+|-------|----------------|----------|---------|
+| **Images without alt** | `<img` without `alt=` attribute | error | `"Image missing alt attribute"` |
+| **Empty alt on non-decorative images** | `<img alt="">` where `src` is not an icon/decoration | warning | `"Empty alt on potentially informative image"` |
+| **Click handlers without keyboard** | `onClick` without `onKeyDown`/`onKeyUp`/`onKeyPress`, and element is not `<button>`/`<a>`/`<input>` | warning | `"Click handler without keyboard equivalent"` |
+| **Missing form labels** | `<input>`/`<select>`/`<textarea>` without associated `<label>`, `aria-label`, or `aria-labelledby` | error | `"Form control missing label"` |
+| **Missing button text** | `<button>` with only an icon (no text content, no `aria-label`) | error | `"Button missing accessible text"` |
+| **Positive tabIndex** | `tabIndex` with value > 0 | warning | `"Positive tabIndex disrupts natural tab order"` |
+| **Heading hierarchy** | `<h3>` appearing before any `<h2>` in the same component | warning | `"Heading hierarchy skipped (h3 before h2)"` |
+| **Auto-playing media** | `<video autoPlay>` or `<audio autoPlay>` without `muted` | warning | `"Auto-playing media without muted attribute"` |
+| **Missing lang attribute** | Root layout/page missing `lang` on `<html>` | info | `"Missing lang attribute on html element"` |
+| **Color contrast indicators** | Hardcoded text colors below WCAG AA contrast thresholds (light gray on white, etc.) — approximate heuristic only | info | `"Potential low contrast: {color} on {background}"` |
+
+### Manifest Output
+
+```json
+{
+  "a11y": {
+    "filesScanned": 45,
+    "issues": [
+      { "file": "src/components/Card.tsx", "line": 12, "check": "img-alt", "severity": "error", "message": "Image missing alt attribute" }
+    ],
+    "summary": { "errors": 3, "warnings": 8, "info": 2 },
+    "score": 0.85
+  }
+}
+```
+
+`score` = `1 - (errors * 3 + warnings) / (filesScanned * 10)` clamped to `[0, 1]`. Higher is better.
+
+If no frontend framework is detected, set `a11y` to `null`.
+
+---
+
+## Section 6.7: Dead Endpoint / Route Detection
+
+Cross-reference frontend routes with backend endpoints to find disconnected code.
+
+### Build API Call Map
+
+Scan frontend source files (`**/*.tsx`, `**/*.jsx`, `**/*.vue`, `**/*.svelte`, `**/*.ts`, `**/*.js`) for HTTP call patterns:
+
+| Pattern | Example |
+|---------|---------|
+| `fetch()` | `fetch('/api/v1/users')`, `fetch(\`/api/users/${id}\`)` |
+| `axios` | `axios.get('/api/users')`, `api.post('/users')` |
+| `useSWR`/`useQuery` | `useSWR('/api/users')`, `useQuery(['users'], () => fetch(...))` |
+| tRPC client | `trpc.user.list.useQuery()` |
+| GraphQL | `gql\`query { users { ... } }\`` |
+
+Extract the URL paths referenced. Normalize template literals by replacing `${...}` with `{param}`.
+
+Store as `calledEndpoints` (Set of `{method} {path}` or just `{path}` if method is ambiguous).
+
+### Cross-Reference
+
+1. **Dead endpoints** (backend defined, never called from frontend):
+   - For each entry in `endpoints`, check if its path appears in `calledEndpoints` (fuzzy match: ignore parameter names, compare structure).
+   - If an endpoint is never called AND is not part of a CRUD flow AND does not have `requiredRole: null` (public APIs may be called externally), flag it.
+
+2. **Phantom routes** (frontend routes referencing non-existent API endpoints):
+   - For each API call found in the frontend code, check if a matching endpoint exists in `endpoints`.
+   - If no match is found, this may indicate a stale frontend reference or an endpoint defined elsewhere.
+
+### Manifest Output
+
+```json
+{
+  "deadCode": {
+    "deadEndpoints": ["GET /api/v1/legacy/reports", "DELETE /api/v1/temp/{id}"],
+    "phantomCalls": [
+      { "file": "src/pages/Dashboard.tsx", "line": 45, "call": "GET /api/v1/analytics" }
+    ]
+  }
+}
+```
+
+If no dead code is detected, set `deadCode` to `null`. This analysis is best-effort — dynamic URL construction and external API calls may produce false positives.
 
 ---
 
@@ -1311,8 +1760,8 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.5.0
-- **Specialty**: Codebase analysis for QA manifest generation — 6 frontend parsers, 8 backend parsers (incl. Rust), 5 schema systems, OpenAPI import, static i18n analysis, 5 auth methods, 7 ORM cascade detectors
+- **Name**: Manifest Generator v1.6.0
+- **Specialty**: Codebase analysis for QA manifest generation — 7 frontend parsers, 14 backend parsers (Python, JS/TS, Rust, Go, PHP + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, i18n/a11y/dead-code analysis, 5 auth methods, 9 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus
 - **Author**: Michel Abboud — https://github.com/michelabboud/sentinel-sweep | Apache-2.0

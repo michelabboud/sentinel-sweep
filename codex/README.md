@@ -4,17 +4,18 @@ This directory is a **Codex-native port** of Sentinel.
 
 It does not modify or depend on Claude plugin runtime features (`claude plugin ...`, `/sentinel:run`, `Agent`/`Skill` tool names, `$CLAUDE_PLUGIN_ROOT`).
 
-## Supported Stacks (v1.5.0)
+## Supported Stacks (v1.6.0)
 
 | Category | Supported |
 |----------|-----------|
-| Languages | Python, TypeScript/JavaScript, Rust |
-| Frontend | Vue 3, Nuxt 3, Next.js App Router, React Router, SvelteKit, Angular |
-| Backend | FastAPI, Express.js, Django REST, NestJS, Next.js API, Flask, Hono, Koa, Actix-web, Axum, Rocket |
-| Schemas | Pydantic v2, Zod, TypeScript interfaces/types, Django serializers, Rust serde structs |
+| Languages | Python, TypeScript/JavaScript, Rust, Go, PHP |
+| Frontend | Vue 3, Nuxt 3, Next.js App Router, React Router, SvelteKit, Angular, Remix |
+| Backend | FastAPI, Express.js, Django REST, NestJS, Next.js API, Flask, Hono, Koa, Remix, Actix-web, Axum, Rocket, Gin, Echo, Chi, Laravel |
+| API protocols | REST, GraphQL, gRPC, tRPC |
+| Schemas | Pydantic v2, Zod, TS interfaces, Django serializers, Rust serde, Go structs, GraphQL types, Laravel FormRequest |
 | Auth | JWT, NextAuth/Auth.js, session/cookie, API key, OAuth PKCE |
-| ORM cascade | SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM |
-| Cross-cutting | OpenAPI spec import, static i18n analysis |
+| ORM cascade | SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM, GORM, Eloquent |
+| Cross-cutting | OpenAPI import + auto-gen, i18n analysis, a11y analysis, dead endpoint detection |
 | Browser | Playwright MCP (Chromium, Firefox, WebKit) |
 
 ## Scope
