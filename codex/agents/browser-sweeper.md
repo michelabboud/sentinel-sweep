@@ -1,70 +1,44 @@
 ---
 name: browser-sweeper-codex
-version: 1.6.0-codex.1
-description: Codex-native browser QA sweeper contract with multi-service and OAuth PKCE support using Playwright MCP.
+version: 1.8.1-codex.1
+description: Codex-native browser QA sweeper with visual regression, multi-service, and OAuth PKCE support.
 ---
 
 # Browser Sweeper (Codex Port)
 
-Run route navigation, console/network capture, layout checks, RBAC checks, and responsive checks.
+Route navigation, console/network capture, layout checks, RBAC checks, responsive testing, and visual regression.
 
 ## Tooling assumptions (Codex)
 
-Use Codex Playwright MCP tools, such as:
-- `mcp__playwright__browser_navigate`
-- `mcp__playwright__browser_snapshot`
-- `mcp__playwright__browser_console_messages`
-- `mcp__playwright__browser_network_requests`
-- `mcp__playwright__browser_evaluate`
-- `mcp__playwright__browser_resize`
-- `mcp__playwright__browser_take_screenshot`
-- `mcp__playwright__browser_click`
-- `mcp__playwright__browser_fill_form`
-- `mcp__playwright__browser_wait_for`
-- `mcp__playwright__browser_close`
+Playwright MCP tools: `mcp__playwright__browser_navigate`, `_snapshot`, `_console_messages`, `_network_requests`, `_evaluate`, `_resize`, `_take_screenshot`, `_click`, `_fill_form`, `_wait_for`, `_close`.
 
 ## Input
 
-- Manifest path
-- Effective runtime settings (`breakpoints`, `responseTimeout`, `screenshotOnError`, selectors)
-- Optional service filter/base URL override
+- Manifest path, runtime settings (breakpoints, timeout, screenshotOnError, selectors)
+- Optional: service filter, frontend URL override, visualRegression flag
 
-## Authentication
-
-Login flow uses Playwright browser automation (fill form + submit):
+## Authentication (5 methods)
 
 | Auth Method | Login behavior |
 |-------------|---------------|
-| `"jwt"` | Form login, token stored in localStorage |
-| `"nextauth"` / `"session"` | Form login, session cookie set automatically by browser |
-| `"oauth_pkce"` | Navigate to authorize URL with PKCE challenge → fill login form → consent → redirect → extract code → exchange for token → store in localStorage |
-| `"apikey"` | Not applicable for browser sweeps — skip role |
-| `"none"` | No login needed |
+| `"jwt"` | Form login, token in localStorage |
+| `"nextauth"` / `"session"` | Form login, session cookie auto-set |
+| `"oauth_pkce"` | Navigate to authorize URL → fill form → consent → redirect → extract code → exchange → store token |
+| `"apikey"` | Not applicable — skip role |
+| `"none"` | No login |
 
-## Behavior
+## Sweep layers
 
-- Attempt role-based login from manifest credentials.
-- Navigate authorized routes per role hierarchy.
-- Record console errors, network failures, layout issues, i18n findings.
-- Run 8 layout checks (overflow, overlaps, hidden elements, broken images, empty containers, truncation, nav overflow, invisible buttons).
-- Perform RBAC negative testing (verify unauthorized roles are denied).
-- Perform responsive testing at configured breakpoints.
-- Capture screenshots when configured.
+1. **Route navigation** — navigate each route per role, capture console errors + network failures
+2. **Layout checks** (8 checks) — overflow, overlaps, hidden elements, broken images, empty containers, truncation, nav overflow, invisible buttons
+3. **RBAC negative testing** — verify unauthorized roles get denied (redirect, 401/403, or error page)
+4. **Responsive testing** — re-run layout checks at each breakpoint width
+5. **Visual regression** (v1.8.0, `--visual-regression`) — pixel-diff against baseline screenshots. Thresholds: <0.1% noise, 0.1-5% info, 5-20% warning, >20% error
 
 ## Multi-service filtering
 
-When `serviceName` is provided:
-- Filter routes to `route.service === serviceName`.
-- Use `frontendBaseUrlOverride` instead of `manifest.app.baseUrl`.
-- Tag every finding with `"service": serviceName`.
+When `serviceName` provided: filter routes, use `frontendBaseUrlOverride`, tag findings with service.
 
 ## Output
 
-Write `browser-findings.json` with:
-- `metadata.mode = "browser"`
-- `metadata.rolesTested`
-- `metadata.endpointsTested` (0 for browser-only)
-- `metadata.routesTested`
-- `metadata.startedAt`
-- `metadata.finishedAt`
-- `findings[]`
+Write `browser-findings.json` with metadata (mode, rolesTested, routesTested, startedAt, finishedAt) and findings array.

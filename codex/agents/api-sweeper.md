@@ -1,69 +1,51 @@
 ---
 name: api-sweeper-codex
-version: 1.6.0-codex.1
-description: Codex-native API QA sweeper contract with multi-auth (incl. OAuth PKCE) and multi-service support.
+version: 1.8.1-codex.1
+description: Codex-native API QA sweeper with multi-auth, security headers, response time percentiles, and multi-service support.
 ---
 
 # API Sweeper (Codex Port)
 
-Run endpoint health, RBAC, CRUD, and schema checks from `sentinel-manifest.json`.
+Run endpoint health, RBAC, CRUD, schema, security header checks, and response time tracking.
 
 ## Tooling assumptions (Codex)
 
 - HTTP checks via `exec_command` + `curl`
 - JSON parsing via `jq` or `python`
-- No Claude-only abstractions
 
 ## Input
 
-- Manifest path
-- Effective risk policy
-- Response timeout
-- Sandbox mode
-- Optional service filter/base URL override
+- Manifest path, risk policy, response timeout, sandbox mode
+- Optional: service filter, API base URL override
 
-## Authentication
-
-Authenticate per role using the method declared in `manifest.auth.method`:
+## Authentication (5 methods)
 
 | Auth Method | Login | Subsequent requests |
 |-------------|-------|---------------------|
-| `"jwt"` | POST to `loginEndpoint`, parse `access_token`/`token` | `Authorization: Bearer {token}` header |
-| `"nextauth"` / `"session"` | POST with `-c /tmp/sentinel-cookies-{role}.txt` | `-b /tmp/sentinel-cookies-{role}.txt` (cookie jar) |
-| `"apikey"` | No login needed | `x-api-key: {credential}` header |
-| `"oauth_pkce"` | Generate PKCE verifier/challenge, build authorize URL, exchange code for token | `Authorization: Bearer {token}` header |
-| `"none"` | No login needed | No auth headers |
+| `"jwt"` | POST to `loginEndpoint` | `Authorization: Bearer {token}` |
+| `"nextauth"` / `"session"` | POST with `-c` cookie jar | `-b` cookie jar |
+| `"apikey"` | No login | `x-api-key: {credential}` |
+| `"oauth_pkce"` | PKCE challenge + code exchange | `Authorization: Bearer {token}` |
+| `"none"` | No login | No headers |
 
-Cookie jar approach uses `curl -c` (save) and `curl -b` (send) for session-based auth.
+## Sweep layers
 
-OAuth PKCE uses `openssl dgst -sha256` for challenge generation and `curl` POST to token endpoint for code exchange.
+1. **Endpoint health** — test every endpoint × every role, check status codes vs RBAC expectations
+2. **Response time percentiles** (v1.8.0) — compute p50/p95/p99/avg per endpoint, flag slow endpoints
+3. **Security headers audit** (v1.7.0) — check HSTS, CSP, X-Content-Type-Options, CORS, cookie flags, server info
+4. **CRUD flows** — create→read→update→verify→delete→verify lifecycle
+5. **Schema validation** — response fields vs manifest schema definitions
 
-## Behavior
+## Destructive operations safety
 
-- Authenticate by manifest roles using method above.
-- Resolve lookup/static/env path params.
-- Enforce risk policy and sandbox gates.
-- Test endpoint health (2xx for authorized, 401/403 for unauthorized).
-- Test RBAC enforcement per role hierarchy.
-- Test CRUD flow lifecycle (create, read, update, verify, delete, verify-delete, invalid-input, duplicate).
-- Validate response schemas against manifest definitions.
-- Emit findings in `findings.schema.json` compatible shape.
+- HIGH risk (51-75): bordered warning, requires explicit "yes"
+- CRITICAL risk (76-100): double-bordered warning with cascade info, requires "yes"
+- After 3+ consecutive skips: suggests `--risk-level medium` or `--safe-only`
 
 ## Multi-service filtering
 
-When `serviceName` is provided:
-- Filter endpoints to `endpoint.service === serviceName`.
-- Filter CRUD flows to matching endpoints.
-- Use `apiBaseUrlOverride` instead of `manifest.app.apiBaseUrl`.
-- Tag every finding with `"service": serviceName`.
+When `serviceName` provided: filter endpoints, use `apiBaseUrlOverride`, tag findings with service.
 
 ## Output
 
-Write `api-findings.json` with:
-- `metadata.mode = "api"`
-- `metadata.rolesTested`
-- `metadata.endpointsTested`
-- `metadata.routesTested` (0 for API-only)
-- `metadata.startedAt`
-- `metadata.finishedAt`
-- `findings[]`
+Write `api-findings.json` with metadata (mode, rolesTested, endpointsTested, startedAt, finishedAt, responseTimePercentiles) and findings array.

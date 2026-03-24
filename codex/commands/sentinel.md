@@ -1,7 +1,7 @@
 ---
 name: sentinel-codex-orchestrator
-version: 1.6.0-codex.1
-description: Codex-native Sentinel orchestrator contract for setup, manifest, api, sweep, report, trends, diff, fix, and clean.
+version: 1.8.1-codex.1
+description: Codex-native Sentinel orchestrator contract for setup, manifest, api, sweep, report, trends, diff, fix, clean, export, config, serve, and pr.
 ---
 
 # Sentinel Orchestrator (Codex Port)

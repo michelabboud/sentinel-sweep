@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "sweep-history.schema.json",
   "title": "Sentinel Sweep History",
-  "description": "Schema for sweep-history.json that accumulates summary data from each sweep run, enabling cross-run trend analysis via /sentinel trends.",
+  "description": "Schema for sweep-history.json that accumulates summary data from each sweep run, enabling cross-run trend analysis.",
   "type": "object",
   "required": ["runs"],
   "properties": {
     "runs": {
       "type": "array",
-      "description": "Chronological list of sweep run summaries. Entries are appended after each sweep; none are removed automatically.",
+      "description": "Chronological list of sweep run summaries.",
       "items": {
         "$ref": "#/$defs/run"
       }
@@ -35,82 +35,78 @@
       "properties": {
         "runId": {
           "type": "string",
-          "description": "Filesystem-safe ISO timestamp matching the run directory name (e.g. 2026-03-15T14-30-00Z)."
+          "description": "Filesystem-safe ISO timestamp (e.g. 2026-03-15T14-30-00Z)."
         },
         "mode": {
           "type": "string",
           "enum": ["browser + api", "api-only"],
-          "description": "Sweep mode: full browser+api or api-only."
+          "description": "Sweep mode."
         },
         "duration": {
           "type": "string",
-          "description": "Human-readable elapsed time (e.g. '2m 34s', 'unknown')."
+          "description": "Human-readable elapsed time (e.g. '2m 34s')."
         },
         "rolesTested": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "Deduplicated list of roles exercised in the run."
+          "items": { "type": "string" }
         },
         "routesTested": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Total browser routes tested."
+          "minimum": 0
         },
         "endpointsTested": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Total API endpoints tested."
+          "minimum": 0
         },
         "findings": {
           "type": "object",
-          "description": "Finding counts keyed by severity level.",
           "required": ["critical", "error", "warning", "info"],
           "properties": {
-            "critical": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Number of critical-severity findings."
-            },
-            "error": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Number of error-severity findings."
-            },
-            "warning": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Number of warning-severity findings."
-            },
-            "info": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Number of info-severity findings."
-            }
+            "critical": { "type": "integer", "minimum": 0 },
+            "error": { "type": "integer", "minimum": 0 },
+            "warning": { "type": "integer", "minimum": 0 },
+            "info": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
         },
         "passed": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Number of checks that produced no critical/error/warning finding."
+          "minimum": 0
         },
         "passRate": {
           "type": "number",
           "minimum": 0,
-          "maximum": 100,
-          "description": "Pass rate as percentage: passed / (passed + critical + error + warning) * 100, rounded to 1 decimal."
+          "maximum": 100
         },
         "sandboxMode": {
-          "type": "boolean",
-          "description": "Whether --sandbox was active for this run."
+          "type": "boolean"
         },
         "timestamp": {
           "type": "string",
-          "format": "date-time",
-          "description": "ISO 8601 UTC timestamp of when the run completed."
+          "format": "date-time"
+        },
+        "healthScore": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Composite project health score (v1.7.0+). Null for older runs."
+        },
+        "commitSha": {
+          "type": ["string", "null"],
+          "description": "Git commit SHA at time of sweep (v1.7.0+). Used by --changed-only for incremental sweeps."
+        },
+        "responseTimePercentiles": {
+          "type": ["object", "null"],
+          "description": "Global response time percentiles for this run (v1.8.0+).",
+          "properties": {
+            "p50": { "type": "number" },
+            "p95": { "type": "number" },
+            "p99": { "type": "number" },
+            "avg": { "type": "number" }
+          }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": true
     }
   }
 }

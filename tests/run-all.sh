@@ -24,6 +24,11 @@ TESTS=(
   "test-runtime-behavior.sh"
 )
 
+# Optional tests — run if available but don't fail the suite if runner is missing
+OPTIONAL_TESTS=(
+  "../codex/tests/test-codex-port.sh"
+)
+
 echo -e "${BOLD}========================================${NC}"
 echo -e "${BOLD}   Sentinel Plugin Integration Tests${NC}"
 echo -e "${BOLD}========================================${NC}"

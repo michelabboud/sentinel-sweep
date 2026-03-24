@@ -2,6 +2,13 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.8.2] - 2026-03-24
+
+### Fixed
+- **JSON schemas updated to v1.8.1 parity** — `findings.schema.json` now includes `visual` category, `service` field, `responseTimePercentiles` metadata. `settings.schema.json` now includes `services` array. `sentinel-manifest.schema.json` now includes all 8 frontend frameworks, 20 backend frameworks, 5 auth methods, `oauth` config, `services` array, and all 9 cross-cutting analysis fields (i18n, a11y, deadCode, deadCss, n1Queries, vulnerabilities, apiVersioning, migrationDrift, rateLimiting). `sweep-history.schema.json` now includes `healthScore`, `commitSha`, `responseTimePercentiles`.
+- **Codex port synced to v1.8.1** — all 4 Codex files updated from v1.6.0-codex.1 to v1.8.1-codex.1 with full feature parity: 7 frontend parsers, 14+ backend parsers, 15 cross-cutting analyzers, 5 auth methods, visual regression, response time percentiles, security headers audit.
+- **Codex test added to run-all.sh** — `codex/tests/test-codex-port.sh` now included as optional test in the main suite.
+
 ## [1.8.1] - 2026-03-24
 
 ### Fixed

@@ -41,6 +41,38 @@
           "type": "string",
           "format": "date-time",
           "description": "ISO 8601 timestamp when the sweep finished."
+        },
+        "responseTimePercentiles": {
+          "type": ["object", "null"],
+          "description": "Response time percentile data (v1.8.0+). Contains global and per-endpoint p50/p95/p99/avg.",
+          "properties": {
+            "global": {
+              "type": "object",
+              "properties": {
+                "p50": { "type": "number" },
+                "p95": { "type": "number" },
+                "p99": { "type": "number" },
+                "avg": { "type": "number" }
+              }
+            },
+            "byEndpoint": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "p50": { "type": "number" },
+                  "p95": { "type": "number" },
+                  "p99": { "type": "number" },
+                  "avg": { "type": "number" },
+                  "samples": { "type": "integer" }
+                }
+              }
+            },
+            "slowest": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
         }
       },
       "additionalProperties": true
@@ -67,7 +99,7 @@
         },
         "category": {
           "type": "string",
-          "enum": ["health", "rbac", "crud", "schema", "security", "console", "layout", "i18n", "network"],
+          "enum": ["health", "rbac", "crud", "schema", "security", "console", "layout", "i18n", "network", "visual"],
           "description": "Finding category indicating the type of check that produced it."
         },
         "endpoint": {
@@ -110,6 +142,10 @@
         "screenshot": {
           "type": ["string", "null"],
           "description": "Relative path to a screenshot file. Null if no screenshot was captured."
+        },
+        "service": {
+          "type": ["string", "null"],
+          "description": "Service name in multi-service mode (v1.3.0+). Null in single-service mode."
         }
       }
     }

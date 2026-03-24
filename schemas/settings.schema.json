@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "settings.schema.json",
   "title": "Sentinel Settings",
-  "description": "Schema for settings.json that configures Sentinel sweep behavior including risk policy, browser settings, breakpoints, and report output.",
+  "description": "Schema for settings.json that configures Sentinel sweep behavior including risk policy, browser settings, breakpoints, services, and report output.",
   "type": "object",
   "properties": {
     "riskPolicy": {
@@ -92,6 +92,41 @@
         "type": "string"
       },
       "default": ["[data-sentinel-content]", "main", ".card-body"]
+    },
+    "services": {
+      "type": "array",
+      "description": "Multi-service configuration (v1.3.0+). Each entry defines a separate API/frontend service to sweep independently. Empty array for single-service mode.",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["name", "apiBaseUrl"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique service identifier (e.g. 'internal-api', 'public-portal')."
+          },
+          "apiBaseUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "API base URL for this service."
+          },
+          "baseUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Frontend base URL for this service. Optional — omit if service has no frontend."
+          },
+          "sourcePath": {
+            "type": "string",
+            "default": ".",
+            "description": "Relative path to the service source directory for manifest generation."
+          },
+          "auth": {
+            "type": ["object", "null"],
+            "description": "Per-service auth override. Inherits from top-level auth if null."
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false
