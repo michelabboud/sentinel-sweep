@@ -83,16 +83,18 @@ This updates VERSION, all JSON/MD files, and syncs the plugin mirror. The `test-
 ## Running Tests
 
 ```bash
-# Run the full test suite (106+ tests)
+# Run the full test suite (218 tests, 8 suites)
 ./tests/run-all.sh
 
 # Run individual suites
-./tests/test-structure.sh         # File structure, Hello Protocol, parity
-./tests/test-frontmatter.sh       # YAML frontmatter validation
-./tests/test-manifest-schema.sh   # JSON Schema validation
-./tests/test-mirror-parity.sh     # Root vs plugins/sentinel/ diff
+./tests/test-structure.sh          # File structure, Hello Protocol, parity
+./tests/test-frontmatter.sh        # YAML frontmatter validation
+./tests/test-manifest-schema.sh    # JSON Schema validation
+./tests/test-mirror-parity.sh      # Root vs plugins/sentinel/ diff
 ./tests/test-version-consistency.sh # Cross-file version match
-./tests/test-runtime-behavior.sh  # Runtime logic (risk scoring, dedup, etc.)
+./tests/test-runtime-behavior.sh   # Runtime logic (risk scoring, dedup, etc.)
+./tests/test-bump-version.sh       # Version bump regex safety, IP preservation
+./tests/test-feature-coverage.sh   # v1.7+ features, schemas, enums, Codex sync
 ```
 
 All tests must pass before submitting a PR. The same suite runs in GitHub Actions CI.
@@ -122,12 +124,15 @@ All tests must pass before submitting a PR. The same suite runs in GitHub Action
 
 ## Extending Framework Support
 
-Currently v1 supports Vue 3 + FastAPI. To add a new framework:
+Sentinel supports 5 languages (Python, JS/TS, Rust, Go, PHP) with 7 frontend and 14+ backend parsers. To add a new framework:
 
-1. Update `sentinel-setup` to detect the framework
-2. Update `manifest-generator` with parsing rules for the framework's router/endpoint patterns
-3. Add framework to the README "Framework Support" table
-4. Add detection tests
+1. Add detection logic in manifest-generator Section 1 (Framework Detection)
+2. Add route parser (Section 3) or endpoint parser (Section 4) with auth detection
+3. Add schema parser (Section 5) if the framework has a schema system
+4. Add ORM cascade detection (Section 6) if applicable
+5. Update `sentinel-manifest.schema.json` framework enum
+6. Add framework to the README "Framework Support" table
+7. Run `test-feature-coverage.sh` to verify enum coverage
 
 ## Commit Messages
 

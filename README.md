@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.8.3** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
+> **v1.8.4** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
 
 ---
 
@@ -525,6 +525,23 @@ After each sweep, you get a quick summary:
 | **Parallel manifest gen** | Dispatches 4 sub-agents for routes, endpoints, schemas, config in parallel |
 | **Live dashboard** (`serve`) | Self-contained HTML dashboard with health scores, findings table, trends chart, RBAC matrix |
 | **GitHub PR comments** (`pr`) | Auto-posts sweep results to current PR via `gh api`, updates on re-run |
+
+### Finding Categories → Analyzers
+
+Every finding has a `category` field. Here's which analyzer produces each category:
+
+| Category | Producer | Severity Range | Example Finding |
+|----------|----------|---------------|-----------------|
+| `health` | API sweeper | critical-info | Connection refused, 500 errors, timeouts |
+| `rbac` | API sweeper + browser sweeper | critical | Auth bypass, RBAC violation |
+| `crud` | API sweeper | error-warning | CRUD flow failures, empty body accepted |
+| `schema` | API sweeper | error-warning | Missing required field, type mismatch |
+| `security` | API sweeper | warning-info | Stack trace leak, SQL leak, missing headers, CORS wildcard |
+| `console` | Browser sweeper | error-warning | Unhandled promise rejection, console errors |
+| `layout` | Browser sweeper | error-warning | Overflow, overlapping elements, broken images |
+| `i18n` | Browser sweeper + manifest generator | warning | Missing translation key |
+| `network` | Browser sweeper | error-warning | HTTP 4xx/5xx, failed network requests |
+| `visual` | Browser sweeper | error-info | Visual regression (pixel diff > threshold) |
 
 ### Browser Automation
 

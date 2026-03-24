@@ -2,6 +2,17 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.8.4] - 2026-03-24
+
+### Fixed
+- **Codex orchestrator** — updated command shape with all v1.7+ subcommands (export, config, serve, pr) and flags (--ci, --changed-only, --dashboard, --format, --verify, --visual-regression, --port). Delegation matrix expanded with workers for all 13 subcommands. Added destructive operations safety section, CI mode behavior, and sweep-history metadata (healthScore, commitSha, responseTimePercentiles).
+- **codex/CODEX.md and codex/README.md** — version refs updated from v1.8.1 to v1.8.3
+- **CONTRIBUTING.md** — updated test suite count (106 → 218), added 2 new test suites, updated framework support section from "Vue 3 + FastAPI" to current 5-language coverage with step-by-step guide
+
+### Added
+- **SECURITY.md** — vulnerability disclosure policy, credentials handling, sandbox mode safety, destructive operations gate, data handling, dependency info
+- **Finding categories → analyzers mapping** in README — documents which analyzer produces each of the 10 finding categories with severity ranges and examples
+
 ## [1.8.3] - 2026-03-24
 
 ### Added

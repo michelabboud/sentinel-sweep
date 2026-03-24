@@ -4,7 +4,7 @@ This directory is a **Codex-native port** of Sentinel.
 
 It does not modify or depend on Claude plugin runtime features (`claude plugin ...`, `/sentinel:run`, `Agent`/`Skill` tool names, `$CLAUDE_PLUGIN_ROOT`).
 
-## Supported Stacks (v1.8.1)
+## Supported Stacks (v1.8.3)
 
 | Category | Supported |
 |----------|-----------|

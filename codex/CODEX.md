@@ -2,7 +2,7 @@
 
 This port is optimized for Codex orchestration with heavy sub-agent delegation.
 
-## Supported stacks (v1.8.1)
+## Supported stacks (v1.8.3)
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, PHP
 - **Frontend**: Vue 3, Nuxt 3, Next.js App Router, React Router, SvelteKit, Angular, Remix
