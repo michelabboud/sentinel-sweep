@@ -2,6 +2,11 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.8.1] - 2026-03-24
+
+### Fixed
+- **bump-version.sh regex bug** — the script used blind `sed "s/$OLD_VERSION/$NEW_VERSION/g"` which corrupted `127.0.0.1` into `1.8.0.0.1` when the old version matched inside IP addresses (regex `.` matches any character). Now uses escaped dots (`\.`) and targeted patterns (`^version:`, `"version":`, `vX.Y.Z\b`) instead of global replace. Verified safe across all version transitions.
+
 ## [1.8.0] - 2026-03-24
 
 ### Added

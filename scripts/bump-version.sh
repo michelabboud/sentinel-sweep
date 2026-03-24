@@ -35,14 +35,29 @@ fi
 echo "Bumping $OLD_VERSION → $NEW_VERSION"
 echo ""
 
+# Escape dots for regex safety: 1.7.0 → 1\.7\.0
+OLD_ESCAPED="${OLD_VERSION//./\\.}"
+
 # Update VERSION file
 echo "$NEW_VERSION" > "$VERSION_FILE"
 echo "  Updated VERSION"
 
-# Files to update (relative to PROJECT_ROOT)
-FILES=(
+# JSON files — match "version": "X.Y.Z" pattern only
+JSON_FILES=(
   ".claude-plugin/plugin.json"
   ".claude-plugin/marketplace.json"
+)
+
+for f in "${JSON_FILES[@]}"; do
+  filepath="$PROJECT_ROOT/$f"
+  if [[ -f "$filepath" ]]; then
+    sed -i "s/\"version\": \"${OLD_ESCAPED}\"/\"version\": \"${NEW_VERSION}\"/g" "$filepath"
+    echo "  Updated $f"
+  fi
+done
+
+# Markdown files — targeted patterns only (never blind global replace)
+MD_FILES=(
   "skills/run/SKILL.md"
   "skills/sentinel-setup/SKILL.md"
   "commands/sentinel.md"
@@ -53,10 +68,21 @@ FILES=(
   "README.md"
 )
 
-for f in "${FILES[@]}"; do
+for f in "${MD_FILES[@]}"; do
   filepath="$PROJECT_ROOT/$f"
   if [[ -f "$filepath" ]]; then
-    sed -i "s/$OLD_VERSION/$NEW_VERSION/g" "$filepath"
+    # YAML frontmatter: version: X.Y.Z (exact line)
+    sed -i "s/^version: ${OLD_ESCAPED}$/version: ${NEW_VERSION}/" "$filepath"
+    # Quoted strings: "X.Y.Z"
+    sed -i "s/\"${OLD_ESCAPED}\"/\"${NEW_VERSION}\"/g" "$filepath"
+    # v-prefixed with word boundary: vX.Y.Z
+    sed -i "s/v${OLD_ESCAPED}\b/v${NEW_VERSION}/g" "$filepath"
+    # Sentinel X.Y.Z (in prose)
+    sed -i "s/Sentinel ${OLD_ESCAPED}/Sentinel ${NEW_VERSION}/g" "$filepath"
+    # **Version**: X.Y.Z (in CLAUDE.md)
+    sed -i "s/Version\*\*: ${OLD_ESCAPED}/Version**: ${NEW_VERSION}/g" "$filepath"
+    # bump-version.sh example
+    sed -i "s/bump-version\.sh ${OLD_ESCAPED}/bump-version.sh ${NEW_VERSION}/g" "$filepath"
     echo "  Updated $f"
   fi
 done
