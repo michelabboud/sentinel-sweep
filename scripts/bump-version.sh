@@ -68,6 +68,22 @@ MD_FILES=(
   "README.md"
 )
 
+# Codex port files — use codex-specific version format (X.Y.Z-codex.1)
+CODEX_FILES=(
+  "codex/agents/manifest-generator.md"
+  "codex/agents/api-sweeper.md"
+  "codex/agents/browser-sweeper.md"
+  "codex/commands/sentinel.md"
+)
+
+for f in "${CODEX_FILES[@]}"; do
+  filepath="$PROJECT_ROOT/$f"
+  if [[ -f "$filepath" ]]; then
+    sed -i "s/^version: ${OLD_ESCAPED}-codex\.[0-9]\+$/version: ${NEW_VERSION}-codex.1/" "$filepath"
+    echo "  Updated $f"
+  fi
+done
+
 for f in "${MD_FILES[@]}"; do
   filepath="$PROJECT_ROOT/$f"
   if [[ -f "$filepath" ]]; then

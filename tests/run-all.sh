@@ -22,6 +22,8 @@ TESTS=(
   "test-mirror-parity.sh"
   "test-version-consistency.sh"
   "test-runtime-behavior.sh"
+  "test-bump-version.sh"
+  "test-feature-coverage.sh"
 )
 
 # Optional tests — run if available but don't fail the suite if runner is missing

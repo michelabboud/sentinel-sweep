@@ -1,6 +1,6 @@
 ---
 name: manifest-generator-codex
-version: 1.8.1-codex.1
+version: 1.8.3-codex.1
 description: Codex-native manifest generation contract for sentinel-manifest.json.
 ---
 

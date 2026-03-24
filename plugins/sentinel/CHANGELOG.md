@@ -2,6 +2,16 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.8.3] - 2026-03-24
+
+### Added
+- **test-feature-coverage.sh** — 93 tests validating v1.7+ features: subcommand declarations (export, config, serve, pr), flag declarations (--ci, --changed-only, --dashboard, --format, --verify, --visual-regression, --port), health score, CI mode, incremental sweep, visual regression, security headers, response time percentiles, all 10 cross-cutting analyzers (Sections 6.5-6.14), 9 cross-cutting schema fields, multi-service fields, framework enum completeness (7 frontend + 17 backend), auth method enums, endpoint extensions (protocol, sweepable), README feature coverage (14 checks), Codex port version sync
+- **test-bump-version.sh** — 18 tests validating bump-version.sh: regex safety (escaped dots, no blind replace), dangerous version patterns (1.7.0, 1.2.0, etc. vs 127.0.0.1), input validation (non-semver, incomplete semver, same-version), targeted replacement patterns, content preservation (IP addresses, localhost)
+- **Codex files added to bump-version.sh** — Codex port now auto-bumped with `X.Y.Z-codex.1` format during version bumps
+
+### Changed
+- Test suite expanded from 107 tests / 6 suites to **218 tests / 8 suites**
+
 ## [1.8.2] - 2026-03-24
 
 ### Fixed
