@@ -3,7 +3,7 @@ name: browser-sweeper
 description: "Use this agent to perform browser-based QA sweeps using Playwright MCP. Navigates routes as each role, captures console errors, network failures, layout issues, and responsive problems. Reads sentinel-manifest.json for configuration. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching browser-sweeper for visual QA\\n<commentary>Full sweep triggers browser testing.</commentary></example>"
 model: sonnet
 tools: ["Read", "Write", "Bash", "Glob", "Grep", "mcp__plugin_playwright_playwright__browser_navigate", "mcp__plugin_playwright_playwright__browser_navigate_back", "mcp__plugin_playwright_playwright__browser_snapshot", "mcp__plugin_playwright_playwright__browser_take_screenshot", "mcp__plugin_playwright_playwright__browser_console_messages", "mcp__plugin_playwright_playwright__browser_network_requests", "mcp__plugin_playwright_playwright__browser_evaluate", "mcp__plugin_playwright_playwright__browser_resize", "mcp__plugin_playwright_playwright__browser_click", "mcp__plugin_playwright_playwright__browser_fill_form", "mcp__plugin_playwright_playwright__browser_wait_for", "mcp__plugin_playwright_playwright__browser_close"]
-version: 1.7.2
+version: 1.8.0
 triggers:
   keywords: ["sentinel sweep", "browser sweep", "visual QA", "playwright sweep", "layout check"]
   files: ["sentinel-manifest.json", "browser-findings.json"]
@@ -479,6 +479,80 @@ After testing all breakpoints, use `browser_resize` to restore the viewport to `
 
 ---
 
+## Section 6.5: Visual Regression Testing
+
+Compare screenshots from the current run against baseline screenshots from the previous run to detect unintended visual changes.
+
+### Prerequisites
+
+This section only runs if:
+1. The orchestrator passed `visualRegression = true` (from `--visual-regression` flag).
+2. A previous run exists with screenshots in `{reportDir}/latest/screenshots/`.
+
+If either condition is not met, skip this section entirely.
+
+### Step 6.5a: Load Baseline Screenshots
+
+Read the previous run's screenshot directory. Build a map of `{role}-{route-slug}-{breakpoint}` → `{filepath}` for all existing baseline screenshots.
+
+### Step 6.5b: Capture Current Screenshots
+
+For each route tested in Section 3 (at desktop width) and Section 6 (at each breakpoint), if a baseline screenshot exists for the same `{role}-{route-slug}-{breakpoint}` key, capture a screenshot using `browser_take_screenshot`.
+
+Store current screenshots in `{reportDir}/{runId}/screenshots/`.
+
+### Step 6.5c: Pixel Diff Comparison
+
+For each pair (baseline, current) with the same key, compare using `browser_evaluate` with a canvas-based pixel diff:
+
+```javascript
+(async (baselineUrl, currentUrl) => {
+  const loadImg = (url) => new Promise((resolve) => {
+    const img = new Image(); img.onload = () => resolve(img); img.src = url;
+  });
+  const [base, curr] = await Promise.all([loadImg(baselineUrl), loadImg(currentUrl)]);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(base.width, curr.width);
+  canvas.height = Math.max(base.height, curr.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(base, 0, 0);
+  const baseData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(curr, 0, 0);
+  const currData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let diffPixels = 0;
+  for (let i = 0; i < baseData.data.length; i += 4) {
+    const dr = Math.abs(baseData.data[i] - currData.data[i]);
+    const dg = Math.abs(baseData.data[i+1] - currData.data[i+1]);
+    const db = Math.abs(baseData.data[i+2] - currData.data[i+2]);
+    if (dr + dg + db > 30) diffPixels++;
+  }
+  const totalPixels = canvas.width * canvas.height;
+  return { diffPercent: (diffPixels / totalPixels * 100).toFixed(2), diffPixels, totalPixels };
+})
+```
+
+**Alternative** (if canvas is not available in the Playwright context): Use the Bash tool with ImageMagick:
+```bash
+compare -metric AE {baseline} {current} {diffOutput} 2>&1
+```
+
+### Step 6.5d: Record Findings
+
+For each comparison:
+- **diffPercent < 0.1%**: No finding (within noise threshold — sub-pixel rendering differences).
+- **diffPercent 0.1% - 5%**: severity `"info"`, category `"visual"`, message `"Minor visual change on {route} at {breakpoint}px: {diffPercent}% pixels changed"`.
+- **diffPercent 5% - 20%**: severity `"warning"`, category `"visual"`, message `"Significant visual change on {route} at {breakpoint}px: {diffPercent}% pixels changed"`.
+- **diffPercent > 20%**: severity `"error"`, category `"visual"`, message `"Major visual regression on {route} at {breakpoint}px: {diffPercent}% pixels changed"`.
+
+Set `screenshot` field to the diff image path (if generated). Set `fileRef` to `null`.
+
+### Step 6.5e: Update Baselines
+
+After comparison, the current run's screenshots become the new baseline for next time (via the `latest` symlink update in the orchestrator).
+
+---
+
 ## Section 7: Output
 
 After completing all tests across all roles and breakpoints:
@@ -598,7 +672,7 @@ Respond: "🌐 Hello! I'm **Browser Sweeper** — I navigate routes via Playwrig
 
 If the user's message is `hello browser-sweeper ID`:
 Respond with full profile:
-- **Name**: Browser Sweeper v1.7.2
+- **Name**: Browser Sweeper v1.8.0
 - **Specialty**: Browser-based QA sweeps via Playwright MCP — console errors, network failures, layout issues, responsive testing, i18n checks, OAuth PKCE browser flow
 - **When to use me**: When you need visual QA testing with Playwright across breakpoints and roles
 - **Tools/Models**: Read, Write, Bash, Glob, Grep, Playwright MCP tools / sonnet

@@ -2,6 +2,17 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.8.0] - 2026-03-24
+
+### Added
+- **Database query N+1 detection** — Section 6.13: static analysis of ORM queries inside loops for SQLAlchemy, Django ORM, Prisma, TypeORM, Eloquent, GORM. Detects lazy relationship access in loops and suggests eager loading fixes.
+- **API response time percentile tracking** — Section 4.5 in api-sweeper: computes p50/p95/p99/avg per endpoint, flags slow endpoints, stores in metadata for trend tracking across sweeps
+- **Multi-language i18n completeness matrix** — enhanced Section 6.5: compares all locale files against each other, produces per-locale coverage scores, flags keys missing in specific locales
+- **Dependency vulnerability scanning** — Section 6.14: runs `npm audit`, `pip-audit`, `cargo audit`, `composer audit`, `govulncheck`. Parses results into manifest with severity, CVE, fix version.
+- **Live dashboard web UI** (`serve`) — generates self-contained HTML dashboard from sweep data. Health score cards, filterable findings table, RBAC matrix, trends chart, i18n coverage, response times, vulnerability summary. Dark theme, no build step.
+- **GitHub PR integration** (`pr`) — auto-posts/updates sweep results as PR comments via `gh api`. Shows health score, critical issues, diff vs previous run. Updates existing comment on re-run.
+- **Playwright visual regression** — Section 6.5 in browser-sweeper: pixel-diff comparison against baseline screenshots from previous run. Thresholds: <0.1% noise, 0.1-5% info, 5-20% warning, >20% error. Canvas-based diff with ImageMagick fallback.
+
 ## [1.7.2] - 2026-03-24
 
 ### Changed

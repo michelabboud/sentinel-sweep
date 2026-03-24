@@ -1,6 +1,6 @@
 ---
 description: Automated QA sweep — catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys
-argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean|export|config> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--ci] [--changed-only] [--dashboard] [--format <fmt>] [--verify] [--list] [--severity <level>]
+argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean|export|config|serve|pr> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--ci] [--changed-only] [--dashboard] [--format <fmt>] [--verify] [--visual-regression] [--port <N>] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 ---
 
@@ -13,8 +13,8 @@ You are the Sentinel QA orchestrator. Your job is to parse the user's arguments,
 Parse `$ARGUMENTS` as follows:
 
 - Split `$ARGUMENTS` by whitespace.
-- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `export`, `config`, `hello`.
-- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--ci`, `--changed-only`, `--dashboard`, `--format`, `--verify`.
+- The **first word** is the subcommand. Valid values: `sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`, `export`, `config`, `serve`, `pr`, `hello`.
+- Any word starting with `--` is a flag. Supported flags: `--sandbox`, `--dry-run`, `--list`, `--severity`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--ci`, `--changed-only`, `--dashboard`, `--format`, `--verify`, `--port`, `--visual-regression`.
 - Set `sandboxMode = true` if `--sandbox` appears anywhere in the arguments, otherwise `false`.
 - Set `dryRunMode = true` if `--dry-run` appears, otherwise `false`.
 - Set `listMode = true` if `--list` appears, otherwise `false`.
@@ -31,7 +31,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.7.2 — Automated QA Sweep for Web Applications
+Sentinel v1.8.0 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
@@ -254,7 +254,7 @@ If `ciMode` is `true`, apply these global overrides for the entire session:
 3. **JSON stdout** — after the sweep completes, output a single JSON object to stdout (in addition to the normal report):
    ```json
    {
-     "version": "1.7.2",
+     "version": "1.8.0",
      "runId": "{RUN_ID}",
      "mode": "{mode}",
      "healthScore": {healthScore},
@@ -1064,12 +1064,153 @@ print `"Settings updated: {settingsPath}"` after each change.
 
 ---
 
+### Subcommand: `serve`
+
+Generate and serve a self-contained HTML dashboard from the latest sweep results.
+
+**Step serve-1: Load sweep data.**
+
+Read findings from `{settings.reportDir}/latest/`:
+- `api-findings.json`, `browser-findings.json`, `sentinel-manifest.json`, `sweep.md`
+
+Also read `{settings.reportDir}/sweep-history.json` for trend data.
+
+If no data exists, print: `"No sweep data found. Run /sentinel:run sweep first."` and stop.
+
+**Step serve-2: Determine port.**
+
+If `--port` was passed, use that value. Otherwise default to `4173`.
+
+**Step serve-3: Generate HTML dashboard.**
+
+Use the Write tool to create `{settings.reportDir}/dashboard.html` — a single self-contained HTML file with embedded CSS and JavaScript (no external dependencies, no build step). The dashboard includes:
+
+1. **Header**: Project name, version, sweep timestamp, health score with A-F grade badge
+2. **Score cards**: 6 category scores (API Health, RBAC, Schema, Layout, i18n, a11y) as colored cards
+3. **Findings table**: Sortable/filterable table with severity, category, endpoint, role, message columns
+4. **RBAC matrix**: Interactive table with roles as columns, endpoints as rows, pass/fail indicators
+5. **Trends chart**: SVG line chart showing health score across last 10 runs from sweep-history.json
+6. **i18n coverage**: Per-locale bar chart from `localeMatrix`
+7. **Response times**: p50/p95/p99 bar chart for top 10 slowest endpoints
+8. **Vulnerability summary**: Grouped by severity with package names and advisory links
+
+**Design**: Dark theme, monospace metrics, minimal layout using CSS Grid. Color scheme: green (pass), red (critical), orange (error), yellow (warning), blue (info).
+
+**Step serve-4: Serve the file.**
+
+Use the Bash tool to start a simple HTTP server:
+
+```bash
+python3 -m http.server {port} --directory {settings.reportDir} --bind 127.0.0.1 &
+```
+
+Then print:
+
+```
+Dashboard running at http://localhost:{port}/dashboard.html
+
+Press Ctrl+C to stop the server.
+```
+
+If Python is not available, try `npx serve {settings.reportDir} -l {port}` as fallback.
+
+---
+
+### Subcommand: `pr`
+
+Post sweep results as a comment on the current GitHub PR.
+
+**Step pr-1: Detect current PR.**
+
+Use the Bash tool to find the current PR:
+
+```bash
+gh pr view --json number,title,url --jq '"\(.number) \(.title) \(.url)"' 2>/dev/null
+```
+
+If no PR is found (not on a PR branch, or `gh` not installed), print: `"No active PR detected. Push your branch and create a PR first, or run from a PR branch."` and stop.
+
+Store `prNumber`, `prTitle`, `prUrl`.
+
+**Step pr-2: Load latest sweep data.**
+
+Read findings from `{settings.reportDir}/latest/`. Compute the health score and category breakdowns (same as Step R-3.5). If no sweep data, print: `"No sweep data found. Run /sentinel:run sweep first."` and stop.
+
+**Step pr-3: Build PR comment body.**
+
+Construct a markdown comment:
+
+```markdown
+## Sentinel QA Report
+
+| Metric | Value |
+|--------|-------|
+| Health Score | **{score}/100** ({grade}) |
+| Critical | {critical} |
+| Errors | {errors} |
+| Warnings | {warnings} |
+| Endpoints tested | {endpointsTested} |
+| Routes tested | {routesTested} |
+| Duration | {duration} |
+
+{if previousRun exists:}
+### Changes since last sweep
+- Fixed: {fixedCount}
+- New issues: {newCount}
+- Health score: {oldScore} → {newScore} ({delta})
+{end if}
+
+{if critical > 0:}
+### Critical Issues
+{for each critical finding:}
+- **{category}**: {message} — `{endpoint}` ({role})
+{end for}
+{end if}
+
+<details>
+<summary>Full findings ({totalCount} items)</summary>
+
+{for each finding, grouped by severity:}
+- [{severity}] {category}: {message}
+{end for}
+
+</details>
+
+---
+*Generated by [Sentinel](https://github.com/michelabboud/sentinel-sweep) v1.8.0*
+```
+
+**Step pr-4: Post or update comment.**
+
+Check if Sentinel has already commented on this PR:
+
+```bash
+gh api repos/{owner}/{repo}/issues/{prNumber}/comments --jq '[.[] | select(.body | contains("Sentinel QA Report"))] | length'
+```
+
+If an existing Sentinel comment exists, **update it** (don't create a duplicate):
+
+```bash
+COMMENT_ID=$(gh api repos/{owner}/{repo}/issues/{prNumber}/comments --jq '[.[] | select(.body | contains("Sentinel QA Report"))][0].id')
+gh api repos/{owner}/{repo}/issues/comments/$COMMENT_ID -X PATCH -f body='{commentBody}'
+```
+
+If no existing comment, create a new one:
+
+```bash
+gh pr comment {prNumber} --body '{commentBody}'
+```
+
+Then print `"Posted sweep results to PR #{prNumber}: {prUrl}"`.
+
+---
+
 ### Subcommand: `hello`
 
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.7.2
+**Name**: Sentinel v1.8.0
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, i18n gaps, a11y issues, dead endpoints
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -1101,7 +1242,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.7.2. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.8.0. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---

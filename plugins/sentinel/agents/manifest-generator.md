@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Use this agent to generate a sentinel-manifest.json by analyzing the target application's codebase. Reads router files, API endpoints, Pydantic schemas, database models, CLAUDE.md, and environment files. Examples: <example>Context: User runs /sentinel sweep\\nassistant: Dispatching manifest-generator to analyze the codebase\\n<commentary>The sweep command triggers manifest generation before any sweep.</commentary></example><example>Context: User runs /sentinel manifest\\nassistant: Generating sentinel manifest from codebase analysis\\n<commentary>Direct manifest generation for inspection.</commentary></example>"
 model: opus
 tools: ["Read", "Glob", "Grep", "Bash", "Write"]
-version: 1.7.2
+version: 1.8.0
 triggers:
   keywords: ["sentinel manifest", "generate manifest", "sentinel-manifest.json", "codebase analysis"]
   files: ["sentinel-manifest.json"]
@@ -1446,16 +1446,42 @@ Add an `i18n` field to the manifest:
   "i18n": {
     "system": "vue-i18n",
     "defaultLocale": "en",
-    "localeFiles": ["src/locales/en.json", "src/locales/fr.json"],
+    "localeFiles": ["src/locales/en.json", "src/locales/fr.json", "src/locales/de.json"],
     "totalKeys": 245,
     "missingKeys": ["nav.settings", "errors.notFound"],
     "unusedKeys": ["legacy.oldFeature"],
-    "coverage": 0.98
+    "coverage": 0.98,
+    "localeMatrix": {
+      "en": { "total": 245, "missing": 0, "coverage": 1.0 },
+      "fr": { "total": 230, "missing": 15, "coverage": 0.94, "missingKeys": ["nav.settings", "errors.notFound", "...13 more"] },
+      "de": { "total": 198, "missing": 47, "coverage": 0.81, "missingKeys": ["nav.settings", "errors.notFound", "...45 more"] }
+    }
   }
 }
 ```
 
 `coverage` = `1 - (missingKeys.length / usedKeys.size)`. A coverage of 1.0 means every used key has a translation.
+
+### Multi-Language Completeness Matrix
+
+After computing the default locale's missing/unused keys, also build a **cross-locale matrix**:
+
+1. **Discover all locale files**: Use Glob to find all locale files (not just the default). Group by locale identifier extracted from the filename or directory (e.g., `en.json` → `en`, `locales/fr/common.json` → `fr`).
+
+2. **Build per-locale key sets**: For each locale, parse all its files and build a flat key set (same dot-notation flattening as the default locale).
+
+3. **Compare against the default locale**: For each non-default locale, compute:
+   - `total`: number of keys present in this locale
+   - `missing`: number of keys in the default locale but NOT in this locale
+   - `extra`: number of keys in this locale but NOT in the default locale (may indicate stale translations)
+   - `coverage`: `1 - (missing / defaultLocale.totalKeys)`
+   - `missingKeys`: first 10 missing keys (truncate with `"...N more"` if >10)
+
+4. **Compute overall matrix coverage**: `average of all locales' coverage values`.
+
+5. **Store as `localeMatrix`** in the `i18n` manifest field (object keyed by locale identifier).
+
+If only one locale file exists (single-language project), set `localeMatrix` to `null`.
 
 If the i18n system is detected but no locale files are found, set `missingKeys` to `["*"]` and `coverage` to `0`.
 
@@ -1781,6 +1807,130 @@ Set `deadCss` to `null` if no CSS system detected or only runtime CSS-in-JS is u
 
 ---
 
+## Section 6.13: Database Query N+1 Detection
+
+Detect N+1 query patterns — ORM queries executed inside loops, which cause one query per iteration instead of a single batch query.
+
+### Detection by ORM
+
+**SQLAlchemy (Python)**:
+1. Use Grep to find `for` loops in service/handler/view files (`**/services/*.py`, `**/views/*.py`, `**/api/*.py`, `**/endpoints/*.py`).
+2. Inside loop bodies, look for:
+   - `session.query(Model).filter(...)` or `db.query(Model).filter(...)`
+   - `model.relationship_name` access (lazy-loaded relationship)
+   - `.all()`, `.first()`, `.one()` calls
+3. **Not N+1 if**: The query before the loop uses `joinedload()`, `subqueryload()`, `selectinload()`, or `options(contains_eager(...))`.
+4. **N+1 pattern**: `for item in items: item.children` where `children` is a lazy relationship and `items` was not loaded with eager loading.
+
+**Django ORM (Python)**:
+1. Look for QuerySet iteration followed by related field access:
+   - `for obj in Model.objects.all(): obj.related_field` → N+1.
+   - `for obj in Model.objects.all(): obj.related_set.all()` → N+1.
+2. **Not N+1 if**: QuerySet uses `select_related('related_field')` or `prefetch_related('related_set')`.
+3. Also check Django templates (`**/*.html`): `{% for obj in queryset %} {{ obj.related.field }} {% endfor %}` → N+1 if the view didn't prefetch.
+
+**Prisma (TypeScript)**:
+1. Look for `prisma.model.findMany()` followed by loop with nested query:
+   - `items.map(item => prisma.child.findMany({ where: { parentId: item.id } }))` → N+1.
+2. **Not N+1 if**: Original query uses `include: { children: true }` or `select: { children: true }`.
+
+**TypeORM (TypeScript)**:
+1. Look for `repository.find()` followed by loop with nested `find`:
+   - `items.forEach(item => childRepo.find({ where: { parentId: item.id } }))` → N+1.
+2. **Not N+1 if**: Original query uses `relations: ['children']` or `leftJoinAndSelect`.
+
+**Eloquent (PHP/Laravel)**:
+1. Look for `Model::all()` or `Model::get()` followed by loop accessing relationship:
+   - `foreach ($users as $user) { $user->posts; }` → N+1.
+2. **Not N+1 if**: Query uses `with('posts')` or `load('posts')`.
+3. Also check for `$loop` variable usage in Blade templates with relationship access.
+
+**GORM (Go)**:
+1. Look for `db.Find(&items)` followed by loop with nested query:
+   - `for _, item := range items { db.Where("parent_id = ?", item.ID).Find(&children) }` → N+1.
+2. **Not N+1 if**: Original query uses `.Preload("Children")` or `.Joins("Children")`.
+
+### Manifest Output
+
+```json
+{
+  "n1Queries": {
+    "detected": 3,
+    "patterns": [
+      {
+        "file": "src/services/user_service.py",
+        "line": 45,
+        "orm": "sqlalchemy",
+        "pattern": "Lazy relationship access in loop: user.groups",
+        "fix": "Add joinedload(User.groups) to the query or use selectinload()",
+        "severity": "warning"
+      }
+    ]
+  }
+}
+```
+
+Set `n1Queries` to `null` if no N+1 patterns detected or no ORM found.
+
+---
+
+## Section 6.14: Dependency Vulnerability Scanning
+
+Check project dependencies against known vulnerabilities using built-in audit tools.
+
+### Audit Commands by Ecosystem
+
+Run the appropriate audit command based on detected package managers. Use the Bash tool with a timeout of 30 seconds:
+
+| Ecosystem | Detection | Audit Command | Parse Output |
+|-----------|-----------|---------------|--------------|
+| **npm/yarn/pnpm** | `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` | `npm audit --json 2>/dev/null` | Parse JSON: `vulnerabilities` object |
+| **pip** | `requirements.txt` / `pyproject.toml` | `pip-audit --format json 2>/dev/null` or `pip audit --json 2>/dev/null` | Parse JSON: array of vulnerabilities |
+| **Cargo** | `Cargo.lock` | `cargo audit --json 2>/dev/null` | Parse JSON: `vulnerabilities.list` |
+| **Composer** | `composer.lock` | `composer audit --format json 2>/dev/null` | Parse JSON: `advisories` object |
+| **Go** | `go.sum` | `govulncheck -json ./... 2>/dev/null` | Parse JSON: `vulns` array |
+
+If the audit tool is not installed (command not found), skip that ecosystem and record an Info note: `"Audit tool not available for {ecosystem} — install {tool} to enable scanning"`.
+
+### Parse Results
+
+For each vulnerability found, extract:
+- **package**: The affected package name and version
+- **severity**: Map to Sentinel severity: `critical` → `"critical"`, `high` → `"error"`, `moderate`/`medium` → `"warning"`, `low` → `"info"`
+- **advisory**: CVE ID or advisory URL
+- **title**: Brief description of the vulnerability
+- **fixVersion**: The version that fixes it (if available)
+
+### Manifest Output
+
+```json
+{
+  "vulnerabilities": {
+    "ecosystems": ["npm", "pip"],
+    "total": 5,
+    "critical": 1,
+    "high": 2,
+    "moderate": 1,
+    "low": 1,
+    "items": [
+      {
+        "ecosystem": "npm",
+        "package": "lodash@4.17.20",
+        "severity": "critical",
+        "cve": "CVE-2021-23337",
+        "title": "Prototype Pollution",
+        "fixVersion": "4.17.21",
+        "advisory": "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
+      }
+    ]
+  }
+}
+```
+
+Set `vulnerabilities` to `null` if no package managers detected or all audit tools are unavailable.
+
+---
+
 ## Section 7: CRUD Flow Detection
 
 Automatically detect CRUD flows by analyzing the `endpoints` array.
@@ -2000,7 +2150,7 @@ Respond: "🔍 Hello! I'm **Manifest Generator** — I analyze codebases to prod
 
 If the user's message is `hello manifest-generator ID`:
 Respond with full profile:
-- **Name**: Manifest Generator v1.7.2
+- **Name**: Manifest Generator v1.8.0
 - **Specialty**: Codebase analysis for QA manifest generation — 7 frontend, 14+ backend (5 languages + GraphQL/gRPC/tRPC), 8 schema systems, OpenAPI import + auto-gen, 8 analyzers (i18n, a11y, dead code, WebSocket, versioning, migration drift, rate limiting), 5 auth methods, 9 ORM cascade detectors
 - **When to use me**: When you need to generate or regenerate sentinel-manifest.json for QA sweeps
 - **Tools/Models**: Read, Glob, Grep, Bash, Write / opus

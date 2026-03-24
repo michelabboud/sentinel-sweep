@@ -3,7 +3,7 @@ name: api-sweeper
 description: "Use this agent to perform API-only QA sweeps. Tests endpoint health, RBAC enforcement, CRUD flow correctness, and response schema compliance. Reads sentinel-manifest.json for configuration. Examples: <example>Context: User runs /sentinel api\\nassistant: Dispatching api-sweeper for endpoint testing\\n<commentary>API sweep triggered directly.</commentary></example>"
 model: sonnet
 tools: ["Read", "Bash", "Write", "Glob", "Grep"]
-version: 1.7.2
+version: 1.8.0
 triggers:
   keywords: ["sentinel api", "api sweep", "endpoint testing", "RBAC test", "schema compliance"]
   files: ["sentinel-manifest.json", "api-findings.json"]
@@ -263,7 +263,7 @@ echo $DATABASE_URL | grep -oP '\/([^?]+)' | tail -1
 ```
 If the database name does NOT contain `dev`, `test`, `staging`, or `local`, sandbox mode is blocked.
 
-3. Check if the API base URL (from manifest) is `localhost`, `1.7.2.0.1`, or contains `dev` or `staging`. If none of these match, sandbox mode is blocked.
+3. Check if the API base URL (from manifest) is `localhost`, `127.0.0.1`, or contains `dev` or `staging`. If none of these match, sandbox mode is blocked.
 
 If ANY check fails, print:
 
@@ -426,6 +426,55 @@ Set `category` to `"security"` for all security header findings. Only check head
 ### Track Tested Counts
 
 Keep a running count of unique endpoints tested (by `{method} {path}`). Store as `endpointsTested`.
+
+---
+
+## Section 4.5: Response Time Percentile Tracking
+
+After completing all endpoint health tests in Section 4, compute response time percentiles.
+
+### Data Collection
+
+During Section 4 execution, for each unique endpoint `{method} {path}`, store all `time_total` values from successful (2xx) responses across all roles. Each endpoint may have been tested multiple times (once per role).
+
+### Compute Percentiles
+
+For each endpoint with 2+ timing samples:
+- **p50** (median): Sort values, take the middle value.
+- **p95**: Sort values, take the value at the 95th percentile index.
+- **p99**: Sort values, take the value at the 99th percentile index (requires 100+ samples; if fewer, use the max value).
+- **avg**: Arithmetic mean of all samples.
+- **min** / **max**: Fastest and slowest response.
+
+For endpoints with only 1 sample, set p50 = p95 = p99 = avg = that value.
+
+### Flag Slow Endpoints
+
+After computing percentiles, identify slow endpoints:
+- **p95 > 2x responseTimeout**: severity `"warning"`, message `"Slow endpoint: p95 = {p95}ms (threshold {responseTimeout}ms)"`
+- **p95 > 5x responseTimeout**: severity `"error"`, message `"Very slow endpoint: p95 = {p95}ms"`
+- **High variance** (max > 3x min): severity `"info"`, message `"High response time variance: {min}ms - {max}ms"`
+
+### Output
+
+Add a `responseTimePercentiles` object to the output metadata:
+
+```json
+{
+  "metadata": {
+    "responseTimePercentiles": {
+      "global": { "p50": 45, "p95": 230, "p99": 890, "avg": 78 },
+      "byEndpoint": {
+        "GET /api/v1/users": { "p50": 32, "p95": 120, "p99": 180, "avg": 55, "samples": 4 },
+        "POST /api/v1/users": { "p50": 85, "p95": 340, "p99": 340, "avg": 150, "samples": 2 }
+      },
+      "slowest": ["POST /api/v1/reports/generate", "GET /api/v1/analytics/dashboard"]
+    }
+  }
+}
+```
+
+The orchestrator stores these percentiles in `sweep-history.json` per run for trend tracking across sweeps.
 
 ---
 
@@ -756,7 +805,7 @@ Respond: "🔌 Hello! I'm **API Sweeper** — I test endpoints for health, RBAC,
 
 If the user's message is `hello api-sweeper ID`:
 Respond with full profile:
-- **Name**: API Sweeper v1.7.2
+- **Name**: API Sweeper v1.8.0
 - **Specialty**: API-only QA sweeps — endpoint health, RBAC enforcement, CRUD flow correctness, response schema validation, multi-auth (JWT, session, API key, OAuth PKCE)
 - **When to use me**: When you need to test API endpoints without browser automation
 - **Tools/Models**: Read, Bash, Write, Glob, Grep / sonnet

@@ -11,7 +11,7 @@ This port is optimized for Codex orchestration with heavy sub-agent delegation.
 - **Schemas**: Pydantic v2, Zod, TypeScript interfaces/types, Django serializers, Rust serde, Go structs, GraphQL types, Laravel FormRequest
 - **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key, OAuth PKCE
 - **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM, GORM, Eloquent
-- **Cross-cutting**: OpenAPI import + auto-gen, i18n, a11y, dead endpoints, WebSocket, versioning, migration drift, rate limiting, security headers
+- **Cross-cutting**: OpenAPI import + auto-gen, i18n (+ completeness matrix), a11y, dead endpoints, WebSocket, versioning, migration drift, rate limiting, security headers, CSS/Tailwind dead classes, N+1 queries, vulnerability scanning, response time percentiles, visual regression
 
 ## Core rule
 

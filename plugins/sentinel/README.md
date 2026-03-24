@@ -2,7 +2,7 @@
 
 Automated QA sweep plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys in web applications.
 
-> **v1.7.2** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
+> **v1.8.0** | Python + TypeScript + Rust + Go + PHP | 14 backend frameworks + GraphQL/gRPC/tRPC | 5 auth methods | Playwright MCP
 
 ---
 
@@ -504,7 +504,12 @@ After each sweep, you get a quick summary:
 | **Migration drift detection** | Compares ORM models against migrations for Alembic, Django, Prisma, Laravel, Diesel — flags missing migrations and orphaned columns |
 | **Rate limiting detection** | Maps protected vs unprotected endpoints, flags public endpoints without rate limits |
 | **Security headers audit** | Checks HSTS, CSP, X-Content-Type-Options, CORS wildcards, cookie flags, server info disclosure |
-| **CSS/Tailwind dead class analysis** | Detects unused Tailwind utilities, CSS Module dead classes, plain CSS orphaned selectors; coverage metric |
+| **CSS/Tailwind dead class analysis** | Detects unused Tailwind v3/v4 utilities, CSS Module dead classes, plain CSS orphaned selectors; coverage metric |
+| **N+1 query detection** | Static analysis of ORM queries inside loops — SQLAlchemy, Django, Prisma, TypeORM, Eloquent, GORM |
+| **Dependency vulnerability scanning** | Runs `npm audit`, `pip-audit`, `cargo audit`, `composer audit`, `govulncheck` — maps to Sentinel severity |
+| **Response time percentiles** | p50/p95/p99 per endpoint, flags slow endpoints, tracks trends across runs |
+| **i18n completeness matrix** | Per-locale coverage comparison across all locale files (en vs fr vs de) |
+| **Visual regression** | Pixel-diff screenshot comparison against previous run baselines (0.1%/5%/20% thresholds) |
 
 ### Platform Features
 
@@ -518,17 +523,19 @@ After each sweep, you get a quick summary:
 | **Collection export** | Generates Postman, Insomnia, or Bruno collections from manifest |
 | **Interactive config** | Settings editor for risk policy, breakpoints, browser, auth, services |
 | **Parallel manifest gen** | Dispatches 4 sub-agents for routes, endpoints, schemas, config in parallel |
+| **Live dashboard** (`serve`) | Self-contained HTML dashboard with health scores, findings table, trends chart, RBAC matrix |
+| **GitHub PR comments** (`pr`) | Auto-posts sweep results to current PR via `gh api`, updates on re-run |
 
 ### Browser Automation
 
-Playwright MCP (Chromium, Firefox, WebKit)
+Playwright MCP (Chromium, Firefox, WebKit) + visual regression testing
 
 ### Planned
 
-- Database query N+1 detection
-- API response time percentile tracking
-- Multi-language i18n completeness matrix
-- Dependency vulnerability scanning
+- Custom rule engine (`.sentinel-rules.yml`)
+- Multi-repo sweep (monorepo-aware)
+- Swagger UI hosting from generated specs
+- GraphQL query complexity analysis
 
 ---
 
