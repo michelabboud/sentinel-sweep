@@ -34,7 +34,7 @@ If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands,
 Sentinel v1.8.4 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
-and missing i18n keys. Supports Vue 3 + FastAPI + Pydantic + SQLAlchemy + JWT.
+and missing i18n keys. Supports Python, TypeScript, Rust, Go, PHP (14+ frameworks).
 
 Usage: /sentinel:run <command> [flags]
 
