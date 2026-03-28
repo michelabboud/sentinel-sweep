@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with the Sentinel plugin
 
 **Sentinel** is a Claude Code plugin that automates QA sweeps for web applications. It catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys.
 
-- **Version**: 1.8.4
+- **Version**: 1.8.5
 - **License**: Apache-2.0
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, PHP
 - **Frontend**: Vue 3, Nuxt 3, Next.js, React Router, SvelteKit, Angular, Remix
@@ -188,7 +188,7 @@ The `plugins/sentinel/` directory must mirror the root-level files exactly. When
 The `VERSION` file is the single source of truth. Use the bump script:
 
 ```bash
-./scripts/bump-version.sh 1.8.4
+./scripts/bump-version.sh 1.8.5
 ```
 
 This updates VERSION, all JSON/MD files, and syncs the plugin mirror. Then add a CHANGELOG entry and run tests.

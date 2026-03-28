@@ -1,6 +1,6 @@
 {
   "name": "sentinel",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "description": "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to configure",
   "author": {
     "name": "Michel Abboud",

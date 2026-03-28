@@ -59,7 +59,6 @@ done
 # Markdown files — targeted patterns only (never blind global replace)
 MD_FILES=(
   "skills/run/SKILL.md"
-  "skills/sentinel-setup/SKILL.md"
   "commands/sentinel.md"
   "agents/manifest-generator.md"
   "agents/api-sweeper.md"
@@ -110,7 +109,6 @@ MIRROR_FILES=(
   ".claude-plugin/plugin.json"
   ".claude-plugin/marketplace.json"
   "skills/run/SKILL.md"
-  "skills/sentinel-setup/SKILL.md"
   "commands/sentinel.md"
   "agents/manifest-generator.md"
   "agents/api-sweeper.md"

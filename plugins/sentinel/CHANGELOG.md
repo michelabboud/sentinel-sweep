@@ -2,6 +2,11 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [1.8.5] - 2026-03-28
+
+### Removed
+- **sentinel-setup skill** — setup logic inlined into the `setup` subcommand of the orchestrator. Eliminates `sentinel:sentinel-setup` naming. User experience unchanged (`/sentinel:run setup` works the same). Framework detection updated to cover all supported frameworks. Tailwind check now covers v3 + v4.
+
 ## [1.8.4] - 2026-03-24
 
 ### Fixed

@@ -1,7 +1,7 @@
 ---
 name: run
-version: 1.8.4
-description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to configure. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
+version: 1.8.5
+description: "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to check environment. Catches console errors, layout bugs, RBAC violations, API schema drift, and i18n gaps. Use when you say 'run QA', 'test my app', 'check for bugs', 'sweep for errors', 'RBAC check', 'API health check'."
 argument-hint: <sweep|api|report|manifest|setup|trends|diff|fix|clean|export|config|serve|pr> [--sandbox] [--dry-run] [--reuse-manifest] [--risk-level <level>] [--safe-only] [--ci] [--changed-only] [--dashboard] [--format <fmt>] [--verify] [--visual-regression] [--port <N>] [--list] [--severity <level>]
 allowed-tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "Skill"]
 author: Michel Abboud
@@ -37,7 +37,7 @@ Parse `$ARGUMENTS` as follows:
 If `$ARGUMENTS` is empty, or the first word is not one of the valid subcommands, print this exact usage block and stop:
 
 ```
-Sentinel v1.8.4 — Automated QA Sweep for Web Applications
+Sentinel v1.8.5 — Automated QA Sweep for Web Applications
 
 Catches console errors, layout problems, RBAC violations, API schema drift,
 and missing i18n keys. Supports Python, TypeScript, Rust, Go, PHP (14+ frameworks).
@@ -260,7 +260,7 @@ If `ciMode` is `true`, apply these global overrides for the entire session:
 3. **JSON stdout** — after the sweep completes, output a single JSON object to stdout (in addition to the normal report):
    ```json
    {
-     "version": "1.8.4",
+     "version": "1.8.5",
      "runId": "{RUN_ID}",
      "mode": "{mode}",
      "healthScore": {healthScore},
@@ -335,7 +335,77 @@ Based on the subcommand parsed in Step 1, follow the matching section below. Exe
 
 ### Subcommand: `setup`
 
-Invoke the `sentinel:sentinel-setup` skill using the Skill tool. Pass no additional arguments. The skill handles all environment detection, Playwright installation checking, and configuration guidance.
+Run environment detection, Playwright check, framework detection, and settings configuration. Execute all sections below in order.
+
+**Step setup-1: Playwright Check.**
+
+Run `npx playwright --version` via the Bash tool.
+
+- If the command succeeds: note the version string, set `playwright_available = true`.
+- If the command fails (command not found or non-zero exit): inform the user — "Playwright is not installed. Browser mode requires it. Install now? (`npx playwright install chromium`)"
+  - If the user agrees: run `npx playwright install chromium` via Bash. On success, set `playwright_available = true`.
+  - If the user declines: set `playwright_available = false` and note that browser mode will be unavailable.
+
+**Step setup-2: Framework Detection.**
+
+Use Glob to search for the following patterns and infer the project's tech stack:
+
+**Frontend detection:**
+- `**/router/index.js` or `**/router/index.ts` → Vue 3
+- `**/pages/**/*.vue` + `nuxt` in deps → Nuxt 3
+- `**/app/routes/**/*.tsx` + `@remix-run/react` → Remix
+- `**/src/routes/**/+page.svelte` → SvelteKit
+- `**/app/**/page.tsx` + `next` in deps → Next.js
+- `**/src/App.tsx` or `**/src/App.jsx` + `react-router-dom` → React
+- `**/app-routing.module.ts` + `@angular/core` → Angular
+- Check `package.json` for framework dependencies
+
+**Backend detection:**
+- `**/endpoints/*.py` with `@router` decorators → FastAPI
+- `**/*.controller.ts` with `@Controller` → NestJS
+- `**/routes/*.js` with `express.Router()` → Express
+- `**/urls.py` with `urlpatterns` → Django
+- `**/src/main.rs` → Actix-web / Axum / Rocket
+- `**/main.go` → Gin / Echo / Chi
+- `**/routes/api.php` → Laravel
+- Check `requirements.txt`, `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `composer.json`
+
+Report: `Framework: Frontend: {detected or 'not detected'} | Backend: {detected or 'not detected'}`
+
+**Step setup-3: App Status.**
+
+Discover URLs and ports from `.env`, `.env.example`, `CLAUDE.md`, `vite.config.*`, `docker-compose.yml`. Ping each discovered service:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 {frontendUrl}
+curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 {apiUrl}/health
+```
+
+Report which services are reachable and which are not.
+
+**Step setup-4: Settings Check.**
+
+Read `settings.json` from the plugin directory. Show the current configuration summary (risk policy, breakpoints, timeout, screenshot setting, report directory).
+
+**Tailwind breakpoint check:** Use Glob for `tailwind.config.*`. If found, extract custom `screens` breakpoints (v3) or `@theme { --breakpoint-* }` tokens (v4). If custom breakpoints differ from settings, offer to update.
+
+Ask the user if they want to adjust any settings. If yes, update `settings.json` via the Edit tool.
+
+**Step setup-5: Readiness Report.**
+
+```
+--- Sentinel Readiness ---
+
+  Framework:    {frontend} + {backend}
+  Frontend:     {frontendUrl} — {reachable/unreachable}
+  API:          {apiUrl} — {reachable/unreachable}
+  Playwright:   {installed (version) / not installed}
+  Settings:     {configured / using defaults}
+
+  Available modes:
+    /sentinel:run sweep   — {browser + API / API only (no Playwright)}
+    /sentinel:run api     — ready
+```
 
 ---
 
@@ -1183,7 +1253,7 @@ Construct a markdown comment:
 </details>
 
 ---
-*Generated by [Sentinel](https://github.com/michelabboud/sentinel-sweep) v1.8.4*
+*Generated by [Sentinel](https://github.com/michelabboud/sentinel-sweep) v1.8.5*
 ```
 
 **Step pr-4: Post or update comment.**
@@ -1216,7 +1286,7 @@ Then print `"Posted sweep results to PR #{prNumber}: {prUrl}"`.
 If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the full profile:
 
 ```
-**Name**: Sentinel v1.8.4
+**Name**: Sentinel v1.8.5
 **Description**: Automated QA sweep for web applications — catches console errors, layout problems, RBAC violations, API schema drift, i18n gaps, a11y issues, dead endpoints
 **How to invoke**: `/sentinel:run <command> [flags]`
 **Available commands**:
@@ -1248,7 +1318,7 @@ If the second word is `ID` (i.e., `$ARGUMENTS` is `hello ID`), respond with the 
 Otherwise (just `hello` with no `ID`), respond with the short greeting:
 
 ```
-👋 Hello! I'm **Sentinel** v1.8.4. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
+👋 Hello! I'm **Sentinel** v1.8.5. Automated QA sweep for Python, TypeScript, Rust, Go, and PHP web apps — catches console errors, layout bugs, RBAC violations, API schema drift, i18n gaps, a11y issues, and dead endpoints. Use `/sentinel:run hello ID` for the full guide.
 ```
 
 ---

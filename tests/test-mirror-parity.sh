@@ -31,7 +31,6 @@ PAIRS=(
   "agents/api-sweeper.md|agents/api-sweeper.md"
   "agents/browser-sweeper.md|agents/browser-sweeper.md"
   "skills/run/SKILL.md|skills/run/SKILL.md"
-  "skills/sentinel-setup/SKILL.md|skills/sentinel-setup/SKILL.md"
   "commands/sentinel.md|commands/sentinel.md"
   "settings.json|settings.json"
   "LICENSE|LICENSE"

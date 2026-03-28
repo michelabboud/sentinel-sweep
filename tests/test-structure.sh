@@ -28,7 +28,6 @@ echo "-- Required root files --"
 
 REQUIRED_ROOT_FILES=(
   "skills/run/SKILL.md"
-  "skills/sentinel-setup/SKILL.md"
   "agents/manifest-generator.md"
   "agents/api-sweeper.md"
   "agents/browser-sweeper.md"
@@ -50,7 +49,6 @@ echo "-- Plugin mirror directory (plugins/sentinel/) --"
 
 REQUIRED_MIRROR_FILES=(
   "plugins/sentinel/skills/run/SKILL.md"
-  "plugins/sentinel/skills/sentinel-setup/SKILL.md"
   "plugins/sentinel/agents/manifest-generator.md"
   "plugins/sentinel/agents/api-sweeper.md"
   "plugins/sentinel/agents/browser-sweeper.md"

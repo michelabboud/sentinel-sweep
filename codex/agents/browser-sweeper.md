@@ -1,6 +1,6 @@
 ---
 name: browser-sweeper-codex
-version: 1.8.4-codex.1
+version: 1.8.5-codex.1
 description: Codex-native browser QA sweeper with visual regression, multi-service, and OAuth PKCE support.
 ---
 

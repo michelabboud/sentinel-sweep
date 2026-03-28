@@ -3,7 +3,7 @@ name: api-sweeper
 description: "Use this agent to perform API-only QA sweeps. Tests endpoint health, RBAC enforcement, CRUD flow correctness, and response schema compliance. Reads sentinel-manifest.json for configuration. Examples: <example>Context: User runs /sentinel api\\nassistant: Dispatching api-sweeper for endpoint testing\\n<commentary>API sweep triggered directly.</commentary></example>"
 model: sonnet
 tools: ["Read", "Bash", "Write", "Glob", "Grep"]
-version: 1.8.4
+version: 1.8.5
 triggers:
   keywords: ["sentinel api", "api sweep", "endpoint testing", "RBAC test", "schema compliance"]
   files: ["sentinel-manifest.json", "api-findings.json"]
@@ -805,7 +805,7 @@ Respond: "🔌 Hello! I'm **API Sweeper** — I test endpoints for health, RBAC,
 
 If the user's message is `hello api-sweeper ID`:
 Respond with full profile:
-- **Name**: API Sweeper v1.8.4
+- **Name**: API Sweeper v1.8.5
 - **Specialty**: API-only QA sweeps — endpoint health, RBAC enforcement, CRUD flow correctness, response schema validation, multi-auth (JWT, session, API key, OAuth PKCE)
 - **When to use me**: When you need to test API endpoints without browser automation
 - **Tools/Models**: Read, Bash, Write, Glob, Grep / sonnet
