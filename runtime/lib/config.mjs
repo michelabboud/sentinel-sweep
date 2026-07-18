@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { types as utilTypes } from 'node:util';
 
 import { SentinelError } from './errors.mjs';
+import { parseApprovedOrigin } from './origin.mjs';
 import { loadBundledSchema, validateAgainstSchema } from './schema.mjs';
 
 const READ_FLAGS = fsConstants.O_RDONLY
@@ -619,6 +620,41 @@ export async function validateTrustedConfig(value) {
       'CONFIG_BROWSER_SETTLE_INVALID',
       'Browser settle time must be shorter than the response timeout',
     );
+  }
+  let approvedOrigins;
+  try {
+    approvedOrigins = [...new Set(canonical.approvedOrigins.map((origin) => (
+      parseApprovedOrigin(origin, { allowNonLoopback: canonical.allowNonLoopback })
+    )))].sort();
+  } catch {
+    throw configError('CONFIG_ORIGIN_INVALID', 'Trusted approved origin is invalid');
+  }
+  canonical.approvedOrigins = approvedOrigins;
+  if (Array.isArray(canonical.services)) {
+    const names = new Set();
+    canonical.services = canonical.services.map((service) => {
+      if (names.has(service.name)) {
+        throw configError('CONFIG_SERVICE_DUPLICATE', 'Trusted service names must be unique');
+      }
+      names.add(service.name);
+      let approvedOrigin;
+      try {
+        approvedOrigin = parseApprovedOrigin(service.approvedOrigin, {
+          allowNonLoopback: canonical.allowNonLoopback,
+        });
+      } catch {
+        throw configError('CONFIG_ORIGIN_INVALID', 'Trusted service origin is invalid');
+      }
+      if (!approvedOrigins.includes(approvedOrigin)) {
+        throw configError(
+          'CONFIG_SERVICE_ORIGIN_UNAPPROVED',
+          'Trusted service origin must be present in approvedOrigins',
+        );
+      }
+      return { ...service, approvedOrigin };
+    }).sort((left, right) => (
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+    ));
   }
   return canonical;
 }

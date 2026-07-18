@@ -240,7 +240,7 @@ test('renders the exact golden Markdown byte-for-byte on repeated calls', () => 
 
 test('escapes Markdown, HTML, and embedded JSON independently without remote assets', () => {
   const hostile = structuredClone(canonical);
-  hostile.findings[0].message = '<script>alert("x")</script>\n# injected | `code` & [link](javascript:x) _italic_';
+  hostile.findings[0].message = '<script>alert("x")</script>\n# injected | `code` & [link](javascript:x) _italic_\u202e\u2066\u200b\u061c\u0085\t';
   hostile.findings[1].message = `line separator   paragraph   </script><img src=x onerror=alert(1)>`;
   hostile.coverage.diagnostics[0].message = '| table escape <iframe src="https://evil.invalid">';
   hostile.findings.find((finding) => finding.category === 'coverage').message =
@@ -260,6 +260,15 @@ test('escapes Markdown, HTML, and embedded JSON independently without remote ass
   assert.ok(markdown.includes('\\_italic\\_'));
   assert.equal(pr.includes('<iframe'), false);
   assert.ok(pr.includes('&lt;iframe'));
+  for (const output of [markdown, dashboard, pr]) {
+    for (const character of ['\u202e', '\u2066', '\u200b', '\u061c', '\u0085', '\t']) {
+      assert.equal(output.includes(character), false);
+    }
+  }
+  // Keep the numeric form visibly escaped in Markdown so a renderer cannot
+  // decode it back into an active right-to-left override character.
+  assert.ok(markdown.includes('&\\#8238;'));
+  assert.ok(dashboard.includes('&#8294;'));
 
   assert.ok(dashboard.includes("default-src 'none'"));
   assert.equal(/<(?:script)[^>]*src=/iu.test(dashboard), false);

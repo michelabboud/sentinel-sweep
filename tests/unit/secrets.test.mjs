@@ -117,13 +117,27 @@ test('createRedactor removes resolved values and common authorization encodings'
   assert.doesNotMatch(persistedError, /top-secret/);
 });
 
-test('createRedactor ignores resolved values shorter than four characters', () => {
-  const redact = createRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' });
-  assert.equal(redact('alphabet abc'), 'alphabet abc');
+test('rejects configured secrets too short to redact without corrupting canonical output', () => {
+  assert.throws(
+    () => resolveSecret('env:API_TOKEN', { API_TOKEN: 'abc' }),
+    (error) => error?.code === 'SECRET_UNAVAILABLE',
+  );
+  assert.throws(
+    () => createRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' }),
+    (error) => error?.code === 'SECRET_UNAVAILABLE',
+  );
+  const tolerant = createAvailableRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' });
+  assert.equal(tolerant('alphabet abc'), 'alphabet abc');
+  for (const invalid of ['token with spaces', 'abc,def', 'quoted"token']) {
+    assert.throws(
+      () => resolveSecret('env:API_TOKEN', { API_TOKEN: invalid }),
+      (error) => error?.code === 'SECRET_UNAVAILABLE',
+    );
+  }
 });
 
 test('createAvailableRedactor tolerates only unavailable secrets and redacts transport encodings', () => {
-  const secret = 'token with+/symbols';
+  const secret = 'token-with+/symbols';
   const rawBase64 = Buffer.from(secret).toString('base64');
   const rawBase64Url = Buffer.from(secret).toString('base64url');
   const colonBase64 = Buffer.from(`:${secret}`).toString('base64');
@@ -185,21 +199,33 @@ test('authorization scrubbing survives configured secrets that collide with head
   assert.equal((result.match(/\[REDACTED\]/gu) ?? []).length >= 4, true);
 });
 
+test('authorization scrubbing consumes punctuation-bearing unavailable credentials atomically', () => {
+  const redact = createAvailableRedactor([], {});
+  assert.equal(
+    redact('Authorization: Bearer abc,def;ghi'),
+    'Authorization: Bearer [REDACTED]',
+  );
+  assert.equal(
+    redact('{"Authorization":"Basic abc,def"}'),
+    '{"Authorization":"Basic [REDACTED]"}',
+  );
+});
+
 test('redacts each mixed-case percent-hex spelling without changing ordinary letter case', () => {
-  const secret = 'Case/+? token';
+  const secret = 'Case/+Token';
   const redact = createAvailableRedactor(['env:SENTINEL_PRESENT_TOKEN'], {
     SENTINEL_PRESENT_TOKEN: secret,
   });
   const mixedVariants = [
-    'Case%2f%2B%3f%20token',
-    'Case%2F%2b%3F%20token',
-    'Case%2f%2b%3F%20token',
+    'Case%2f%2BToken',
+    'Case%2F%2bToken',
+    'Case%2f%2bToken',
   ];
 
   for (const variant of mixedVariants) {
     assert.equal(redact(`before ${variant} after`), 'before [REDACTED] after', variant);
   }
-  assert.equal(redact('case%2f%2B%3f%20token'), 'case%2f%2B%3f%20token');
+  assert.equal(redact('case%2f%2BToken'), 'case%2f%2BToken');
 });
 
 test('redacts longer mixed-case percent-hex secrets before their configured prefixes', () => {
@@ -208,11 +234,11 @@ test('redacts longer mixed-case percent-hex secrets before their configured pref
     'env:SENTINEL_LONG_TOKEN',
   ], {
     SENTINEL_SHORT_TOKEN: 'prefix/',
-    SENTINEL_LONG_TOKEN: 'prefix/remaining?',
+    SENTINEL_LONG_TOKEN: 'prefix/remaining+',
   });
 
   assert.equal(
-    redact('before prefix%2fremaining%3f after'),
+    redact('before prefix%2fremaining%2b after'),
     'before [REDACTED] after',
   );
 });

@@ -232,7 +232,24 @@ test('rejects missing, empty, control-bearing, and command-inapplicable values',
 });
 
 test('validates typed run, export format, and retention values at the parser boundary', () => {
-  for (const value of ['run', '../run', '2026-07-18T12:34:56Z', `${RUN_ID}/child`]) {
+  assert.throws(
+    () => command('api', [
+      '--target', TARGET, '--config', CONFIG, '--run-id', '2026-07-18T12-34-56Z',
+    ]),
+    (error) => error?.code === 'CLI_RUN_ID_INVALID',
+  );
+  for (const value of [
+    'run',
+    '../run',
+    '2026-07-18T12:34:56Z',
+    `${RUN_ID}/child`,
+    '2026-13-18T12-34-56Z',
+    '2026-02-30T12-34-56Z',
+    '2025-02-29T12-34-56Z',
+    '2026-07-18T24-00-00Z',
+    '2026-07-18T23-60-00Z',
+    '2026-07-18T23-59-60Z',
+  ]) {
     assert.throws(
       () => command('report', [
         '--target', TARGET, '--config', CONFIG, '--run', value, '--output', '/tmp/report',

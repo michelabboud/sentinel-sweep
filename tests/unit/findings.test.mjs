@@ -721,7 +721,7 @@ test('binds persisted content-type mismatch evidence to finite engine phrases', 
   );
 
   const redact = createRedactor(['env:SENTINEL_MEDIA_PHRASE'], {
-    SENTINEL_MEDIA_PHRASE: 'valid media',
+    SENTINEL_MEDIA_PHRASE: 'media',
   });
   const redacted = build({
     observations: [observation('different valid media type')],

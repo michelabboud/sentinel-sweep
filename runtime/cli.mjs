@@ -1,8 +1,38 @@
 #!/usr/bin/env node
 
+import { randomBytes as systemRandomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { sweepApi } from './api/sweep.mjs';
+import { resolveChromeExecutable } from './browser/chrome.mjs';
+import { sweepBrowser } from './browser/sweep.mjs';
+import { buildManifest } from './discovery/index.mjs';
+import { exportCollection } from './export.mjs';
+import { buildFindings } from './findings.mjs';
+import {
+  cleanRuns,
+  computeTrends,
+  diffFindings,
+  publishRun,
+  readPublishedRun,
+  readSweepHistory,
+} from './history.mjs';
+import { loadTrustedConfig } from './lib/config.mjs';
+import { SentinelError } from './lib/errors.mjs';
+import {
+  RunBoundary,
+  TargetBoundary,
+} from './lib/fs-boundary.mjs';
+import { OutputBoundary } from './lib/output-boundary.mjs';
+import { parseApprovedOrigin } from './lib/origin.mjs';
+import {
+  createAvailableRedactor,
+  resolveSecret,
+} from './lib/secrets.mjs';
+import { buildExecutionPlan } from './policy/execution.mjs';
+import { summaryExitCode } from './report.mjs';
 
 const HAS_OWN = Function.call.bind(Object.prototype.hasOwnProperty);
 const MAX_ARGUMENTS = 64;
@@ -221,6 +251,44 @@ function isLowerHex(character) {
   return isDecimal(character) || (character >= 'a' && character <= 'f');
 }
 
+function decimalDigit(character) {
+  switch (character) {
+    case '0': return 0;
+    case '1': return 1;
+    case '2': return 2;
+    case '3': return 3;
+    case '4': return 4;
+    case '5': return 5;
+    case '6': return 6;
+    case '7': return 7;
+    case '8': return 8;
+    case '9': return 9;
+    default: return -1;
+  }
+}
+
+function decimalPair(value, index) {
+  return (decimalDigit(value[index]) * 10) + decimalDigit(value[index + 1]);
+}
+
+function validCalendarTimestamp(value) {
+  const year = (decimalDigit(value[0]) * 1000)
+    + (decimalDigit(value[1]) * 100)
+    + (decimalDigit(value[2]) * 10)
+    + decimalDigit(value[3]);
+  const month = decimalPair(value, 5);
+  const day = decimalPair(value, 8);
+  const hour = decimalPair(value, 11);
+  const minute = decimalPair(value, 14);
+  const second = decimalPair(value, 17);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const days = month === 2
+    ? (leap ? 29 : 28)
+    : (month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31);
+  return day >= 1 && day <= days;
+}
+
 function validRunId(value) {
   if (value.length !== 20
       && value.length !== 24
@@ -239,6 +307,7 @@ function validRunId(value) {
   for (let index = 0; index < digitPositions.length; index += 1) {
     if (!isDecimal(value[digitPositions[index]])) return false;
   }
+  if (!validCalendarTimestamp(value)) return false;
 
   let coreLength;
   if (value[19] === 'Z') {
@@ -290,7 +359,8 @@ function parseKeep(value) {
 }
 
 function normalizeOptions(options) {
-  if (HAS_OWN(options, 'runId') && !validRunId(options.runId)) {
+  if (HAS_OWN(options, 'runId')
+      && (!validRunId(options.runId) || options.runId[19] !== '-')) {
     throw cliError('CLI_RUN_ID_INVALID');
   }
   if (HAS_OWN(options, 'run') && !validRunId(options.run)) {
@@ -444,11 +514,525 @@ async function readVersionFile() {
   return readFile(new URL('../VERSION', import.meta.url), 'utf8');
 }
 
+function dispatchError(code, message) {
+  return new SentinelError(code, message);
+}
+
+function safeJson(value) {
+  const json = JSON.stringify(value);
+  if (typeof json !== 'string') {
+    throw dispatchError('CLI_RESULT_INVALID', 'Command result is not serializable');
+  }
+  let safe = '';
+  for (let index = 0; index < json.length; index += 1) {
+    const code = json.charCodeAt(index);
+    if (code <= 0x1f
+        || (code >= 0x7f && code <= 0x9f)
+        || code === 0x061c
+        || (code >= 0x200b && code <= 0x200f)
+        || (code >= 0x2028 && code <= 0x202e)
+        || (code >= 0x2060 && code <= 0x206f)
+        || code === 0xfeff) {
+      safe += `\\u${code.toString(16).padStart(4, '0')}`;
+    } else {
+      safe += json[index];
+    }
+  }
+  return safe;
+}
+
+function writeCommandSuccess(invocation, payload, stdout, redact) {
+  assertSafePersistedData(payload, redact, 'command result');
+  const document = { ok: true, command: invocation.command, ...payload };
+  if (invocation.options.json) {
+    stdout.write(`${safeJson(document)}\n`);
+    return;
+  }
+  stdout.write(`Sentinel ${invocation.command} completed.\n${safeJson(payload)}\n`);
+}
+
+function writeCommandFailure(invocation, code, message, details, context) {
+  const document = { ok: false, code, message, ...details };
+  if (invocation.options.json) {
+    context.stdout.write(`${safeJson(document)}\n`);
+    return;
+  }
+  context.stderr.write(`Error [${code}]: ${message}\n`);
+}
+
+function codeUnitCompare(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function ownEnvironmentValue(env, name) {
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) return undefined;
+  let descriptor;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(env, name);
+  } catch {
+    return undefined;
+  }
+  return descriptor !== undefined
+    && Object.hasOwn(descriptor, 'value')
+    && descriptor.enumerable === true
+    && typeof descriptor.value === 'string'
+    ? descriptor.value
+    : undefined;
+}
+
+function validateNonTtyAcknowledgement(invocation, context) {
+  if (!invocation.options.sandboxAcknowledged || context.stdin?.isTTY === true) return;
+  if (!Object.hasOwn(invocation.options, 'runId')
+      || ownEnvironmentValue(context.env, 'SENTINEL_CI_SANDBOX_ACK')
+        !== invocation.options.runId) {
+    throw dispatchError(
+      'SANDBOX_ACK_INVALID',
+      'Non-interactive sandbox acknowledgement is not bound to the explicit run identifier',
+    );
+  }
+}
+
+function timestamp(context) {
+  const value = context.now();
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw dispatchError('CLOCK_INVALID', 'Trusted clock did not return a valid timestamp');
+  }
+  return value.toISOString();
+}
+
+function generateRunId(context) {
+  const instant = timestamp(context)
+    .replaceAll(':', '-')
+    .replace('.', '-');
+  const entropy = context.randomBytes(4);
+  if (!Buffer.isBuffer(entropy) && !(entropy instanceof Uint8Array)) {
+    throw dispatchError('ENTROPY_INVALID', 'Trusted entropy source returned invalid bytes');
+  }
+  const suffix = Buffer.from(entropy).toString('hex');
+  if (suffix.length !== 8) {
+    throw dispatchError('ENTROPY_INVALID', 'Trusted entropy source returned the wrong byte count');
+  }
+  return `${instant}-${suffix}`;
+}
+
+function trustedDiscovery(config) {
+  const discovery = config.discovery ?? {};
+  return {
+    openapi: [...(discovery.openapi ?? [])].sort(codeUnitCompare),
+    vueRouter: [...(discovery.vueRouter ?? [])].sort(codeUnitCompare),
+  };
+}
+
+function reportRootFor(targetBoundary, config) {
+  const relative = config.reportDir;
+  if (typeof relative !== 'string'
+      || relative.length === 0
+      || relative.length > 4096
+      || relative.includes('\0')
+      || relative.includes('\\')
+      || containsUnsupportedControl(relative)
+      || path.isAbsolute(relative)
+      || path.win32.isAbsolute(relative)) {
+    throw dispatchError('REPORT_DIR_INVALID', 'Trusted report directory must be a relative path');
+  }
+  const segments = relative.split('/');
+  if (segments.some((segment) => segment.length === 0
+    || segment === '.'
+    || segment === '..'
+    || Buffer.byteLength(segment) > 255)) {
+    throw dispatchError('REPORT_DIR_INVALID', 'Trusted report directory is not canonical');
+  }
+  const versioned = segments[segments.length - 1] === 'sentinel-v2'
+    ? relative
+    : `${relative}/sentinel-v2`;
+  const resolved = path.resolve(targetBoundary.root, versioned);
+  const relation = path.relative(targetBoundary.root, resolved);
+  if (relation === ''
+      || path.isAbsolute(relation)
+      || relation === '..'
+      || relation.startsWith(`..${path.sep}`)) {
+    throw dispatchError('REPORT_DIR_INVALID', 'Trusted report directory escapes the target root');
+  }
+  return resolved;
+}
+
+function assertSafePersistedData(value, redact, stage, depth = 0) {
+  if (depth > 64) {
+    throw dispatchError('CLI_DATA_UNSAFE', 'Command data exceeds its safety depth');
+  }
+  if (typeof value === 'string') {
+    if (containsUnsupportedControl(value) || redact(value) !== value) {
+      throw dispatchError('CLI_DATA_UNSAFE', `Unsafe string rejected at ${stage}`);
+    }
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      assertSafePersistedData(value[index], redact, stage, depth + 1);
+    }
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    assertSafePersistedData(key, redact, stage, depth + 1);
+    assertSafePersistedData(value[key], redact, stage, depth + 1);
+  }
+}
+
+function assertSecretFreeData(value, redact, stage, depth = 0) {
+  if (depth > 64) {
+    throw dispatchError('CLI_DATA_UNSAFE', 'Command data exceeds its safety depth');
+  }
+  if (typeof value === 'string') {
+    if (redact(value) !== value) {
+      throw dispatchError('CLI_DATA_UNSAFE', `Secret-bearing string rejected at ${stage}`);
+    }
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      assertSecretFreeData(value[index], redact, stage, depth + 1);
+    }
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    assertSecretFreeData(key, redact, stage, depth + 1);
+    assertSecretFreeData(value[key], redact, stage, depth + 1);
+  }
+}
+
+async function loadCommandContext(options, context) {
+  const targetBoundary = await TargetBoundary.create(options.target);
+  const config = await loadTrustedConfig({
+    configPath: options.config,
+    targetRoot: targetBoundary.root,
+  });
+  const redact = createAvailableRedactor(roleSecretRefs(config), context.env);
+  assertSafePersistedData(options, redact, 'operator intent');
+  assertSafePersistedData(targetBoundary.root, redact, 'target root');
+  assertSafePersistedData(config, redact, 'trusted config');
+  const reportRoot = reportRootFor(targetBoundary, config);
+  assertSafePersistedData(reportRoot, redact, 'report root');
+  return {
+    targetBoundary,
+    config,
+    redact,
+    reportRoot,
+  };
+}
+
+function roleSecretRefs(config) {
+  return Object.keys(config.roles)
+    .sort(codeUnitCompare)
+    .map((role) => config.roles[role].tokenRef);
+}
+
+async function setupResult(commandContext, context) {
+  const { config, targetBoundary } = commandContext;
+  const origins = config.approvedOrigins.map((origin) => parseApprovedOrigin(origin, {
+    allowNonLoopback: config.allowNonLoopback === true,
+  })).sort(codeUnitCompare);
+  const roles = Object.keys(config.roles).sort(codeUnitCompare).map((role) => {
+    let available = true;
+    try {
+      resolveSecret(config.roles[role].tokenRef, context.env);
+    } catch (error) {
+      if (error?.code !== 'SECRET_UNAVAILABLE') throw error;
+      available = false;
+    }
+    return { role, available };
+  });
+  let chromeAvailable = true;
+  try {
+    await context.resolveChrome({
+      executablePath: config.chromePath ?? undefined,
+      targetRoot: targetBoundary.root,
+    });
+  } catch {
+    chromeAvailable = false;
+  }
+  const discovery = trustedDiscovery(config);
+  let discoveryAvailable = false;
+  let coverage = null;
+  try {
+    const manifest = await freshManifest(commandContext, context);
+    discoveryAvailable = true;
+    coverage = manifest.coverage.status;
+  } catch (error) {
+    if (error?.code === 'CLI_DATA_UNSAFE') throw error;
+  }
+  return {
+    schemaVersion: '2.0',
+    executionReady: origins.length > 0
+      && roles.every((entry) => entry.available)
+      && chromeAvailable
+      && discoveryAvailable
+      && (!config.requireCompleteCoverage || coverage === 'complete'),
+    discovery,
+    discoveryAvailable,
+    coverage,
+    origins,
+    roles,
+    chromeAvailable,
+  };
+}
+
+async function freshManifest(commandContext, context) {
+  const manifest = await buildManifest({
+    targetBoundary: commandContext.targetBoundary,
+    config: commandContext.config,
+    generatedAt: timestamp(context),
+  });
+  assertSafePersistedData(manifest, commandContext.redact, 'discovered manifest');
+  return manifest;
+}
+
+async function executeEngines(mode, inputs, context, failedEngines) {
+  if (mode === 'api') {
+    try {
+      return await context.sweepApi(inputs);
+    } catch {
+      failedEngines.push('api');
+      throw dispatchError('SWEEP_INCOMPLETE', 'Required API sweep did not complete');
+    }
+  }
+  if (mode === 'browser') {
+    try {
+      return await context.sweepBrowser(inputs);
+    } catch {
+      failedEngines.push('browser');
+      throw dispatchError('SWEEP_INCOMPLETE', 'Required browser sweep did not complete');
+    }
+  }
+  const [api, browser] = await Promise.allSettled([
+    context.sweepApi(inputs),
+    context.sweepBrowser(inputs),
+  ]);
+  if (api.status !== 'fulfilled') failedEngines.push('api');
+  if (browser.status !== 'fulfilled') failedEngines.push('browser');
+  if (failedEngines.length > 0) {
+    throw dispatchError('SWEEP_INCOMPLETE', 'One or more required sweep engines did not complete');
+  }
+  return [...api.value, ...browser.value];
+}
+
+function requireExecutableWork(plan, mode) {
+  const apiReady = plan.operations.some((decision) => decision.action === 'execute');
+  const browserReady = plan.routes.some((decision) => decision.action === 'execute');
+  if ((mode === 'api' && !apiReady)
+      || (mode === 'browser' && !browserReady)
+      || (mode === 'sweep' && (!apiReady || !browserReady))) {
+    throw dispatchError(
+      'EXECUTION_NOT_READY',
+      'Trusted policy did not authorize required work for the selected mode',
+    );
+  }
+}
+
+async function executeRun(invocation, commandContext, context) {
+  const { config, reportRoot, targetBoundary } = commandContext;
+  const runId = invocation.options.runId ?? generateRunId(context);
+  await RunBoundary.ensureReportRoot(reportRoot);
+  const manifest = await freshManifest(commandContext, context);
+  const plan = buildExecutionPlan({
+    manifest,
+    config,
+    mode: invocation.command,
+    sandboxAcknowledged: invocation.options.sandboxAcknowledged,
+  });
+  requireExecutableWork(plan, invocation.command);
+  const { redact } = commandContext;
+  const startedAt = timestamp(context);
+  const failedEngines = [];
+  let publication;
+  try {
+    publication = await publishRun({
+      reportRoot,
+      runId,
+      writeArtifacts: async (runBoundary) => {
+        await runBoundary.writeJson('sentinel-manifest.json', manifest);
+        const observations = await executeEngines(invocation.command, {
+          manifest,
+          plan,
+          config,
+          env: context.env,
+          runBoundary,
+          targetBoundary,
+        }, context, failedEngines);
+        const findings = buildFindings({
+          runId,
+          manifest,
+          plan,
+          observations,
+          coverage: manifest.coverage,
+          requireCompleteCoverage: config.requireCompleteCoverage,
+          startedAt,
+          finishedAt: timestamp(context),
+          redact,
+        });
+        return { findings };
+      },
+    });
+  } catch (error) {
+    if (failedEngines.length === 0) throw error;
+    writeCommandFailure(
+      invocation,
+      'SWEEP_INCOMPLETE',
+      'One or more required sweep engines did not complete',
+      { failedEngines },
+      context,
+    );
+    return 1;
+  }
+  const result = {
+    runId: publication.runId,
+    latestRunId: publication.latestRunId,
+    summary: publication.findings.summary,
+    coverage: publication.findings.coverage.status,
+  };
+  writeCommandSuccess(invocation, result, context.stdout, commandContext.redact);
+  return summaryExitCode(publication.findings);
+}
+
+async function readExistingRun(commandContext, runId) {
+  const published = await readPublishedRun({
+    reportRoot: commandContext.reportRoot,
+    runId,
+  });
+  assertSafePersistedData(published.manifest, commandContext.redact, 'published manifest');
+  assertSafePersistedData(published.findings, commandContext.redact, 'published findings');
+  assertSecretFreeData(published.markdown, commandContext.redact, 'published Markdown');
+  assertSecretFreeData(published.dashboard, commandContext.redact, 'published dashboard');
+  assertSecretFreeData(published.prComment, commandContext.redact, 'published PR comment');
+  return published;
+}
+
+async function existingRun(invocation, commandContext) {
+  return readExistingRun(commandContext, invocation.options.run);
+}
+
+async function dispatchCommand(invocation, context) {
+  validateNonTtyAcknowledgement(invocation, context);
+  const commandContext = await loadCommandContext(invocation.options, context);
+  if (invocation.command === 'setup') {
+    writeCommandSuccess(
+      invocation,
+      await setupResult(commandContext, context),
+      context.stdout,
+      commandContext.redact,
+    );
+    return 0;
+  }
+  if (invocation.command === 'manifest') {
+    const manifest = await freshManifest(commandContext, context);
+    await OutputBoundary.writeFile(
+      invocation.options.output,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
+    writeCommandSuccess(invocation, {
+      schemaVersion: manifest.schemaVersion,
+      coverage: manifest.coverage.status,
+      operations: manifest.operations.length,
+      routes: manifest.routes.length,
+    }, context.stdout, commandContext.redact);
+    return 0;
+  }
+  if (invocation.command === 'api'
+      || invocation.command === 'browser'
+      || invocation.command === 'sweep') {
+    return executeRun(invocation, commandContext, context);
+  }
+  if (invocation.command === 'report' || invocation.command === 'dashboard') {
+    const published = await existingRun(invocation, commandContext);
+    const contents = invocation.command === 'report' ? published.markdown : published.dashboard;
+    await OutputBoundary.writeFile(invocation.options.output, contents);
+    writeCommandSuccess(invocation, {
+      runId: published.runId,
+      summary: published.findings.summary,
+      coverage: published.findings.coverage.status,
+    }, context.stdout, commandContext.redact);
+    return 0;
+  }
+  if (invocation.command === 'export') {
+    const published = await existingRun(invocation, commandContext);
+    const artifacts = exportCollection({
+      format: invocation.options.format,
+      manifest: published.manifest,
+      config: commandContext.config,
+    });
+    assertSecretFreeData(artifacts, commandContext.redact, 'export artifacts');
+    await OutputBoundary.writeTree(invocation.options.output, artifacts);
+    writeCommandSuccess(invocation, {
+      runId: published.runId,
+      format: invocation.options.format,
+      artifacts: artifacts.length,
+    }, context.stdout, commandContext.redact);
+    return 0;
+  }
+  if (invocation.command === 'trends') {
+    const history = await readSweepHistory({ reportRoot: commandContext.reportRoot });
+    const trends = computeTrends(history);
+    writeCommandSuccess(invocation, { trends }, context.stdout, commandContext.redact);
+    return 0;
+  }
+  if (invocation.command === 'diff') {
+    const [newer, older] = await Promise.all([
+      readExistingRun(commandContext, invocation.options.run),
+      readExistingRun(commandContext, invocation.options.against),
+    ]);
+    writeCommandSuccess(invocation, {
+      runId: newer.runId,
+      against: older.runId,
+      diff: diffFindings(older.findings, newer.findings),
+    }, context.stdout, commandContext.redact);
+    return 0;
+  }
+  if (invocation.command === 'clean') {
+    const result = await cleanRuns({
+      reportRoot: commandContext.reportRoot,
+      keep: invocation.options.keep,
+    });
+    writeCommandSuccess(invocation, result, context.stdout, commandContext.redact);
+    return 0;
+  }
+  throw dispatchError('CLI_COMMAND_UNKNOWN', 'Command is not supported');
+}
+
+export function createCommandDispatcher({
+  env = process.env,
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  now = () => new Date(),
+  randomBytes = systemRandomBytes,
+  resolveChrome = resolveChromeExecutable,
+  sweepApi: sweepApiImpl = sweepApi,
+  sweepBrowser: sweepBrowserImpl = sweepBrowser,
+} = {}) {
+  const context = Object.freeze({
+    env,
+    stdin,
+    stdout,
+    stderr,
+    now,
+    randomBytes,
+    resolveChrome,
+    sweepApi: sweepApiImpl,
+    sweepBrowser: sweepBrowserImpl,
+  });
+  return async (invocation) => dispatchCommand(invocation, context);
+}
+
 export async function runCli(argv, {
-  dispatch = null,
+  dispatch,
   readVersion: readVersionOption = readVersionFile,
   stdout = process.stdout,
   stderr = process.stderr,
+  stdin = process.stdin,
+  env = process.env,
 } = {}) {
   const json = requestsJson(argv);
   let invocation;
@@ -475,7 +1059,10 @@ export async function runCli(argv, {
     }
   }
 
-  if (typeof dispatch !== 'function') {
+  const selectedDispatch = dispatch === undefined
+    ? createCommandDispatcher({ stdout, stderr, stdin, env })
+    : dispatch;
+  if (typeof selectedDispatch !== 'function') {
     const failure = normalizedFailure(null, 'CLI_DISPATCH_UNAVAILABLE');
     writeFailure({ ...failure, json: invocation.options.json, stderr, stdout, usage: false });
     return 1;
@@ -485,7 +1072,7 @@ export async function runCli(argv, {
   // freezes operator intent, contains unexpected failures, and enforces the
   // public 0/1/2 exit-code contract without fabricating execution results.
   try {
-    const exitCode = await dispatch(invocation);
+    const exitCode = await selectedDispatch(invocation);
     if (exitCode !== 0 && exitCode !== 1 && exitCode !== 2) {
       const failure = normalizedFailure(null, 'CLI_DISPATCH_INVALID');
       writeFailure({ ...failure, json: invocation.options.json, stderr, stdout, usage: false });

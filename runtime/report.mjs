@@ -40,12 +40,27 @@ function join(values, separator) {
   return result;
 }
 
-function controlCode(character) {
-  if (character === '\u007f') return 127;
-  for (let index = 0; index < CONTROL_CHARACTERS.length; index += 1) {
-    if (character === CONTROL_CHARACTERS[index]) return index;
+function unsafeFormatCode(character) {
+  let code = -1;
+  if (character === '\u007f') code = 127;
+  else {
+    for (let index = 0; index < CONTROL_CHARACTERS.length; index += 1) {
+      if (character === CONTROL_CHARACTERS[index]) {
+        code = index;
+        break;
+      }
+    }
   }
-  return -1;
+  if (code >= 0) return code;
+  const unit = character.charCodeAt(0);
+  return (unit >= 0x80 && unit <= 0x9f)
+    || unit === 0x061c
+    || (unit >= 0x200b && unit <= 0x200f)
+    || (unit >= 0x2028 && unit <= 0x202e)
+    || (unit >= 0x2060 && unit <= 0x206f)
+    || unit === 0xfeff
+    ? unit
+    : -1;
 }
 
 function asciiAlphaNumeric(character) {
@@ -69,8 +84,8 @@ function escapeHtml(value) {
     else if (character === '\r') escaped += '&#13;';
     else if (character === '\n') escaped += '&#10;';
     else {
-      const code = controlCode(character);
-      escaped += code >= 0 && code !== 9 ? `&#${code};` : character;
+      const code = unsafeFormatCode(character);
+      escaped += code >= 0 ? `&#${code};` : character;
     }
   }
   return escaped;

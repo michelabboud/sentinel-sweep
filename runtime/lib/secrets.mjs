@@ -3,6 +3,7 @@ import { types as utilTypes } from 'node:util';
 import { SentinelError } from './errors.mjs';
 
 const SECRET_REF = /^env:([A-Z][A-Z0-9_]{1,127})$/;
+const BEARER_TOKEN = /^[A-Za-z0-9._~+\/-]+=*$/u;
 const TRUSTED_REDACTORS = new WeakSet();
 
 function secretError(code, message, details = {}) {
@@ -53,7 +54,7 @@ export function resolveSecret(ref, env = process.env) {
     throw secretError('SECRET_ENV_INVALID', 'Secret must be an own enumerable data property');
   }
   const value = descriptor?.value;
-  if (typeof value !== 'string' || value.length === 0) {
+  if (typeof value !== 'string' || value.length < 4 || !BEARER_TOKEN.test(value)) {
     throw secretError(
       'SECRET_UNAVAILABLE',
       `Secret reference ${name} is unavailable`,
@@ -222,10 +223,10 @@ function encodedSecretVariants(value) {
 
 function scrubAuthorization(input) {
   return input.replace(
-    /((?:proxy-)?authorization["']?\s*:\s*["']?\s*bearer\s+)[^\r\n,;"'}]+/giu,
+    /((?:proxy-)?authorization["']?\s*:\s*["']?\s*bearer\s+)[^\r\n\s"'}]+/giu,
     '$1[REDACTED]',
   ).replace(
-    /((?:proxy-)?authorization["']?\s*:\s*["']?\s*basic\s+)[^\r\n,;"'}]+/giu,
+    /((?:proxy-)?authorization["']?\s*:\s*["']?\s*basic\s+)[^\r\n\s"'}]+/giu,
     '$1[REDACTED]',
   );
 }
