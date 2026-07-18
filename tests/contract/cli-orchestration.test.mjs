@@ -189,6 +189,9 @@ test('setup is read-only and reports trusted readiness without creating report s
     command: 'setup',
     schemaVersion: '2.0',
     executionReady: false,
+    apiReady: false,
+    browserReady: false,
+    sweepReady: false,
     discovery: { openapi: ['openapi.json'], vueRouter: [] },
     discoveryAvailable: true,
     coverage: 'complete',
@@ -215,9 +218,69 @@ test('setup reports missing discovery candidates as unavailable without publishi
   assert.equal(document.ok, true);
   assert.equal(document.command, 'setup');
   assert.equal(document.executionReady, false);
+  assert.equal(document.apiReady, false);
+  assert.equal(document.browserReady, false);
+  assert.equal(document.sweepReady, false);
   assert.equal(document.discoveryAvailable, false);
   assert.equal(document.coverage, null);
   assert.deepEqual((await readdir(target)).sort(), ['openapi.json']);
+});
+
+test('setup readiness is derived from executable policy decisions for each mode', async (t) => {
+  const app = await loopbackServer(t);
+  const blocked = await fixture(t, {
+    approvedOrigins: [app.origin],
+  });
+  await writeFile(path.join(blocked.target, 'openapi.json'), `${JSON.stringify({
+    openapi: '3.0.3',
+    info: { title: 'Blocked setup fixture', version: '1.0.0' },
+    paths: {
+      '/items/{id}': {
+        get: {
+          security: [],
+          parameters: [{
+            in: 'path', name: 'id', required: true, schema: { type: 'string' },
+          }],
+          responses: { 200: { description: 'ok' } },
+        },
+      },
+    },
+  }, null, 2)}\n`, { mode: 0o600 });
+  const dispatchOptions = {
+    env: Object.create(null),
+    stdin: { isTTY: false },
+    resolveChrome: async () => '/fixture/chrome',
+  };
+
+  const blockedResult = await invoke(dispatchOptions, [
+    'setup', '--target', blocked.target, '--config', blocked.config, '--json',
+  ]);
+  assert.equal(blockedResult.exit, 0, `${blockedResult.stderr}${blockedResult.stdout}`);
+  const blockedDocument = JSON.parse(blockedResult.stdout);
+  assert.equal(blockedDocument.discoveryAvailable, true);
+  assert.equal(blockedDocument.coverage, 'complete');
+  assert.equal(blockedDocument.apiReady, false);
+  assert.equal(blockedDocument.browserReady, true);
+  assert.equal(blockedDocument.sweepReady, false);
+  assert.equal(blockedDocument.executionReady, false);
+
+  const ready = await fixture(t, {
+    approvedOrigins: [app.origin],
+    trustedOverrides: {
+      operations: {
+        [operationId('GET', '/health')]: { sideEffects: { classes: [] } },
+      },
+    },
+  });
+  const readyResult = await invoke(dispatchOptions, [
+    'setup', '--target', ready.target, '--config', ready.config, '--json',
+  ]);
+  assert.equal(readyResult.exit, 0, `${readyResult.stderr}${readyResult.stdout}`);
+  const readyDocument = JSON.parse(readyResult.stdout);
+  assert.equal(readyDocument.apiReady, true);
+  assert.equal(readyDocument.browserReady, true);
+  assert.equal(readyDocument.sweepReady, true);
+  assert.equal(readyDocument.executionReady, true);
 });
 
 test('manifest builds fresh discovery and publishes one exclusive v2 JSON file', async (t) => {

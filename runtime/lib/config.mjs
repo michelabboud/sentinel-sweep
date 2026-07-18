@@ -630,6 +630,12 @@ export async function validateTrustedConfig(value) {
     throw configError('CONFIG_ORIGIN_INVALID', 'Trusted approved origin is invalid');
   }
   canonical.approvedOrigins = approvedOrigins;
+  if (approvedOrigins.length > 1) {
+    throw configError(
+      'CONFIG_MULTI_SERVICE_UNSUPPORTED',
+      'Sentinel 2.0 supports one canonical approved origin per invocation',
+    );
+  }
   if (Array.isArray(canonical.services)) {
     const names = new Set();
     canonical.services = canonical.services.map((service) => {
@@ -655,6 +661,12 @@ export async function validateTrustedConfig(value) {
     }).sort((left, right) => (
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0
     ));
+    if (canonical.services.length > 1) {
+      throw configError(
+        'CONFIG_MULTI_SERVICE_UNSUPPORTED',
+        'Sentinel 2.0 supports one configured service per invocation',
+      );
+    }
   }
   return canonical;
 }

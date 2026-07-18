@@ -116,26 +116,26 @@ test('canonicalizes approved origins once and rejects ambiguous service policy',
     approvedOrigins: [
       'http://localhost',
       'http://localhost:80',
-      'http://127.0.0.1:80',
     ],
     services: [
       { name: 'zeta', approvedOrigin: 'http://localhost:80', sourcePath: '.' },
-      { name: 'alpha', approvedOrigin: 'http://127.0.0.1', sourcePath: '.' },
     ],
   };
   await writeExternal(external);
 
   const normalized = await loadTrustedConfig({ configPath, targetRoot, defaultsPath });
-  assert.deepEqual(normalized.approvedOrigins, [
-    'http://127.0.0.1',
-    'http://localhost',
-  ]);
+  assert.deepEqual(normalized.approvedOrigins, ['http://localhost']);
   assert.deepEqual(
     normalized.services.map(({ name, approvedOrigin }) => ({ name, approvedOrigin })),
-    [
-      { name: 'alpha', approvedOrigin: 'http://127.0.0.1' },
-      { name: 'zeta', approvedOrigin: 'http://localhost' },
-    ],
+    [{ name: 'zeta', approvedOrigin: 'http://localhost' }],
+  );
+
+  await writeExternal({
+    approvedOrigins: ['http://localhost', 'http://127.0.0.1'],
+  });
+  await assert.rejects(
+    () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
+    (error) => error?.code === 'CONFIG_MULTI_SERVICE_UNSUPPORTED',
   );
 
   await writeExternal({
@@ -148,6 +148,18 @@ test('canonicalizes approved origins once and rejects ambiguous service policy',
   await assert.rejects(
     () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
     (error) => error?.code === 'CONFIG_SERVICE_DUPLICATE',
+  );
+
+  await writeExternal({
+    approvedOrigins: ['http://localhost'],
+    services: [
+      { name: 'alpha', approvedOrigin: 'http://localhost', sourcePath: '.' },
+      { name: 'zeta', approvedOrigin: 'http://localhost', sourcePath: '.' },
+    ],
+  });
+  await assert.rejects(
+    () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
+    (error) => error?.code === 'CONFIG_MULTI_SERVICE_UNSUPPORTED',
   );
 
   await writeExternal({

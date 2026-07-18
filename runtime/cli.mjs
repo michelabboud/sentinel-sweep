@@ -757,20 +757,47 @@ async function setupResult(commandContext, context) {
   const discovery = trustedDiscovery(config);
   let discoveryAvailable = false;
   let coverage = null;
+  let apiPolicyReady = false;
+  let browserPolicyReady = false;
+  let apiCredentialsReady = false;
+  let browserCredentialsReady = false;
   try {
     const manifest = await freshManifest(commandContext, context);
     discoveryAvailable = true;
     coverage = manifest.coverage.status;
+    const plan = buildExecutionPlan({
+      manifest,
+      config,
+      mode: 'sweep',
+      sandboxAcknowledged: false,
+    });
+    const availability = new Map(roles.map((entry) => [entry.role, entry.available]));
+    const decisionsAreCredentialReady = (decisions) => decisions
+      .filter((decision) => decision.action === 'execute')
+      .flatMap((decision) => decision.roles)
+      .filter((role) => role !== 'unauthenticated')
+      .every((role) => availability.get(role) === true);
+    apiPolicyReady = plan.operations.some((decision) => decision.action === 'execute');
+    browserPolicyReady = plan.routes.some((decision) => decision.action === 'execute');
+    apiCredentialsReady = decisionsAreCredentialReady(plan.operations);
+    browserCredentialsReady = decisionsAreCredentialReady(plan.routes);
   } catch (error) {
     if (error?.code === 'CLI_DATA_UNSAFE') throw error;
   }
+  const coverageReady = discoveryAvailable
+    && (!config.requireCompleteCoverage || coverage === 'complete');
+  const apiReady = coverageReady && apiPolicyReady && apiCredentialsReady;
+  const browserReady = coverageReady
+    && browserPolicyReady
+    && browserCredentialsReady
+    && chromeAvailable;
+  const sweepReady = apiReady && browserReady;
   return {
     schemaVersion: '2.0',
-    executionReady: origins.length > 0
-      && roles.every((entry) => entry.available)
-      && chromeAvailable
-      && discoveryAvailable
-      && (!config.requireCompleteCoverage || coverage === 'complete'),
+    executionReady: sweepReady,
+    apiReady,
+    browserReady,
+    sweepReady,
     discovery,
     discoveryAvailable,
     coverage,
