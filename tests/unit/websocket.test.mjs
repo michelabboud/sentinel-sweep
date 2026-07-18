@@ -587,6 +587,52 @@ test('flushes CDP events to a fixed point when a handler queues another event', 
   await client.close();
 });
 
+test('CDP barrier includes an event from a later transport turn before its response', async () => {
+  const connection = new FakeWebSocketConnection();
+  const client = new CdpClient(connection);
+  const delivered = [];
+  let releaseHandler;
+  const handlerReleased = new Promise((resolve) => { releaseHandler = resolve; });
+  let resolveResponseSeen;
+  const responseSeen = new Promise((resolve) => { resolveResponseSeen = resolve; });
+  client.on('Runtime.consoleAPICalled', async ({ marker }) => {
+    delivered.push(marker);
+    await handlerReleased;
+  });
+
+  let barrierResolved = false;
+  const barrier = client.roundTrip(
+    'Page.getFrameTree',
+    {},
+    'page-session',
+    { timeoutMs: 250 },
+  ).then(() => { barrierResolved = true; });
+  const request = connection.sent[0];
+  assert.equal(request.method, 'Page.getFrameTree');
+  assert.equal(request.sessionId, 'page-session');
+  setImmediate(() => {
+    connection.handlers.message(JSON.stringify({
+      method: 'Runtime.consoleAPICalled',
+      sessionId: 'page-session',
+      params: { marker: 'later-transport-turn' },
+    }));
+    setImmediate(() => {
+      connection.handlers.message(JSON.stringify({ id: request.id, result: {} }));
+      resolveResponseSeen();
+    });
+  });
+
+  await responseSeen;
+  await Promise.resolve();
+  assert.equal(barrierResolved, false);
+  releaseHandler();
+
+  await barrier;
+
+  assert.deepEqual(delivered, ['later-transport-turn']);
+  await client.close();
+});
+
 test('disconnects before a queued CDP event-count flood can execute', async () => {
   const connection = new FakeWebSocketConnection();
   const client = new CdpClient(connection);

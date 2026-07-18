@@ -17,7 +17,7 @@ const RESERVED_CREDENTIAL_HEADERS = new Set([
   'x-auth-token',
 ]);
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const SETTLE_QUIET_MS = 250;
+const CLEANUP_TIMEOUT_MS = 1000;
 
 const SEVERITY_ORDER = new Map([
   ['critical', 0],
@@ -322,10 +322,30 @@ function screenshotName(route, role, viewport) {
   return `browser-${identity}.png`;
 }
 
+function validateBrowserTiming(config) {
+  if (!Number.isInteger(config?.responseTimeoutMs)
+      || !Number.isInteger(config?.browserSettleMs)
+      || config.browserSettleMs < 1
+      || config.browserSettleMs > 10000
+      || config.browserSettleMs >= config.responseTimeoutMs) {
+    throw new SentinelError(
+      'CONFIG_BROWSER_SETTLE_INVALID',
+      'Browser settle time must be bounded and shorter than the response timeout',
+    );
+  }
+}
+
 function attemptTimeoutError() {
   return new SentinelError(
     'BROWSER_ATTEMPT_TIMEOUT',
     'Browser attempt exceeded its wall-clock deadline',
+  );
+}
+
+function attemptCleanupError() {
+  return new SentinelError(
+    'BROWSER_ATTEMPT_CLEANUP_FAILED',
+    'Browser attempt cleanup could not restore the shared CDP session',
   );
 }
 
@@ -346,16 +366,23 @@ class AttemptDeadline {
     return Math.max(1, Math.ceil(this.expiresAt - performance.now()));
   }
 
-  send(client, method, params = {}, sessionId) {
+  async send(client, method, params = {}, sessionId) {
     return client.send(method, params, sessionId, {
       timeoutMs: this.remainingMs(),
       signal: this.signal,
     });
   }
 
-  flush(client) {
+  async flush(client) {
     this.remainingMs();
     return client.flushEvents({ signal: this.signal });
+  }
+
+  async roundTrip(client, method, params = {}, sessionId) {
+    return client.roundTrip(method, params, sessionId, {
+      timeoutMs: this.remainingMs(),
+      signal: this.signal,
+    });
   }
 
   wait(milliseconds) {
@@ -401,18 +428,28 @@ class AttemptDeadline {
   }
 }
 
-async function waitForBrowserSettle({ client, deadline, inFlightRequests, activity }) {
+async function waitForBrowserSettle({
+  client,
+  deadline,
+  sessionId,
+  settleMs,
+  inFlightRequests,
+  activity,
+}) {
   while (true) {
-    await deadline.flush(client);
+    await deadline.roundTrip(client, 'Page.getFrameTree', {}, sessionId);
     const quietFor = performance.now() - activity.lastAt;
-    if (inFlightRequests.size === 0 && quietFor >= SETTLE_QUIET_MS) {
+    if (inFlightRequests.size === 0 && quietFor >= settleMs) {
       const version = activity.version;
-      await deadline.flush(client);
-      if (inFlightRequests.size === 0 && activity.version === version) return;
+      await deadline.roundTrip(client, 'Page.getFrameTree', {}, sessionId);
+      const finalQuietFor = performance.now() - activity.lastAt;
+      if (inFlightRequests.size === 0
+          && activity.version === version
+          && finalQuietFor >= settleMs) return;
       continue;
     }
     const waitMs = inFlightRequests.size === 0
-      ? SETTLE_QUIET_MS - quietFor
+      ? settleMs - quietFor
       : 25;
     await deadline.wait(Math.max(1, waitMs));
   }
@@ -949,6 +986,8 @@ async function runAttempt({
     await waitForBrowserSettle({
       client: rawClient,
       deadline,
+      sessionId,
+      settleMs: config.browserSettleMs,
       inFlightRequests,
       activity,
     });
@@ -1060,31 +1099,47 @@ async function runAttempt({
   } finally {
     attemptActive = false;
     for (const unsubscribe of unsubscriptions) unsubscribe();
+    const cleanupDeadline = new AttemptDeadline(CLEANUP_TIMEOUT_MS);
+    const cleanupClient = Object.freeze({
+      flushEvents: () => cleanupDeadline.flush(rawClient),
+      send: (method, params = {}, controlledSessionId) => (
+        cleanupDeadline.send(rawClient, method, params, controlledSessionId)
+      ),
+    });
     let cleanupComplete = rawClient.state === 'open';
     if (cleanupComplete) {
       try {
-        if (targetId !== undefined) await client.send('Target.closeTarget', { targetId });
+        if (targetId !== undefined) {
+          await cleanupClient.send('Target.closeTarget', { targetId });
+        }
         if (browserContextId !== undefined) {
-          await client.send('Target.disposeBrowserContext', { browserContextId });
+          await cleanupClient.send('Target.disposeBrowserContext', { browserContextId });
         }
         if (rootAutoAttachEnabled) {
-          await client.send('Target.setAutoAttach', {
+          await cleanupClient.send('Target.setAutoAttach', {
             autoAttach: false,
             waitForDebuggerOnStart: false,
             flatten: true,
           });
         }
         if (discoverTargetsEnabled) {
-          await client.send('Target.setDiscoverTargets', { discover: false });
+          await cleanupClient.send('Target.setDiscoverTargets', { discover: false });
         }
-        await client.flushEvents();
+        await cleanupClient.flushEvents();
       } catch (error) {
         cleanupComplete = false;
         if (error?.code === 'CDP_EVENT_QUEUE_OVERFLOW'
             || rawClient.disconnectError?.code === 'CDP_EVENT_QUEUE_OVERFLOW') {
           fatalError = rawClient.disconnectError ?? error;
+        } else if (fatalError === null) {
+          fatalError = rawClient.disconnectError ?? attemptCleanupError();
         }
+      } finally {
+        cleanupDeadline.close();
       }
+    } else {
+      cleanupDeadline.close();
+      if (fatalError === null) fatalError = rawClient.disconnectError ?? attemptCleanupError();
     }
     if (!cleanupComplete && rawClient.state === 'open') {
       rawClient.disconnect('CDP_ATTEMPT_CLEANUP_FAILED');
@@ -1131,6 +1186,7 @@ export async function sweepBrowser({
       'A trusted TargetBoundary is required for browser sweeps',
     );
   }
+  validateBrowserTiming(config);
   const routes = Array.isArray(manifest?.routes) ? manifest.routes : [];
   const decisions = Array.isArray(plan?.routes) ? plan.routes : [];
   const decisionsById = new Map(decisions.map((decision) => [decision.subjectId, decision]));
@@ -1149,7 +1205,7 @@ export async function sweepBrowser({
   let client;
   try {
     client = await CdpClient.connect(chrome.webSocketUrl);
-    routeLoop: for (const route of routes) {
+    for (const route of routes) {
       const decision = decisionsById.get(route?.id);
       if (decision?.action !== 'execute') {
         observations.push(policySkip(route, decision));
@@ -1196,7 +1252,6 @@ export async function sweepBrowser({
             runBoundary,
           });
           observations.push(...attemptObservations);
-          if (client.state !== 'open') break routeLoop;
         }
       }
     }

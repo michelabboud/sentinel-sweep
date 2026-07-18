@@ -129,5 +129,11 @@ export async function loadTrustedConfig({ configPath, targetRoot, defaultsPath }
   const merged = mergeSettings(defaults, settings);
   const schema = await loadBundledSchema('settings');
   validateAgainstSchema(merged, schema, { name: 'trusted config' });
+  if (merged.browserSettleMs >= merged.responseTimeoutMs) {
+    throw configError(
+      'CONFIG_BROWSER_SETTLE_INVALID',
+      'Browser settle time must be shorter than the response timeout',
+    );
+  }
   return merged;
 }

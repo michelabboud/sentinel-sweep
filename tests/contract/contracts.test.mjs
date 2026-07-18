@@ -297,9 +297,35 @@ test('bundled defaults are explicit and fail closed', () => {
     requireCompleteCoverage: true,
     maxConcurrency: 4,
     responseTimeoutMs: 5000,
+    browserSettleMs: 500,
     viewports: [375, 768, 1280],
     screenshotOnError: true,
   });
+});
+
+test('browser settle quiet window is required and strictly bounded', () => {
+  assert.deepEqual(
+    schemas.settings.required.includes('browserSettleMs'),
+    true,
+  );
+  assert.deepEqual(schemas.settings.properties.browserSettleMs, {
+    type: 'integer',
+    minimum: 1,
+    maximum: 10000,
+  });
+  for (const browserSettleMs of [0, 1.5, 10001]) {
+    assert.throws(
+      () => validateAgainstSchema(
+        { ...defaults, browserSettleMs },
+        schemas.settings,
+        { name: 'settings' },
+      ),
+      (error) => error.code === 'SCHEMA_INVALID'
+        && error.details.violations.some((violation) => (
+          violation.path === '/browserSettleMs'
+        )),
+    );
+  }
 });
 
 test('rejects legacy schema versions', () => {

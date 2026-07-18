@@ -59,6 +59,7 @@ test('trusted config merges with strict v2 defaults and rejects unknown settings
 
   const config = await loadTrustedConfig({ configPath, targetRoot, defaultsPath });
   assert.equal(config.responseTimeoutMs, 10000);
+  assert.equal(config.browserSettleMs, 500);
   assert.equal(config.schemaVersion, '2.0');
   assert.equal(config.allowMutations, false);
 
@@ -67,6 +68,23 @@ test('trusted config merges with strict v2 defaults and rejects unknown settings
     () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
     { code: 'SCHEMA_INVALID' },
   );
+
+  await writeFile(configPath, '{"responseTimeoutMs":1000,"browserSettleMs":250}\n');
+  assert.equal(
+    (await loadTrustedConfig({ configPath, targetRoot, defaultsPath })).browserSettleMs,
+    250,
+  );
+
+  for (const browserSettleMs of [500, 501]) {
+    await writeFile(
+      configPath,
+      `${JSON.stringify({ responseTimeoutMs: 500, browserSettleMs })}\n`,
+    );
+    await assert.rejects(
+      () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
+      { code: 'CONFIG_BROWSER_SETTLE_INVALID' },
+    );
+  }
 });
 
 test('.env cannot be selected as an adapter input even when it is inside the target', async (t) => {

@@ -229,7 +229,7 @@ async function startBrowserFixture(t) {
     } else if (requested.pathname === '/delayed-defect') {
       body = html(
         'Delayed defect',
-        '<script>setTimeout(() => { console.error("delayed defect"); const node = document.createElement("div"); node.style.width = "700px"; node.style.height = "10px"; node.textContent = "wide"; document.body.append(node); }, 150)</script>',
+        '<script>setTimeout(() => { console.error("delayed defect"); const node = document.createElement("div"); node.style.width = "700px"; node.style.height = "10px"; node.textContent = "wide"; document.body.append(node); }, 350)</script>',
       );
     } else if (requested.pathname === '/empty') {
       body = html('Empty', '<main id="empty"></main>');
@@ -318,6 +318,7 @@ function browserConfig(origin, chromePath, overrides = {}) {
     },
     allowNonLoopback: false,
     responseTimeoutMs: 5000,
+    browserSettleMs: 500,
     viewports: [375],
     emptyContainerSelectors: ['#empty'],
     screenshotOnError: true,
@@ -565,13 +566,30 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
   assert.equal(fixture.receiverRequests.length, 0);
 
   const screenshots = await pngFiles(runBoundary.root);
-  assert.equal(screenshots.length, 16, screenshots.join(','));
+  const observedScreenshotPaths = [...new Set(
+    observations
+      .map((entry) => entry.evidence.screenshotPath)
+      .filter((value) => typeof value === 'string'),
+  )].sort();
+  assert.deepEqual(screenshots, observedScreenshotPaths);
   for (const name of screenshots) {
     const bytes = await readFile(path.join(runBoundary.root, name));
     assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   }
-  assert.ok(observations.filter((entry) => entry.outcome === 'fail' && entry.role === null)
-    .every((entry) => entry.evidence.screenshotPath?.endsWith('.png')));
+  for (const entry of observations.filter((candidate) => (
+    candidate.outcome === 'fail' && candidate.role === null
+  ))) {
+    if (entry.evidence.screenshotPath !== null) {
+      assert.ok(entry.evidence.screenshotPath.endsWith('.png'));
+      continue;
+    }
+    assert.ok(observations.some((candidate) => (
+      candidate.subjectId === entry.subjectId
+        && candidate.role === entry.role
+        && candidate.evidence.viewport === entry.evidence.viewport
+        && candidate.reasonCode === 'SCREENSHOT_CAPTURE_FAILED'
+    )), JSON.stringify(entry));
+  }
   assert.ok(observations.filter((entry) => entry.role !== null)
     .every((entry) => entry.evidence.screenshotPath === null));
   assert.ok(observations.filter((entry) => entry.outcome !== 'fail')
@@ -695,6 +713,7 @@ test('requires a trusted TargetBoundary and ignores a forged manifest target roo
   };
   const config = browserConfig('http://127.0.0.1:1', fakeChrome, {
     responseTimeoutMs: 500,
+    browserSettleMs: 100,
   });
   const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
 
@@ -708,16 +727,17 @@ test('requires a trusted TargetBoundary and ignores a forged manifest target roo
   );
 });
 
-test('bounds stalled navigation by one attempt wall-clock deadline', async (t) => {
+test('cleans up a timed-out attempt and continues with the next route', async (t) => {
   const chromePath = await findChromeOrSkip(t);
   if (chromePath === null) return;
   const fixture = await startBrowserFixture(t);
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-timeout-'));
   t.after(() => rm(temporary, { recursive: true, force: true }));
   const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
-  const manifest = browserManifest([route('slow-navigation')]);
+  const manifest = browserManifest([route('slow-navigation'), route('ok')]);
   const config = browserConfig(fixture.origin, chromePath, {
     responseTimeoutMs: 600,
+    browserSettleMs: 100,
     screenshotOnError: false,
   });
   const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
@@ -731,10 +751,48 @@ test('bounds stalled navigation by one attempt wall-clock deadline', async (t) =
     targetBoundary,
   });
 
-  assert.ok(performance.now() - startedAt < 1800, JSON.stringify(observations));
+  assert.ok(performance.now() - startedAt < 2500, JSON.stringify(observations));
   assert.equal(
     observationFor(observations, 'route:/slow-navigation', 'BROWSER_TIMEOUT').outcome,
     'fail',
+  );
+  assert.equal(
+    observationFor(observations, 'route:/ok', 'DOCUMENT_STATUS_EXPECTED').outcome,
+    'pass',
+  );
+});
+
+test('rejects the sweep when timeout cleanup cannot restore CDP state', async (t) => {
+  const chromePath = await findChromeOrSkip(t);
+  if (chromePath === null) return;
+  const fixture = await startBrowserFixture(t);
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-cleanup-failure-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
+  const manifest = browserManifest([route('slow-navigation'), route('ok')]);
+  const config = browserConfig(fixture.origin, chromePath, {
+    responseTimeoutMs: 600,
+    browserSettleMs: 100,
+    screenshotOnError: false,
+  });
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+  const connect = CdpClient.connect;
+  CdpClient.connect = async (...args) => {
+    const client = await connect.call(CdpClient, ...args);
+    const send = client.send.bind(client);
+    client.send = (method, ...sendArgs) => {
+      if (method === 'Target.disposeBrowserContext') {
+        return Promise.reject(new Error('injected cleanup failure'));
+      }
+      return send(method, ...sendArgs);
+    };
+    return client;
+  };
+  t.after(() => { CdpClient.connect = connect; });
+
+  await assert.rejects(
+    sweepBrowser({ manifest, plan, config, runBoundary, targetBoundary }),
+    { code: 'BROWSER_ATTEMPT_CLEANUP_FAILED' },
   );
 });
 

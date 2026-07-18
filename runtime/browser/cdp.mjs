@@ -304,6 +304,35 @@ export class CdpClient {
     } while (this.nextEventSequence > sequence);
   }
 
+  async roundTrip(
+    method,
+    params = {},
+    sessionId,
+    { timeoutMs = this.commandTimeoutMs, signal } = {},
+  ) {
+    if (!boundedPositiveInteger(timeoutMs, MAX_COMMAND_TIMEOUT_MS)
+        || (signal !== undefined && !abortSignal(signal))) {
+      throw cdpError('CDP_COMMAND_INVALID', 'CDP round-trip options are invalid');
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const timer = setTimeout(abort, timeoutMs);
+    timer.unref?.();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    try {
+      const result = await this.send(method, params, sessionId, {
+        timeoutMs,
+        signal: controller.signal,
+      });
+      await this.flushEvents({ signal: controller.signal });
+      return result;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
   async close() {
     if (this.state !== 'closed') this.disconnect('CDP_DISCONNECTED');
     await this.closeTransport();
