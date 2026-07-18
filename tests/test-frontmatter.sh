@@ -151,6 +151,40 @@ for filepath in "${ALL_FILES[@]}"; do
   echo ""
 done
 
+# Thin-host least-privilege contract
+echo "-- Thin-host tool boundaries --"
+
+COMMAND_FILE="$PROJECT_ROOT/commands/sentinel.md"
+COMMAND_FM=$(extract_frontmatter "$COMMAND_FILE")
+COMMAND_TOOLS=$(get_field "$COMMAND_FM" "allowed-tools")
+SKILL_FM=$(extract_frontmatter "$PROJECT_ROOT/skills/run/SKILL.md")
+SKILL_TOOLS=$(get_field "$SKILL_FM" "allowed-tools")
+
+if [[ "$COMMAND_TOOLS" == '["Bash", "Read"]' ]]; then
+  pass "commands/sentinel.md: allowed-tools is exactly Bash + Read"
+else
+  fail "commands/sentinel.md: expected Bash + Read only, got $COMMAND_TOOLS"
+fi
+
+if [[ "$SKILL_TOOLS" == '["Bash", "Read"]' ]]; then
+  pass "skills/run/SKILL.md: allowed-tools is exactly Bash + Read"
+else
+  fail "skills/run/SKILL.md: expected Bash + Read only, got $SKILL_TOOLS"
+fi
+
+for filepath in "${AGENT_FILES[@]}"; do
+  rel="${filepath#$PROJECT_ROOT/}"
+  fm=$(extract_frontmatter "$filepath")
+  tools_val=$(get_field "$fm" "tools")
+  if [[ "$tools_val" == '["Read"]' ]]; then
+    pass "$rel: tools is exactly Read"
+  else
+    fail "$rel: expected Read only, got $tools_val"
+  fi
+done
+
+echo ""
+
 # --- Summary ---
 echo "---"
 TOTAL=$((PASS + FAIL))
