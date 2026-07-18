@@ -124,6 +124,8 @@ const FILE_IDENTITY_FIELDS = [
   'mtimeNs',
 ];
 const PATH_IDENTITY_FIELDS = ['dev', 'ino', 'birthtimeNs', 'ctimeNs'];
+const PATH_STABLE_IDENTITY_FIELDS = ['dev', 'ino', 'birthtimeNs'];
+const FIXED_POSIX_TEMP_ROOT = '/tmp';
 
 function statInteger(value) {
   if (typeof value === 'bigint') return value;
@@ -156,8 +158,11 @@ function fileIdentity(stat) {
   return statIdentity(stat, FILE_IDENTITY_FIELDS);
 }
 
-function pathIdentity(stat) {
-  return statIdentity(stat, PATH_IDENTITY_FIELDS);
+function pathIdentity(stat, bindChangeTime) {
+  return statIdentity(
+    stat,
+    bindChangeTime ? PATH_IDENTITY_FIELDS : PATH_STABLE_IDENTITY_FIELDS,
+  );
 }
 
 function identitiesMatch(left, right, fields) {
@@ -282,6 +287,45 @@ function configBranchAncestors(filePath, targetPath) {
   return ancestors;
 }
 
+async function fixedPosixTempCandidates() {
+  if (process.platform === 'win32'
+      || typeof process.geteuid !== 'function'
+      || process.geteuid() === 0) {
+    return new Set();
+  }
+  const lexical = path.resolve(FIXED_POSIX_TEMP_ROOT);
+  const candidates = new Set([lexical]);
+  try {
+    candidates.add(path.resolve(await realpath(lexical)));
+  } catch {
+    // The lexical candidate still has to pass the exact stat checks below.
+  }
+  return candidates;
+}
+
+async function isVerifiedFixedPosixTempRoot(candidate, stat, fixedCandidates) {
+  const resolved = path.resolve(candidate);
+  if (!fixedCandidates.has(resolved) || !stat.isDirectory()) return false;
+  const uid = statInteger(stat.uid);
+  const mode = statInteger(stat.mode);
+  if (uid !== 0n || mode === null || (mode & 0o1000n) === 0n) return false;
+
+  const parent = path.dirname(resolved);
+  if (parent === resolved) return false;
+  let parentStat;
+  try {
+    parentStat = await lstat(parent, { bigint: true });
+  } catch {
+    return false;
+  }
+  const parentUid = statInteger(parentStat.uid);
+  const parentMode = statInteger(parentStat.mode);
+  return parentStat.isDirectory()
+    && parentUid === 0n
+    && parentMode !== null
+    && (parentMode & 0o022n) === 0n;
+}
+
 async function captureAncestorBindings(resolved, canonical, targetRoot, label) {
   const boundary = validateTrustedLocationBoundary(targetRoot);
   // Bind only each config-side branch. The shared common ancestor (for example
@@ -290,6 +334,7 @@ async function captureAncestorBindings(resolved, canonical, targetRoot, label) {
     ...configBranchAncestors(resolved, boundary.lexical),
     ...configBranchAncestors(canonical, boundary.canonical),
   ]);
+  const fixedTempCandidates = await fixedPosixTempCandidates();
   const bindings = [];
   for (const ancestorPath of requestedBindings) {
     let stat;
@@ -301,12 +346,21 @@ async function captureAncestorBindings(resolved, canonical, targetRoot, label) {
         `${label} ancestor path changed during verified read`,
       );
     }
-    const identity = pathIdentity(stat);
+    // Only the platform-fixed /tmp (or its canonical directory) may omit ctime,
+    // and only after filesystem ownership/mode/anchoring proves it is not
+    // user-relocatable. Every descendant still binds full change-time identity.
+    const bindChangeTime = !(await isVerifiedFixedPosixTempRoot(
+      ancestorPath,
+      stat,
+      fixedTempCandidates,
+    ));
+    const identity = pathIdentity(stat, bindChangeTime);
     if (identity === null) {
       throw configError(`${label}_FILE_CHANGED`, `${label} ancestor identity is unavailable`);
     }
     bindings.push(Object.freeze({
       path: ancestorPath,
+      bindChangeTime,
       identity: Object.freeze(identity),
     }));
   }
@@ -320,7 +374,12 @@ function ancestorBindingsMatch(expected, current) {
       entry !== null
       && typeof entry === 'object'
       && entry.path === current[index].path
-      && identitiesMatch(entry.identity, current[index].identity, PATH_IDENTITY_FIELDS)
+      && entry.bindChangeTime === current[index].bindChangeTime
+      && identitiesMatch(
+        entry.identity,
+        current[index].identity,
+        entry.bindChangeTime ? PATH_IDENTITY_FIELDS : PATH_STABLE_IDENTITY_FIELDS,
+      )
     ));
 }
 

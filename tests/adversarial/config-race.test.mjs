@@ -16,12 +16,14 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import * as configModule from '../../runtime/lib/config.mjs';
 
 const execFile = promisify(execFileCallback);
 const configModuleUrl = new URL('../../runtime/lib/config.mjs', import.meta.url).href;
+const crossRootTarget = fileURLToPath(new URL('../fixtures/discovery/', import.meta.url));
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sentinel-config-race-'));
@@ -273,6 +275,74 @@ test('detects higher-ancestor relocation restored while the immediate parent sta
     { code: 'CONFIG_FILE_CHANGED' },
   );
   assert.equal(intercepted, true);
+});
+
+test('accepts unrelated sibling churn under verified fixed /tmp for cross-root config', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('fixed POSIX /tmp policy is not available on Windows');
+    return;
+  }
+  if (typeof process.geteuid !== 'function' || process.geteuid() === 0) {
+    t.skip('fixed /tmp is relocatable by the current effective user');
+    return;
+  }
+  const canonicalTmp = await realpath('/tmp');
+  const tmpStat = await lstat(canonicalTmp, { bigint: true });
+  const tmpParentStat = await lstat(path.dirname(canonicalTmp), { bigint: true });
+  if (!tmpStat.isDirectory()
+      || tmpStat.uid !== 0n
+      || (tmpStat.mode & 0o1000n) === 0n
+      || !tmpParentStat.isDirectory()
+      || tmpParentStat.uid !== 0n
+      || (tmpParentStat.mode & 0o022n) !== 0n) {
+    t.skip('fixed /tmp does not meet the trusted-root preconditions');
+    return;
+  }
+  const canonicalTarget = await realpath(crossRootTarget);
+  const relativeTarget = path.relative(canonicalTmp, canonicalTarget);
+  if (relativeTarget === ''
+      || (!path.isAbsolute(relativeTarget)
+        && relativeTarget !== '..'
+        && !relativeTarget.startsWith(`..${path.sep}`))) {
+    t.skip('test target must be outside fixed /tmp');
+    return;
+  }
+
+  const trustedParent = await mkdtemp('/tmp/sentinel-cross-root-config-');
+  t.after(async () => {
+    await rm(trustedParent, { recursive: true, force: true });
+  });
+  const configPath = path.join(trustedParent, 'sentinel.config.json');
+  await writeFile(configPath, '{}\n', { mode: 0o600 });
+  await chmod(configPath, 0o600);
+
+  const probe = await open(configPath, 'r');
+  const fileHandlePrototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const originalDescriptor = Object.getOwnPropertyDescriptor(fileHandlePrototype, 'readFile');
+  let intercepted = false;
+  Object.defineProperty(fileHandlePrototype, 'readFile', {
+    ...originalDescriptor,
+    value: async function churnFixedTmpSiblingDuringRead(...args) {
+      const result = await originalDescriptor.value.apply(this, args);
+      if (!intercepted) {
+        intercepted = true;
+        const sibling = await mkdtemp('/tmp/sentinel-unrelated-churn-');
+        await rm(sibling, { recursive: true });
+      }
+      return result;
+    },
+  });
+  t.after(() => {
+    Object.defineProperty(fileHandlePrototype, 'readFile', originalDescriptor);
+  });
+
+  const config = await configModule.loadTrustedConfig({
+    configPath,
+    targetRoot: crossRootTarget,
+  });
+  assert.equal(intercepted, true);
+  assert.equal(config.schemaVersion, '2.0');
 });
 
 test('does not trust an environment-selected temp ancestor during verified read', async (t) => {
