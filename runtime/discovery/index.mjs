@@ -251,24 +251,33 @@ function setParameterExamples(parameters, examples, id) {
   if (!isObject(examples)) {
     throw manifestError('OVERRIDE_INVALID', `Parameter examples for ${id} must be an object`);
   }
-  return parameters.map((parameter) => {
-    const locationValues = isObject(examples[parameter.location])
-      ? examples[parameter.location]
-      : {};
-    const compoundKey = `${parameter.location}:${parameter.name}`;
-    let value;
-    let found = false;
-    if (hasOwn(examples, compoundKey)) {
-      value = examples[compoundKey];
-      found = true;
-    } else if (hasOwn(locationValues, parameter.name)) {
-      value = locationValues[parameter.name];
-      found = true;
-    } else if (hasOwn(examples, parameter.name)) {
-      value = examples[parameter.name];
-      found = true;
+  const qualifiedKeys = new Set(parameters.map(
+    (parameter) => `${parameter.location}:${parameter.name}`,
+  ));
+  const keysByName = new Map();
+  for (const parameter of parameters) {
+    const keys = keysByName.get(parameter.name) ?? [];
+    keys.push(`${parameter.location}:${parameter.name}`);
+    keysByName.set(parameter.name, keys);
+  }
+  const resolved = new Map();
+  for (const key of Object.keys(examples).sort()) {
+    const targets = qualifiedKeys.has(key)
+      ? [key]
+      : keysByName.get(key) ?? [key];
+    for (const target of targets) {
+      if (resolved.has(target)
+          && !isDeepStrictEqual(resolved.get(target), examples[key])) {
+        overrideConflict(id, 'parameterExamples');
+      }
+      resolved.set(target, structuredClone(examples[key]));
     }
-    return found ? { ...parameter, example: structuredClone(value) } : parameter;
+  }
+  return parameters.map((parameter) => {
+    const compoundKey = `${parameter.location}:${parameter.name}`;
+    return resolved.has(compoundKey)
+      ? { ...parameter, example: structuredClone(resolved.get(compoundKey)) }
+      : parameter;
   });
 }
 

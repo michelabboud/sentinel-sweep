@@ -193,6 +193,86 @@ test('coalesces semantically identical override definitions from every trusted s
   assert.equal(operation.rollback, 'restore-item');
 });
 
+test('rejects conflicting generic and qualified parameter-example aliases before application', async () => {
+  const targetBoundary = await fixtureBoundary();
+  const id = operationId('GET', '/api/items/{itemId}');
+  const conflicts = [
+    {
+      generic: 'itemId',
+      qualified: 'path:itemId',
+      genericValue: 'generic-item',
+      qualifiedValue: 'qualified-item'
+    },
+    {
+      generic: 'includeDetails',
+      qualified: 'query:includeDetails',
+      genericValue: false,
+      qualifiedValue: true
+    }
+  ];
+
+  for (const conflict of conflicts) {
+    await assert.rejects(
+      buildManifest({
+        targetBoundary,
+        config: {
+          target: completeConfig().target,
+          discovery: { openapi: ['openapi-complete.json'] },
+          trustedOverrides: {
+            operations: {
+              [id]: {
+                parameterExamples: {
+                  [conflict.generic]: conflict.genericValue,
+                  [conflict.qualified]: conflict.qualifiedValue
+                }
+              }
+            }
+          }
+        }
+      }),
+      (error) => error?.code === 'MANIFEST_CONFLICT'
+        && error?.details?.id === id
+        && error?.details?.field === 'parameterExamples',
+      conflict.qualified
+    );
+  }
+});
+
+test('coalesces identical generic and qualified parameter-example aliases deterministically', async () => {
+  const targetBoundary = await fixtureBoundary();
+  const id = operationId('GET', '/api/items/{itemId}');
+  const build = (parameterExamples) => buildManifest({
+    targetBoundary,
+    config: {
+      target: completeConfig().target,
+      discovery: { openapi: ['openapi-complete.json'] },
+      trustedOverrides: {
+        operations: {
+          [id]: { parameterExamples }
+        }
+      }
+    },
+    generatedAt: '2026-07-18T00:00:00.000Z'
+  });
+  const genericFirst = await build({
+    itemId: 'known-item',
+    'path:itemId': 'known-item',
+    includeDetails: true,
+    'query:includeDetails': true
+  });
+  const qualifiedFirst = await build({
+    'query:includeDetails': true,
+    includeDetails: true,
+    'path:itemId': 'known-item',
+    itemId: 'known-item'
+  });
+  const operation = genericFirst.operations.find((candidate) => candidate.id === id);
+
+  assert.deepEqual(genericFirst, qualifiedFirst);
+  assert.equal(operation.parameters.find((parameter) => parameter.name === 'itemId').example, 'known-item');
+  assert.equal(operation.parameters.find((parameter) => parameter.name === 'includeDetails').example, true);
+});
+
 test('rejects conflicting override fields across trusted sources before application', async () => {
   const targetBoundary = await fixtureBoundary();
   const adminId = operationId('GET', '/api/admin');
