@@ -359,7 +359,10 @@ export async function requestApproved({
         );
       }
 
-      const contentType = response.headers.get('content-type');
+      const rawContentType = response.headers.get('content-type');
+      const evidenceContentType = redactInspectionPaths
+        ? null
+        : normalizedMediaType(rawContentType);
       if (REDIRECT_STATUSES.has(response.status) && response.headers.has('location')) {
         redirects += 1;
         await response.body?.cancel().catch(() => {});
@@ -369,7 +372,7 @@ export async function requestApproved({
             redirects,
             'blocked',
             'REDIRECT_LIMIT_EXCEEDED',
-            { status: response.status, contentType },
+            { status: response.status, contentType: evidenceContentType },
           );
         }
 
@@ -386,7 +389,7 @@ export async function requestApproved({
             redirects,
             'blocked',
             error?.code ?? 'REDIRECT_INVALID',
-            { status: response.status, contentType },
+            { status: response.status, contentType: evidenceContentType },
           );
         }
 
@@ -408,7 +411,7 @@ export async function requestApproved({
           redirects,
           controller.signal.aborted ? 'timeout' : 'network-error',
           controller.signal.aborted ? 'HTTP_TIMEOUT' : 'HTTP_NETWORK_ERROR',
-          { status: response.status, contentType },
+          { status: response.status, contentType: evidenceContentType },
         );
       }
 
@@ -418,7 +421,7 @@ export async function requestApproved({
           redirects,
           'oversized',
           'RESPONSE_TOO_LARGE',
-          { status: response.status, bytes: bounded.bytes, contentType },
+          { status: response.status, bytes: bounded.bytes, contentType: evidenceContentType },
         );
       }
 
@@ -428,7 +431,7 @@ export async function requestApproved({
           inspection = normalizedInspection(inspectResponse({
             text: bounded.text,
             status: response.status,
-            contentType,
+            contentType: rawContentType,
             responses,
             schemaRegistry,
           }), bounded.text, redactInspectionPaths);
@@ -439,7 +442,7 @@ export async function requestApproved({
           return failure(startedAt, redirects, 'timeout', 'HTTP_TIMEOUT', {
             status: response.status,
             bytes: bounded.bytes,
-            contentType,
+            contentType: evidenceContentType,
           });
         }
       }
@@ -451,7 +454,7 @@ export async function requestApproved({
         durationMs: elapsedSince(startedAt),
         bytes: bounded.bytes,
         redirects,
-        contentType,
+        contentType: evidenceContentType,
         inspection,
       });
     }

@@ -68,6 +68,7 @@ test('follows a same-origin redirect manually and returns a bounded response', a
   assert.equal(observation.status, 200);
   assert.equal(observation.redirects, 1);
   assert.equal(observation.bytes, 11);
+  assert.equal(observation.contentType, 'application/json');
   assertExactTransportShape(observation);
   assert.deepEqual(Reflect.ownKeys(observation.inspection), ['reasonCode', 'schemaViolations']);
   assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
@@ -163,11 +164,12 @@ test('redacts reflected credentials from deterministic schema paths', async () =
       [tokenParts[1]]: true,
     }), {
       status: 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': `application/json; note=${ADMIN_TOKEN}` },
     }),
   });
 
   assertExactTransportShape(observation);
+  assert.equal(observation.contentType, null);
   assert.equal(observation.inspection.reasonCode, 'SCHEMA_VIOLATION');
   assert.deepEqual(observation.inspection.schemaViolations, [{
     path: '/[REDACTED]',
