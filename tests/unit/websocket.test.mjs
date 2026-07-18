@@ -1,0 +1,328 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import test from 'node:test';
+
+import {
+  MAX_MESSAGE_BYTES,
+  WebSocketConnection,
+} from '../../runtime/browser/websocket.mjs';
+import { CdpClient } from '../../runtime/browser/cdp.mjs';
+
+const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+function withTimeout(promise, label, timeoutMs = 5000) {
+  let timeout;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timeout));
+}
+
+function encodeServerFrame({ opcode, payload = Buffer.alloc(0), fin = true }) {
+  const bytes = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  let header;
+  if (bytes.length <= 125) {
+    header = Buffer.alloc(2);
+    header[1] = bytes.length;
+  } else if (bytes.length <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[1] = 126;
+    header.writeUInt16BE(bytes.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(bytes.length), 2);
+  }
+  header[0] = (fin ? 0x80 : 0) | opcode;
+  return Buffer.concat([header, bytes]);
+}
+
+function oversizedServerFrameHeader(length) {
+  const header = Buffer.alloc(10);
+  header[0] = 0x81;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(length), 2);
+  return header;
+}
+
+function createClientFrameCollector(socket, initial = Buffer.alloc(0)) {
+  let buffer = initial;
+  const frames = [];
+  const waiters = [];
+
+  function deliver(frame) {
+    const waiter = waiters.shift();
+    if (waiter) waiter.resolve(frame);
+    else frames.push(frame);
+  }
+
+  function fail(error) {
+    while (waiters.length > 0) waiters.shift().reject(error);
+  }
+
+  function parse() {
+    while (buffer.length >= 2) {
+      const first = buffer[0];
+      const second = buffer[1];
+      const lengthCode = second & 0x7f;
+      let offset = 2;
+      let length = lengthCode;
+      if (lengthCode === 126) {
+        if (buffer.length < 4) return;
+        length = buffer.readUInt16BE(2);
+        offset = 4;
+      } else if (lengthCode === 127) {
+        if (buffer.length < 10) return;
+        const largeLength = buffer.readBigUInt64BE(2);
+        assert.ok(largeLength <= BigInt(Number.MAX_SAFE_INTEGER));
+        length = Number(largeLength);
+        offset = 10;
+      }
+
+      const masked = (second & 0x80) !== 0;
+      if (masked) offset += 4;
+      if (buffer.length < offset + length) return;
+
+      const mask = masked ? buffer.subarray(offset - 4, offset) : null;
+      const payload = Buffer.from(buffer.subarray(offset, offset + length));
+      if (mask) {
+        for (let index = 0; index < payload.length; index += 1) {
+          payload[index] ^= mask[index % 4];
+        }
+      }
+      buffer = buffer.subarray(offset + length);
+      deliver({
+        fin: (first & 0x80) !== 0,
+        opcode: first & 0x0f,
+        masked,
+        lengthCode,
+        payload,
+      });
+    }
+  }
+
+  socket.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    try {
+      parse();
+    } catch (error) {
+      fail(error);
+    }
+  });
+  socket.on('error', fail);
+
+  if (initial.length > 0) parse();
+
+  return {
+    nextFrame() {
+      if (frames.length > 0) return Promise.resolve(frames.shift());
+      return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+    },
+  };
+}
+
+async function startRawWebSocketServer(t) {
+  const sockets = new Set();
+  let resolvePeer;
+  let rejectPeer;
+  const peerPromise = new Promise((resolve, reject) => {
+    resolvePeer = resolve;
+    rejectPeer = reject;
+  });
+  const server = createServer();
+
+  server.on('upgrade', (request, socket, head) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    try {
+      const key = request.headers['sec-websocket-key'];
+      assert.equal(typeof key, 'string');
+      const accept = createHash('sha1').update(`${key}${WEBSOCKET_GUID}`).digest('base64');
+      socket.write([
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${accept}`,
+        '',
+        '',
+      ].join('\r\n'));
+      const collector = createClientFrameCollector(socket, head);
+      resolvePeer({
+        socket,
+        nextFrame: collector.nextFrame,
+        send(frame) { socket.write(frame); },
+      });
+    } catch (error) {
+      rejectPeer(error);
+      socket.destroy();
+    }
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  return {
+    url: `ws://127.0.0.1:${address.port}/devtools/browser/test`,
+    peer: withTimeout(peerPromise, 'WebSocket peer'),
+  };
+}
+
+test('masks every client JSON frame and encodes 7, 16, and 64-bit lengths', async (t) => {
+  const server = await startRawWebSocketServer(t);
+  const connection = await WebSocketConnection.connect(server.url);
+  const peer = await server.peer;
+
+  const values = [
+    { value: 'small' },
+    { value: 'm'.repeat(200) },
+    { value: 'l'.repeat(70_000) },
+  ];
+  for (const value of values) connection.sendJson(value);
+
+  const frames = [];
+  for (let index = 0; index < values.length; index += 1) {
+    frames.push(await withTimeout(peer.nextFrame(), `client frame ${index}`));
+  }
+  assert.deepEqual(frames.map((frame) => frame.masked), [true, true, true]);
+  assert.deepEqual(frames.map((frame) => frame.opcode), [1, 1, 1]);
+  assert.deepEqual(frames.map((frame) => frame.lengthCode), [values[0]
+    ? Buffer.byteLength(JSON.stringify(values[0]))
+    : 0, 126, 127]);
+  assert.deepEqual(frames.map((frame) => JSON.parse(frame.payload.toString('utf8'))), values);
+
+  const closing = connection.close();
+  const closeFrame = await withTimeout(peer.nextFrame(), 'client close frame');
+  assert.equal(closeFrame.opcode, 8);
+  assert.equal(closeFrame.masked, true);
+  peer.send(encodeServerFrame({ opcode: 8, payload: closeFrame.payload }));
+  peer.socket.end();
+  await closing;
+});
+
+test('reassembles fragmented text, replies to ping with a masked pong, and completes close', async (t) => {
+  const server = await startRawWebSocketServer(t);
+  const connection = await WebSocketConnection.connect(server.url);
+  const peer = await server.peer;
+  const message = withTimeout(new Promise((resolve) => connection.onMessage(resolve)), 'message');
+  const closed = withTimeout(new Promise((resolve) => connection.onClose(resolve)), 'close');
+
+  peer.send(encodeServerFrame({ opcode: 1, payload: '{"answer":', fin: false }));
+  peer.send(encodeServerFrame({ opcode: 9, payload: 'sentinel-ping' }));
+  const pong = await withTimeout(peer.nextFrame(), 'masked pong');
+  assert.equal(pong.opcode, 10);
+  assert.equal(pong.masked, true);
+  assert.equal(pong.payload.toString('utf8'), 'sentinel-ping');
+
+  peer.send(encodeServerFrame({ opcode: 0, payload: '42}', fin: true }));
+  assert.equal(await message, '{"answer":42}');
+
+  const closePayload = Buffer.alloc(2);
+  closePayload.writeUInt16BE(1000);
+  peer.send(encodeServerFrame({ opcode: 8, payload: closePayload }));
+  const closeReply = await withTimeout(peer.nextFrame(), 'close reply');
+  assert.equal(closeReply.opcode, 8);
+  assert.equal(closeReply.masked, true);
+  peer.socket.end();
+  const closeInfo = await closed;
+  assert.equal(closeInfo.code, 1000);
+});
+
+test('fails closed on malformed opcodes and messages larger than 8 MiB', async (t) => {
+  await t.test('malformed opcode', async (subtest) => {
+    const server = await startRawWebSocketServer(subtest);
+    const connection = await WebSocketConnection.connect(server.url);
+    const peer = await server.peer;
+    const errored = withTimeout(new Promise((resolve) => connection.onError(resolve)), 'protocol error');
+
+    peer.send(encodeServerFrame({ opcode: 3, payload: 'target-opcode-payload' }));
+    const error = await errored;
+    assert.equal(error.code, 'WEBSOCKET_PROTOCOL_ERROR');
+    assert.equal(error.message.includes('target-opcode-payload'), false);
+    peer.socket.destroy();
+    await connection.close();
+  });
+
+  await t.test('maximum complete message', async (subtest) => {
+    const server = await startRawWebSocketServer(subtest);
+    const connection = await WebSocketConnection.connect(server.url);
+    const peer = await server.peer;
+    const errored = withTimeout(new Promise((resolve) => connection.onError(resolve)), 'size error');
+
+    peer.send(oversizedServerFrameHeader(MAX_MESSAGE_BYTES + 1));
+    const error = await errored;
+    assert.equal(error.code, 'WEBSOCKET_MESSAGE_TOO_LARGE');
+    peer.socket.destroy();
+    await connection.close();
+  });
+});
+
+test('CDP correlates out-of-order numeric responses and delivers event handlers in registration order', async (t) => {
+  const server = await startRawWebSocketServer(t);
+  const client = await CdpClient.connect(server.url);
+  const peer = await server.peer;
+
+  const first = client.send('Runtime.evaluate', { expression: 'first' });
+  const second = client.send('Runtime.evaluate', { expression: 'second' });
+  const firstRequest = JSON.parse((await peer.nextFrame()).payload.toString('utf8'));
+  const secondRequest = JSON.parse((await peer.nextFrame()).payload.toString('utf8'));
+  peer.send(encodeServerFrame({
+    opcode: 1,
+    payload: JSON.stringify({ id: secondRequest.id, result: { value: 'two' } }),
+  }));
+  peer.send(encodeServerFrame({
+    opcode: 1,
+    payload: JSON.stringify({ id: firstRequest.id, result: { value: 'one' } }),
+  }));
+  assert.deepEqual(await first, { value: 'one' });
+  assert.deepEqual(await second, { value: 'two' });
+
+  const order = [];
+  let resolveDelivered;
+  const delivered = new Promise((resolve) => { resolveDelivered = resolve; });
+  client.on('Runtime.consoleAPICalled', () => { order.push('first'); });
+  client.on('Runtime.consoleAPICalled', () => {
+    order.push('second');
+    resolveDelivered();
+  });
+  peer.send(encodeServerFrame({
+    opcode: 1,
+    payload: JSON.stringify({ method: 'Runtime.consoleAPICalled', params: { type: 'error' } }),
+  }));
+  await withTimeout(delivered, 'ordered CDP event');
+  assert.deepEqual(order, ['first', 'second']);
+
+  const closing = client.close();
+  const closeFrame = await peer.nextFrame();
+  peer.send(encodeServerFrame({ opcode: 8, payload: closeFrame.payload }));
+  peer.socket.end();
+  await closing;
+});
+
+test('CDP rejects pending requests when the transport disconnects', async (t) => {
+  const server = await startRawWebSocketServer(t);
+  const client = await CdpClient.connect(server.url);
+  const peer = await server.peer;
+
+  const pending = client.send('Runtime.evaluate', { expression: 'pending' });
+  await peer.nextFrame();
+  const closePayload = Buffer.alloc(2);
+  closePayload.writeUInt16BE(1001);
+  peer.send(encodeServerFrame({ opcode: 8, payload: closePayload }));
+  await peer.nextFrame();
+  peer.socket.end();
+
+  await assert.rejects(pending, { code: 'CDP_DISCONNECTED' });
+  await client.close();
+});

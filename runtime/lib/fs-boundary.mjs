@@ -255,6 +255,13 @@ export class RunBoundary {
     return this.#write(name, value);
   }
 
+  async writeBytes(name, value) {
+    if (!Buffer.isBuffer(value) && !(value instanceof Uint8Array)) {
+      throw boundaryError('OUTPUT_BYTES_INVALID', 'Binary output must be a Buffer or Uint8Array');
+    }
+    return this.#write(name, Buffer.from(value));
+  }
+
   async replaceLatest(reportRoot, runId) {
     if (typeof runId !== 'string'
         || runId.length === 0

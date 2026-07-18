@@ -167,6 +167,28 @@ test('RunBoundary writes canonical JSON with a final newline', async (t) => {
   assert.equal((await lstat(path.join(runRoot, 'result.json'))).mode & 0o777, 0o600);
 });
 
+test('RunBoundary atomically writes exact binary bytes with mode 0600', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  const victim = path.join(root, 'victim.bin');
+  await mkdir(runRoot);
+  await writeFile(victim, Buffer.from([1, 2, 3]));
+  await symlink(victim, path.join(runRoot, 'browser.png'));
+  const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128]);
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.writeBytes('browser.png', png);
+
+  const output = path.join(runRoot, 'browser.png');
+  assert.deepEqual(await readFile(output), Buffer.from(png));
+  assert.deepEqual(await readFile(victim), Buffer.from([1, 2, 3]));
+  assert.equal((await lstat(output)).isSymbolicLink(), false);
+  assert.equal((await lstat(output)).mode & 0o777, 0o600);
+  await assert.rejects(() => boundary.writeBytes('invalid.png', 'not bytes'), {
+    code: 'OUTPUT_BYTES_INVALID',
+  });
+});
+
 test('RunBoundary refuses output path escapes', async (t) => {
   const root = await fixture(t);
   const runRoot = path.join(root, 'run');
