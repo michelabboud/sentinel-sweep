@@ -488,6 +488,7 @@ test('promotes incomplete coverage to a canonical error when trusted policy requ
   }]);
   assert.equal(findings.summary.error, 1);
   assert.equal(findings.summary.warning, 1);
+  assert.equal(findings.requireCompleteCoverage, true);
   assert.doesNotThrow(() => validateCanonicalFindings(findings));
 });
 
@@ -504,6 +505,8 @@ test('does not add the coverage policy finding when completeness is not required
   });
   const complete = build({ requireCompleteCoverage: true });
 
+  assert.equal(partial.requireCompleteCoverage, false);
+  assert.equal(complete.requireCompleteCoverage, true);
   assert.equal(
     partial.findings.some((entry) => entry.reasonCode === 'COVERAGE_REQUIRED_INCOMPLETE'),
     false,
@@ -561,6 +564,42 @@ test('rejects persisted coverage policy findings whose fixed provenance or wordi
   const forgedStatus = structuredClone(canonical);
   forgedStatus.coverage.status = 'complete';
   assert.throws(() => validateCanonicalFindings(forgedStatus));
+});
+
+test('enforces the persisted coverage policy iff completeness is required and not achieved', () => {
+  const coverage = {
+    status: 'partial',
+    diagnostics: [{
+      code: 'VUE_DYNAMIC_ROUTE',
+      message: 'One route cannot be discovered statically',
+    }],
+  };
+  const requiredPartial = build({ coverage, requireCompleteCoverage: true });
+  const optionalPartial = build({ coverage, requireCompleteCoverage: false });
+  const requiredComplete = build({ requireCompleteCoverage: true });
+  const optionalComplete = build({ requireCompleteCoverage: false });
+
+  for (const valid of [requiredPartial, optionalPartial, requiredComplete, optionalComplete]) {
+    assert.doesNotThrow(() => validateCanonicalFindings(valid));
+  }
+
+  const missingRequiredPolicy = structuredClone(requiredPartial);
+  missingRequiredPolicy.coverage.diagnostics = missingRequiredPolicy.coverage.diagnostics.filter(
+    (entry) => entry.code !== 'COVERAGE_REQUIRED_INCOMPLETE',
+  );
+  missingRequiredPolicy.findings = missingRequiredPolicy.findings.filter(
+    (entry) => entry.reasonCode !== 'COVERAGE_REQUIRED_INCOMPLETE',
+  );
+  missingRequiredPolicy.summary.error -= 1;
+  assert.throws(() => validateCanonicalFindings(missingRequiredPolicy));
+
+  const forbiddenOptionalPolicy = structuredClone(requiredPartial);
+  forbiddenOptionalPolicy.requireCompleteCoverage = false;
+  assert.throws(() => validateCanonicalFindings(forbiddenOptionalPolicy));
+
+  const incorrectRequiredSummary = structuredClone(requiredPartial);
+  incorrectRequiredSummary.summary.error -= 1;
+  assert.throws(() => validateCanonicalFindings(incorrectRequiredSummary));
 });
 
 test('rejects unknown or malformed observation fields, subjects, roles, and enums', () => {

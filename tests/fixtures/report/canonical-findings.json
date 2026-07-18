@@ -4,6 +4,7 @@
   "startedAt": "2026-07-18T12:00:00.000Z",
   "finishedAt": "2026-07-18T12:00:03.000Z",
   "manifestGeneratedAt": "2026-07-18T11:59:59.000Z",
+  "requireCompleteCoverage": false,
   "coverage": {
     "status": "partial",
     "diagnostics": [

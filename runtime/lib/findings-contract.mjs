@@ -499,6 +499,13 @@ function validateSemantics(document, failure) {
   const ids = new Set();
   const summary = { critical: 0, error: 0, warning: 0, info: 0, skipped: 0 };
   const matchedCoverage = new Set();
+  const coveragePolicyRequired = document.requireCompleteCoverage
+    && document.coverage.status !== 'complete';
+  const coveragePolicyDiagnosticCount = document.coverage.diagnostics.filter(
+    (diagnostic) => diagnostic.code === 'COVERAGE_REQUIRED_INCOMPLETE',
+  ).length;
+  if (coveragePolicyDiagnosticCount !== (coveragePolicyRequired ? 1 : 0)) throw failure;
+  let coveragePolicyFindingCount = 0;
   let nonPolicyCoverageDiagnostics = 0;
   for (let findingIndex = 0; findingIndex < document.findings.length; findingIndex += 1) {
     const finding = document.findings[findingIndex];
@@ -548,7 +555,8 @@ function validateSemantics(document, failure) {
         throw failure;
       }
       if (requiredByPolicy) {
-        if (document.coverage.status === 'complete'
+        coveragePolicyFindingCount += 1;
+        if (!coveragePolicyRequired
             || diagnostic.message !== 'Trusted configuration requires complete coverage'
             || diagnostic.sourcePath !== null
             || diagnostic.pointer !== null
@@ -590,6 +598,7 @@ function validateSemantics(document, failure) {
   }
 
   if (matchedCoverage.size !== document.coverage.diagnostics.length) throw failure;
+  if (coveragePolicyFindingCount !== (coveragePolicyRequired ? 1 : 0)) throw failure;
   if (document.coverage.status !== 'complete' && nonPolicyCoverageDiagnostics === 0) throw failure;
   for (let keyIndex = 0; keyIndex < SUMMARY_KEYS.length; keyIndex += 1) {
     const key = SUMMARY_KEYS[keyIndex];

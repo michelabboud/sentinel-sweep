@@ -8,6 +8,7 @@
     "runId",
     "startedAt",
     "finishedAt",
+    "requireCompleteCoverage",
     "coverage",
     "summary",
     "findings"
@@ -19,6 +20,7 @@
     "startedAt": { "type": "string", "minLength": 1 },
     "finishedAt": { "type": "string", "minLength": 1 },
     "manifestGeneratedAt": { "type": ["string", "null"] },
+    "requireCompleteCoverage": { "type": "boolean" },
     "coverage": { "$ref": "#/$defs/coverage" },
     "summary": { "$ref": "#/$defs/summary" },
     "responseTimePercentiles": { "$ref": "#/$defs/percentiles" },

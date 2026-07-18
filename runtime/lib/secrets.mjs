@@ -169,11 +169,31 @@ function validateSecretInputs(refs, env) {
   return snapshot;
 }
 
-function percentLower(value) {
-  return value.replace(/%[0-9A-F]{2}/gu, (match) => match.toLowerCase());
+function escapeRegexLiteral(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
-function encodedSecretValues(value) {
+function mixedPercentHexPattern(value) {
+  let source = '';
+  let hasPercentTriplet = false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '%'
+        && /^[0-9A-F]$/u.test(value[index + 1] ?? '')
+        && /^[0-9A-F]$/u.test(value[index + 2] ?? '')) {
+      hasPercentTriplet = true;
+      source += '%';
+      for (const nibble of [value[index + 1], value[index + 2]]) {
+        source += /[A-F]/u.test(nibble) ? `[${nibble}${nibble.toLowerCase()}]` : nibble;
+      }
+      index += 2;
+    } else {
+      source += escapeRegexLiteral(value[index]);
+    }
+  }
+  return hasPercentTriplet ? source : null;
+}
+
+function encodedSecretVariants(value) {
   const transport = [
     value,
     Buffer.from(value).toString('base64'),
@@ -181,46 +201,60 @@ function encodedSecretValues(value) {
     Buffer.from(`:${value}`).toString('base64'),
     Buffer.from(`:${value}`).toString('base64url'),
   ];
-  const variants = new Set(transport);
+  const literals = new Set(transport);
+  const percentPatterns = new Set();
   for (const candidate of transport) {
     try {
       const encoded = encodeURIComponent(candidate);
-      variants.add(encoded);
-      variants.add(percentLower(encoded));
-      variants.add(encoded.replace(/%20/gu, '+'));
-      variants.add(percentLower(encoded).replace(/%20/gu, '+'));
+      const formEncoded = encoded.replace(/%20/gu, '+');
+      literals.add(encoded);
+      literals.add(formEncoded);
+      for (const variant of [encoded, formEncoded]) {
+        const pattern = mixedPercentHexPattern(variant);
+        if (pattern !== null) percentPatterns.add(pattern);
+      }
     } catch {
       // Raw and binary transport forms remain available for malformed Unicode.
     }
   }
-  return [...variants];
+  return { literals: [...literals], percentPatterns: [...percentPatterns] };
+}
+
+function scrubAuthorization(input) {
+  return input.replace(
+    /((?:proxy-)?authorization["']?\s*:\s*["']?\s*bearer\s+)[^\r\n,;"'}]+/giu,
+    '$1[REDACTED]',
+  ).replace(
+    /((?:proxy-)?authorization["']?\s*:\s*["']?\s*basic\s+)[^\r\n,;"'}]+/giu,
+    '$1[REDACTED]',
+  );
 }
 
 function redactorForValues(resolvedValues) {
   const values = [...new Set(resolvedValues)]
     .filter((value) => value.length >= 4);
-  const encodedValues = [...new Set(values.flatMap(encodedSecretValues))]
+  const encoded = values.map(encodedSecretVariants);
+  const encodedValues = [...new Set(encoded.flatMap((entry) => entry.literals))]
     .filter((value) => value.length >= 4)
     .sort((left, right) => right.length - left.length);
+  const percentPatterns = [...new Set(encoded.flatMap((entry) => entry.percentPatterns))]
+    .sort((left, right) => right.length - left.length
+      || (left < right ? -1 : left > right ? 1 : 0))
+    .map((source) => new RegExp(source, 'gu'));
 
   return trustedRedactor((input) => {
     if (typeof input !== 'string') {
       throw secretError('REDACTION_INPUT_INVALID', 'Redaction input must be a string');
     }
 
-    let redacted = input;
+    let redacted = scrubAuthorization(input);
     for (const value of encodedValues) {
       redacted = replaceAllLiteral(redacted, value, '[REDACTED]');
     }
-    redacted = redacted.replace(
-        /((?:proxy-)?authorization["']?\s*:\s*["']?\s*bearer\s+)[^\s,;"'}]+/giu,
-        '$1[REDACTED]',
-      )
-      .replace(
-        /((?:proxy-)?authorization["']?\s*:\s*["']?\s*basic\s+)[^\s,;"'}]+/giu,
-        '$1[REDACTED]',
-      );
-    return redacted;
+    for (const pattern of percentPatterns) {
+      redacted = redacted.replace(pattern, '[REDACTED]');
+    }
+    return scrubAuthorization(redacted);
   });
 }
 

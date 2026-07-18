@@ -1083,6 +1083,7 @@ export function buildFindings(options = {}) {
     manifestGeneratedAt: manifest.generatedAt === null || manifest.generatedAt === undefined
       ? null
       : redactString(manifest.generatedAt, redact, 'manifest-generated-at'),
+    requireCompleteCoverage,
     coverage: effectiveCoverage,
     summary: summarize(candidates),
     findings: candidates.map((entry) => entry.finding),

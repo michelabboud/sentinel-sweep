@@ -27,6 +27,7 @@ const documents = {
     runId: '2026-07-18T00-00-00-000Z',
     startedAt: '2026-07-18T00:00:00.000Z',
     finishedAt: '2026-07-18T00:00:01.000Z',
+    requireCompleteCoverage: false,
     coverage: { status: 'complete', diagnostics: [] },
     summary: {
       critical: 0,
@@ -221,6 +222,21 @@ test('validates bundled defaults and minimal v2 artifacts', () => {
       validateAgainstSchema(document, schemas[name], { name });
     });
   }
+});
+
+test('requires canonical findings to bind the trusted coverage policy decision', () => {
+  const missingPolicyBinding = structuredClone(documents.findings);
+  delete missingPolicyBinding.requireCompleteCoverage;
+
+  assert.throws(
+    () => validateAgainstSchema(missingPolicyBinding, schemas.findings, { name: 'findings' }),
+    (error) => {
+      assert.deepEqual(error?.details?.violations, [
+        { path: '/requireCompleteCoverage', keyword: 'required' },
+      ]);
+      return true;
+    },
+  );
 });
 
 test('rejects a bundled history document with 129 runs at the schema boundary', () => {

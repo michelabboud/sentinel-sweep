@@ -155,6 +155,68 @@ test('createAvailableRedactor tolerates only unavailable secrets and redacts tra
   );
 });
 
+test('authorization scrubbing survives configured secrets that collide with header syntax', () => {
+  const unavailableCanaries = [
+    'unavailable-bearer-token',
+    'unavailable-basic-token',
+    'unavailable-proxy-token',
+    'unavailable-json-token',
+  ];
+  const redact = createAvailableRedactor([
+    'env:SENTINEL_AUTHORIZATION_WORD',
+    'env:SENTINEL_BEARER_WORD',
+    'env:SENTINEL_BASIC_WORD',
+    'env:SENTINEL_UNAVAILABLE_TOKEN',
+  ], {
+    SENTINEL_AUTHORIZATION_WORD: 'Authorization',
+    SENTINEL_BEARER_WORD: 'Bearer',
+    SENTINEL_BASIC_WORD: 'Basic',
+  });
+  const input = [
+    `Authorization: Bearer ${unavailableCanaries[0]}`,
+    `authorization: Basic ${unavailableCanaries[1]}`,
+    `Proxy-Authorization: Bearer ${unavailableCanaries[2]}`,
+    JSON.stringify({ Authorization: `Bearer ${unavailableCanaries[3]}` }),
+  ].join('\n');
+
+  const result = redact(input);
+
+  for (const canary of unavailableCanaries) assert.equal(result.includes(canary), false, canary);
+  assert.equal((result.match(/\[REDACTED\]/gu) ?? []).length >= 4, true);
+});
+
+test('redacts each mixed-case percent-hex spelling without changing ordinary letter case', () => {
+  const secret = 'Case/+? token';
+  const redact = createAvailableRedactor(['env:SENTINEL_PRESENT_TOKEN'], {
+    SENTINEL_PRESENT_TOKEN: secret,
+  });
+  const mixedVariants = [
+    'Case%2f%2B%3f%20token',
+    'Case%2F%2b%3F%20token',
+    'Case%2f%2b%3F%20token',
+  ];
+
+  for (const variant of mixedVariants) {
+    assert.equal(redact(`before ${variant} after`), 'before [REDACTED] after', variant);
+  }
+  assert.equal(redact('case%2f%2B%3f%20token'), 'case%2f%2B%3f%20token');
+});
+
+test('redacts longer mixed-case percent-hex secrets before their configured prefixes', () => {
+  const redact = createAvailableRedactor([
+    'env:SENTINEL_SHORT_TOKEN',
+    'env:SENTINEL_LONG_TOKEN',
+  ], {
+    SENTINEL_SHORT_TOKEN: 'prefix/',
+    SENTINEL_LONG_TOKEN: 'prefix/remaining?',
+  });
+
+  assert.equal(
+    redact('before prefix%2fremaining%3f after'),
+    'before [REDACTED] after',
+  );
+});
+
 test('createAvailableRedactor still rejects malformed refs and untrusted environments', () => {
   assert.throws(
     () => createAvailableRedactor(['not-an-env-ref'], {}),
