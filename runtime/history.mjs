@@ -1462,7 +1462,7 @@ async function recoverStaging(root) {
   });
   for (const name of names.sort(compareCodeUnits)) {
     try {
-      await RunBoundary.recoverStaging(root.publicPath, name);
+      await RunBoundary.recoverStaging(root.anchor, name);
     } catch {
       throw historyError(
         'RUN_STAGE_RECOVERY_FAILED',
@@ -1487,18 +1487,7 @@ async function reconcilePublishedRuns(root, history) {
     if (!direct.has(entry.runId)) {
       throw historyError('HISTORY_RUN_MISSING', 'Tracked v2 run directory is missing');
     }
-    const run = await openPinnedRun(root.anchor, entry.runId, entry);
-    if (run === null) {
-      throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Tracked v2 run identity changed');
-    }
-    try {
-      await readRunMarker(run, entry.markerToken);
-      if (!await revalidatePinnedRun(run, entry, entry.markerToken)) {
-        throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Tracked v2 run identity changed');
-      }
-    } finally {
-      await run.handle.close().catch(() => {});
-    }
+    await readTrackedArtifacts(root.anchor, entry);
   }
   const tracked = new Set(history.runs.map((entry) => entry.runId));
   const recoveredRunIds = [];
@@ -1600,7 +1589,7 @@ export async function publishRun(options = {}) {
     }
     await verifyReportRoot(root);
     const markerToken = randomBytes(32).toString('hex');
-    boundary = await RunBoundary.createStaging(root.publicPath, markerToken);
+    boundary = await RunBoundary.createStaging(root.anchor, markerToken);
     let artifactResult;
     try {
       artifactResult = await input.writeArtifacts(artifactWriter(boundary));

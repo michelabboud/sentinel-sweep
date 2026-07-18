@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {
+import fsPromises, {
   chmod,
   lstat,
   mkdtemp,
@@ -10,6 +10,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -140,6 +141,154 @@ test('TargetBoundary resolves a regular supported adapter input inside the pinne
 
   const boundary = await TargetBoundary.create(targetRoot);
   assert.equal(await boundary.resolveInput('openapi.yaml'), path.join(targetRoot, 'openapi.yaml'));
+});
+
+test('TargetBoundary never reads through a target-root replacement after pinning', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const displacedRoot = path.join(root, 'target-displaced');
+  const outsideRoot = path.join(root, 'outside');
+  await mkdir(targetRoot);
+  await mkdir(outsideRoot);
+  await writeFile(path.join(targetRoot, 'openapi.json'), '{"source":"target"}\n');
+  await writeFile(path.join(outsideRoot, 'openapi.json'), '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  fsPromises.open = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(targetRoot, displacedRoot);
+      await originalSymlink(outsideRoot, targetRoot, 'dir');
+    }
+    return originalOpen(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.readText('openapi.json'),
+      (error) => ['INPUT_CHANGED', 'TARGET_ROOT_CHANGED'].includes(error?.code),
+    );
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(path.join(outsideRoot, 'openapi.json'), 'utf8'), '{"source":"outside"}\n');
+});
+
+test('TargetBoundary never reads through an ancestor replacement after inspection', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const sourceRoot = path.join(targetRoot, 'spec');
+  const displacedRoot = path.join(root, 'spec-displaced');
+  const outsideRoot = path.join(root, 'outside');
+  await mkdir(sourceRoot, { recursive: true });
+  await mkdir(outsideRoot);
+  await writeFile(path.join(sourceRoot, 'openapi.json'), '{"source":"target"}\n');
+  await writeFile(path.join(outsideRoot, 'openapi.json'), '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  fsPromises.open = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(sourceRoot, displacedRoot);
+      await originalSymlink(outsideRoot, sourceRoot, 'dir');
+    }
+    return originalOpen(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.readText('spec/openapi.json'),
+      (error) => ['INPUT_CHANGED', 'INPUT_SYMLINK'].includes(error?.code),
+    );
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(path.join(outsideRoot, 'openapi.json'), 'utf8'), '{"source":"outside"}\n');
+});
+
+test('TargetBoundary rejects a regular-file replacement between inspection and open', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const targetInput = path.join(targetRoot, 'openapi.json');
+  const displacedInput = path.join(root, 'openapi-displaced.json');
+  const outsideInput = path.join(root, 'outside.json');
+  await mkdir(targetRoot);
+  await writeFile(targetInput, '{"source":"target"}\n');
+  await writeFile(outsideInput, '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.open = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(targetInput, displacedInput);
+      await originalRename(outsideInput, targetInput);
+    }
+    return originalOpen(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.readText('openapi.json'),
+      (error) => error?.code === 'INPUT_CHANGED',
+    );
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(targetInput, 'utf8'), '{"source":"outside"}\n');
+});
+
+test('TargetBoundary resolveInput rejects a file swapped after its initial identity check', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const targetInput = path.join(targetRoot, 'openapi.json');
+  const displacedInput = path.join(root, 'openapi-displaced.json');
+  const outsideInput = path.join(root, 'outside.json');
+  await mkdir(targetRoot);
+  await writeFile(targetInput, '{"source":"target"}\n');
+  await writeFile(outsideInput, '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalLstat = fsPromises.lstat;
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.lstat = async (candidate, ...arguments_) => {
+    const result = await originalLstat(candidate, ...arguments_);
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(targetInput, displacedInput);
+      await originalRename(outsideInput, targetInput);
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.resolveInput('openapi.json'),
+      (error) => error?.code === 'INPUT_CHANGED',
+    );
+  } finally {
+    fsPromises.lstat = originalLstat;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(targetInput, 'utf8'), '{"source":"outside"}\n');
 });
 
 test('RunBoundary atomically replaces output symlinks and writes mode 0600', async (t) => {

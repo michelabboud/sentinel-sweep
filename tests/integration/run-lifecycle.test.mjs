@@ -28,7 +28,7 @@ import {
   readSweepHistory,
 } from '../../runtime/history.mjs';
 import { RunBoundary } from '../../runtime/lib/fs-boundary.mjs';
-import { renderMarkdown } from '../../runtime/report.mjs';
+import { renderDashboard, renderMarkdown, renderPrComment } from '../../runtime/report.mjs';
 
 const canonical = JSON.parse(
   await readFile(new URL('../fixtures/report/canonical-findings.json', import.meta.url), 'utf8'),
@@ -336,6 +336,191 @@ test('recovers only exact marker-bound staging and preserves unrelated children'
   assert.equal(await readFile(path.join(mismatched, 'canary.txt'), 'utf8'), 'do-not-delete\n');
 });
 
+test('staging creation stays on the pinned report root during a public symlink swap', async (t) => {
+  const reportRoot = await temporaryRoot(t, 'sentinel-run-stage-root-swap-');
+  const parent = path.dirname(reportRoot);
+  const displacedRoot = path.join(parent, 'sentinel-v2-displaced');
+  const outsideRoot = path.join(parent, 'outside');
+  await mkdir(outsideRoot, { mode: 0o700 });
+  const findings = findingsFor('2026-07-18T13-00-02-008Z');
+  const originalMkdir = fsPromises.mkdir;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  fsPromises.mkdir = async (candidate, ...arguments_) => {
+    if (!injected && STAGING_NAME.test(path.basename(String(candidate)))) {
+      injected = true;
+      await originalRename(reportRoot, displacedRoot);
+      await originalSymlink(outsideRoot, reportRoot, 'dir');
+    }
+    return originalMkdir(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(publish(reportRoot, findings));
+  } finally {
+    fsPromises.mkdir = originalMkdir;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.deepEqual(await readdir(outsideRoot), []);
+});
+
+test('nested staging writes stay descriptor-relative during a public symlink swap', async (t) => {
+  const reportRoot = await temporaryRoot(t, 'sentinel-run-nested-root-swap-');
+  const parent = path.dirname(reportRoot);
+  const displacedRoot = path.join(parent, 'sentinel-v2-displaced');
+  const outsideRoot = path.join(parent, 'outside');
+  await mkdir(outsideRoot, { mode: 0o700 });
+  const findings = findingsFor('2026-07-18T13-00-02-009Z');
+  const originalMkdir = fsPromises.mkdir;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  let outsideStage;
+  fsPromises.mkdir = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'nested') {
+      injected = true;
+      const stageName = path.basename(path.dirname(String(candidate)));
+      outsideStage = path.join(outsideRoot, stageName);
+      await originalRename(reportRoot, displacedRoot);
+      await originalSymlink(outsideRoot, reportRoot, 'dir');
+      await originalMkdir(outsideStage, { mode: 0o700 });
+    }
+    return originalMkdir(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      publish(reportRoot, findings, async (boundary) => {
+        await boundary.writeText('nested/probe.txt', 'pinned\n');
+      }),
+    );
+  } finally {
+    fsPromises.mkdir = originalMkdir;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  await assert.rejects(access(path.join(outsideStage, 'nested'), fsConstants.F_OK));
+});
+
+test('staging abort removes only anchored debris after a public symlink swap', async (t) => {
+  const reportRoot = await temporaryRoot(t, 'sentinel-run-abort-root-swap-');
+  const parent = path.dirname(reportRoot);
+  const displacedRoot = path.join(parent, 'sentinel-v2-displaced');
+  const outsideRoot = path.join(parent, 'outside');
+  await mkdir(outsideRoot, { mode: 0o700 });
+  const findings = findingsFor('2026-07-18T13-00-02-010Z');
+  let stageName;
+  await assert.rejects(
+    publishRun({
+      reportRoot,
+      runId: findings.runId,
+      findings,
+      writeArtifacts: async (boundary) => {
+        stageName = path.basename(boundary.root);
+        await boundary.writeText('partial.txt', 'anchored partial\n');
+        await fsPromises.rename(reportRoot, displacedRoot);
+        await fsPromises.symlink(outsideRoot, reportRoot, 'dir');
+        const outsideStage = path.join(outsideRoot, stageName);
+        await fsPromises.mkdir(outsideStage, { mode: 0o700 });
+        await writeFile(path.join(outsideStage, 'partial.txt'), 'outside canary\n', { mode: 0o600 });
+        throw new Error('injected callback failure');
+      },
+    }),
+  );
+  assert.equal(
+    await readFile(path.join(outsideRoot, stageName, 'partial.txt'), 'utf8'),
+    'outside canary\n',
+  );
+  assert.equal(
+    (await readdir(displacedRoot)).some((name) => STAGING_NAME.test(name)),
+    false,
+  );
+});
+
+test('staging commit cannot publish through a swapped public report root', async (t) => {
+  const reportRoot = await temporaryRoot(t, 'sentinel-run-commit-root-swap-');
+  const parent = path.dirname(reportRoot);
+  const displacedRoot = path.join(parent, 'sentinel-v2-displaced');
+  const outsideRoot = path.join(parent, 'outside');
+  await mkdir(outsideRoot, { mode: 0o700 });
+  const findings = findingsFor('2026-07-18T13-00-02-011Z');
+  const originalRename = fsPromises.rename;
+  const originalMkdir = fsPromises.mkdir;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  let outsideStage;
+  fsPromises.rename = async (source, destination) => {
+    if (!injected
+        && STAGING_NAME.test(path.basename(String(source)))
+        && path.basename(String(destination)) === findings.runId) {
+      injected = true;
+      const stageName = path.basename(String(source));
+      outsideStage = path.join(outsideRoot, stageName);
+      await originalRename(reportRoot, displacedRoot);
+      await originalSymlink(outsideRoot, reportRoot, 'dir');
+      await originalMkdir(outsideStage, { mode: 0o700 });
+      await writeFile(path.join(outsideStage, 'canary.txt'), 'outside canary\n', { mode: 0o600 });
+    }
+    return originalRename(source, destination);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(publish(reportRoot, findings));
+  } finally {
+    fsPromises.rename = originalRename;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  await assert.rejects(access(path.join(outsideRoot, findings.runId), fsConstants.F_OK));
+  assert.equal(await readFile(path.join(outsideStage, 'canary.txt'), 'utf8'), 'outside canary\n');
+});
+
+test('staging recovery removes only the anchored tree after a public symlink swap', async (t) => {
+  const reportRoot = await temporaryRoot(t, 'sentinel-run-recover-root-swap-');
+  const parent = path.dirname(reportRoot);
+  const displacedRoot = path.join(parent, 'sentinel-v2-displaced');
+  const outsideRoot = path.join(parent, 'outside');
+  await mkdir(outsideRoot, { mode: 0o700 });
+  const token = 'd'.repeat(64);
+  const stale = await RunBoundary.createStaging(reportRoot, token);
+  const stageName = path.basename(stale.root);
+  await stale.writeText('partial.txt', 'anchored partial\n');
+  const outsideStage = path.join(outsideRoot, stageName);
+  await mkdir(outsideStage, { mode: 0o700 });
+  await writeFile(path.join(outsideStage, '.sentinel-run-identity-v2'), `${token}\n`, {
+    mode: 0o600,
+  });
+  await writeFile(path.join(outsideStage, 'canary.txt'), 'outside canary\n', { mode: 0o600 });
+
+  const originalLstat = fsPromises.lstat;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  fsPromises.lstat = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === stageName) {
+      injected = true;
+      await originalRename(reportRoot, displacedRoot);
+      await originalSymlink(outsideRoot, reportRoot, 'dir');
+    }
+    return originalLstat(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      publish(reportRoot, findingsFor('2026-07-18T13-00-02-012Z')),
+    );
+  } finally {
+    fsPromises.lstat = originalLstat;
+    syncBuiltinESMExports();
+    await stale.abort().catch(() => {});
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(path.join(outsideStage, 'canary.txt'), 'utf8'), 'outside canary\n');
+  await assert.rejects(access(path.join(displacedRoot, stageName), fsConstants.F_OK));
+});
+
 test('rejects run collisions before callback without clobbering the immutable publication', async (t) => {
   const reportRoot = await temporaryRoot(t, 'sentinel-run-no-clobber-');
   const findings = findingsFor('2026-07-18T13-00-02-004Z');
@@ -583,6 +768,27 @@ test('rejects the 129th run before creating staging or invoking the artifact cal
     await writeFile(path.join(directory, '.sentinel-run-identity-v2'), `${markerToken}\n`, {
       mode: 0o600,
     });
+    await writeFile(
+      path.join(directory, 'sentinel-manifest.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(directory, 'sentinel-findings.json'),
+      `${JSON.stringify(findings, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await writeFile(path.join(directory, 'sweep.md'), renderMarkdown(findings), { mode: 0o600 });
+    await writeFile(
+      path.join(directory, 'dashboard.html'),
+      renderDashboard(findings),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      path.join(directory, 'pr-comment.md'),
+      renderPrComment(findings),
+      { mode: 0o600 },
+    );
     const identity = await stat(directory, { bigint: true });
     runs.push({
       runId,
@@ -659,6 +865,10 @@ test('safe readers validate tracked runs and never follow report/run symlinks', 
     path.join(reportRoot, 'sweep-history.json'),
     `${JSON.stringify(tamperedHistory, null, 2)}\n`,
     { mode: 0o600 },
+  );
+  await assert.rejects(
+    readSweepHistory({ reportRoot }),
+    (error) => error?.code === 'HISTORY_RUN_METADATA_INVALID',
   );
   await assert.rejects(
     readPublishedRun({ reportRoot, runId: findings.runId }),

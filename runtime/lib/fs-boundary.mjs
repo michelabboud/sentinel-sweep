@@ -18,6 +18,7 @@ import { SentinelError } from './errors.mjs';
 const READ_FLAGS = fsConstants.O_RDONLY
   | (fsConstants.O_NOFOLLOW ?? 0)
   | (fsConstants.O_CLOEXEC ?? 0);
+const TARGET_READ_FLAGS = READ_FLAGS | (fsConstants.O_NONBLOCK ?? 0);
 const WRITE_FLAGS = fsConstants.O_CREAT
   | fsConstants.O_EXCL
   | fsConstants.O_WRONLY
@@ -27,6 +28,7 @@ const DIRECTORY_FLAGS = READ_FLAGS | (fsConstants.O_DIRECTORY ?? 0);
 const INPUT_EXTENSIONS = new Set(['.har', '.js', '.json', '.ts', '.vue', '.yaml', '.yml']);
 const BLOCKED_INPUT_NAME = /(?:^|[._-])(?:credential|credentials|secret|secrets|private[-_]?key)(?:[._-]|$)/u;
 const STAGING_NAME = /^\.sentinel-run-staging-([a-f0-9]{64})$/u;
+const PINNED_DIRECTORY = /^\/proc\/self\/fd\/[0-9]+$/u;
 const RUN_MARKER_NAME = '.sentinel-run-identity-v2';
 const MARKER_TOKEN = /^[a-f0-9]{64}$/u;
 const MAX_TREE_NODES = 4096;
@@ -110,47 +112,6 @@ async function canonicalDirectory(root, { symlinkCode, invalidCode, create = fal
   return canonical;
 }
 
-async function verifyParent(root, candidate, code) {
-  let canonicalParent;
-  try {
-    canonicalParent = await realpath(path.dirname(candidate));
-  } catch {
-    throw boundaryError(code, 'Path parent is not an accessible directory');
-  }
-  if (!isWithin(root, canonicalParent)) {
-    throw boundaryError('PATH_ESCAPE', 'Canonical path parent escapes the pinned root');
-  }
-  return canonicalParent;
-}
-
-async function inspectInput(root, candidate) {
-  await verifyParent(root, candidate, 'INPUT_PARENT_INVALID');
-
-  let stat;
-  try {
-    stat = await lstat(candidate);
-  } catch {
-    throw boundaryError('INPUT_UNAVAILABLE', 'Input is not available');
-  }
-  if (stat.isSymbolicLink()) {
-    throw boundaryError('INPUT_SYMLINK', 'Input must not be a symbolic link');
-  }
-  if (!stat.isFile()) {
-    throw boundaryError('INPUT_NOT_FILE', 'Input must be a regular file');
-  }
-
-  let canonicalInput;
-  try {
-    canonicalInput = await realpath(candidate);
-  } catch {
-    throw boundaryError('INPUT_UNAVAILABLE', 'Input could not be canonicalized');
-  }
-  if (!isWithin(root, canonicalInput)) {
-    throw boundaryError('PATH_ESCAPE', 'Canonical input escapes the pinned root');
-  }
-  return canonicalInput;
-}
-
 function sortJson(value) {
   if (Array.isArray(value)) {
     return value.map(sortJson);
@@ -168,6 +129,186 @@ function sortJson(value) {
 
 function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+function samePinnedDirectory(left, right) {
+  return left.isDirectory()
+    && right.isDirectory()
+    && sameIdentity(left, right)
+    && left.birthtimeNs === right.birthtimeNs
+    && left.uid === right.uid
+    && left.gid === right.gid
+    && left.mode === right.mode;
+}
+
+function samePinnedFile(left, right) {
+  return left.isFile()
+    && right.isFile()
+    && sameIdentity(left, right)
+    && left.birthtimeNs === right.birthtimeNs
+    && left.uid === right.uid
+    && left.gid === right.gid
+    && left.mode === right.mode
+    && left.nlink === right.nlink
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
+
+// Node 18 has no openat(2) API. Linux procfs lets each already-open directory
+// descriptor act as the no-follow anchor for the next path segment.
+async function openPinnedTargetRoot(root, expected = null) {
+  if (process.platform !== 'linux') {
+    throw boundaryError(
+      'TARGET_ROOT_PIN_UNAVAILABLE',
+      'Safe target-root descriptor pinning is unavailable on this platform',
+    );
+  }
+  let handle;
+  try {
+    const initial = await lstat(root, { bigint: true });
+    if (initial.isSymbolicLink() || !initial.isDirectory()) {
+      throw boundaryError('TARGET_ROOT_CHANGED', 'Pinned target root changed identity');
+    }
+    if (expected !== null && !samePinnedDirectory(initial, expected)) {
+      throw boundaryError('TARGET_ROOT_CHANGED', 'Pinned target root changed identity');
+    }
+    handle = await open(root, DIRECTORY_FLAGS);
+    const opened = await handle.stat({ bigint: true });
+    const anchor = `/proc/self/fd/${handle.fd}`;
+    const anchored = await lstat(`${anchor}/.`, { bigint: true });
+    const current = await lstat(root, { bigint: true });
+    const anchoredCanonical = await realpath(anchor);
+    const currentCanonical = await realpath(root);
+    if (!samePinnedDirectory(initial, opened)
+        || !samePinnedDirectory(opened, anchored)
+        || !samePinnedDirectory(opened, current)
+        || anchoredCanonical !== root
+        || currentCanonical !== root
+        || (expected !== null && !samePinnedDirectory(opened, expected))) {
+      throw boundaryError('TARGET_ROOT_CHANGED', 'Pinned target root changed identity');
+    }
+    return { anchor, handle, identity: opened };
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    if (error instanceof SentinelError) throw error;
+    throw boundaryError('TARGET_ROOT_CHANGED', 'Pinned target root could not be revalidated');
+  }
+}
+
+async function verifyPinnedTargetRoot(root, pinned, expected) {
+  try {
+    const descriptor = await pinned.handle.stat({ bigint: true });
+    const anchored = await lstat(`${pinned.anchor}/.`, { bigint: true });
+    const current = await lstat(root, { bigint: true });
+    const anchoredCanonical = await realpath(pinned.anchor);
+    const currentCanonical = await realpath(root);
+    if (current.isSymbolicLink()
+        || !samePinnedDirectory(pinned.identity, descriptor)
+        || !samePinnedDirectory(descriptor, anchored)
+        || !samePinnedDirectory(descriptor, current)
+        || !samePinnedDirectory(descriptor, expected)
+        || anchoredCanonical !== root
+        || currentCanonical !== root) {
+      throw boundaryError('TARGET_ROOT_CHANGED', 'Pinned target root changed during input access');
+    }
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    throw boundaryError('TARGET_ROOT_CHANGED', 'Pinned target root changed during input access');
+  }
+}
+
+async function accessPinnedTargetInput(root, expectedRoot, candidate, { readContents = false } = {}) {
+  const relative = path.relative(root, candidate);
+  const segments = relative.split(path.sep);
+  let pinnedRoot;
+  let fileHandle;
+  const directories = [];
+  try {
+    pinnedRoot = await openPinnedTargetRoot(root, expectedRoot);
+    let parentAnchor = pinnedRoot.anchor;
+    for (const segment of segments.slice(0, -1)) {
+      const entry = path.join(parentAnchor, segment);
+      let initial;
+      try {
+        initial = await lstat(entry, { bigint: true });
+      } catch {
+        throw boundaryError('INPUT_PARENT_INVALID', 'Input parent is not accessible');
+      }
+      if (initial.isSymbolicLink()) {
+        throw boundaryError('INPUT_SYMLINK', 'Input ancestors must not be symbolic links');
+      }
+      if (!initial.isDirectory()) {
+        throw boundaryError('INPUT_PARENT_INVALID', 'Input parent is not a directory');
+      }
+      let handle;
+      try {
+        handle = await open(entry, DIRECTORY_FLAGS);
+        const opened = await handle.stat({ bigint: true });
+        const current = await lstat(entry, { bigint: true });
+        if (!samePinnedDirectory(initial, opened) || !samePinnedDirectory(opened, current)) {
+          throw boundaryError('INPUT_CHANGED', 'Input ancestor changed during descriptor pinning');
+        }
+        directories.push({ entry, handle, identity: opened });
+        parentAnchor = `/proc/self/fd/${handle.fd}`;
+      } catch (error) {
+        await handle?.close().catch(() => {});
+        if (error instanceof SentinelError) throw error;
+        if (error?.code === 'ELOOP') {
+          throw boundaryError('INPUT_SYMLINK', 'Input ancestors must not be symbolic links');
+        }
+        throw boundaryError('INPUT_PARENT_INVALID', 'Input parent could not be pinned safely');
+      }
+    }
+
+    const input = path.join(parentAnchor, segments.at(-1));
+    let initial;
+    try {
+      initial = await lstat(input, { bigint: true });
+    } catch {
+      throw boundaryError('INPUT_UNAVAILABLE', 'Input is not available');
+    }
+    if (initial.isSymbolicLink()) {
+      throw boundaryError('INPUT_SYMLINK', 'Input must not be a symbolic link');
+    }
+    if (!initial.isFile()) {
+      throw boundaryError('INPUT_NOT_FILE', 'Input must be a regular file');
+    }
+    fileHandle = await open(input, TARGET_READ_FLAGS);
+    const opened = await fileHandle.stat({ bigint: true });
+    if (!samePinnedFile(initial, opened)) {
+      throw boundaryError('INPUT_CHANGED', 'Input changed before descriptor pinning');
+    }
+    const contents = readContents ? await fileHandle.readFile('utf8') : null;
+    const after = await fileHandle.stat({ bigint: true });
+    const current = await lstat(input, { bigint: true });
+    if (!samePinnedFile(opened, after) || !samePinnedFile(after, current)) {
+      throw boundaryError('INPUT_CHANGED', 'Input changed during descriptor-pinned access');
+    }
+    for (let index = directories.length - 1; index >= 0; index -= 1) {
+      const directory = directories[index];
+      const descriptor = await directory.handle.stat({ bigint: true });
+      const linked = await lstat(directory.entry, { bigint: true });
+      if (!samePinnedDirectory(directory.identity, descriptor)
+          || !samePinnedDirectory(descriptor, linked)) {
+        throw boundaryError('INPUT_CHANGED', 'Input ancestor changed during access');
+      }
+    }
+    await verifyPinnedTargetRoot(root, pinnedRoot, expectedRoot);
+    return contents;
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    if (error?.code === 'ELOOP') {
+      throw boundaryError('INPUT_SYMLINK', 'Input must not be a symbolic link');
+    }
+    throw boundaryError('INPUT_READ_FAILED', 'Input could not be accessed safely');
+  } finally {
+    await fileHandle?.close().catch(() => {});
+    for (let index = directories.length - 1; index >= 0; index -= 1) {
+      await directories[index].handle.close().catch(() => {});
+    }
+    await pinnedRoot?.handle.close().catch(() => {});
+  }
 }
 
 function currentUid() {
@@ -196,7 +337,8 @@ function trustedOutputFile(stat) {
 async function syncOutputDirectory(directory, code = 'OUTPUT_SYNC_FAILED') {
   let handle;
   try {
-    handle = await open(directory, DIRECTORY_FLAGS);
+    const candidate = PINNED_DIRECTORY.test(directory) ? `${directory}/.` : directory;
+    handle = await open(candidate, DIRECTORY_FLAGS);
     await handle.sync();
   } catch {
     throw boundaryError(code, 'Output directory could not be synchronized');
@@ -225,18 +367,118 @@ async function ensureOutputParent(root, destination) {
       }
     }
     let identity;
-    let canonical;
     try {
       identity = await lstat(current);
-      canonical = await realpath(current);
     } catch {
       throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent is not accessible');
     }
-    if (!trustedOutputDirectory(identity) || canonical !== current) {
+    if (!trustedOutputDirectory(identity)) {
       throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent is not a private directory');
     }
+    let handle;
+    try {
+      handle = await open(current, DIRECTORY_FLAGS);
+      const opened = await handle.stat();
+      const linked = await lstat(current);
+      if (!trustedOutputDirectory(opened)
+          || !trustedOutputDirectory(linked)
+          || !sameIdentity(identity, opened)
+          || !sameIdentity(opened, linked)) {
+        throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent changed during pinning');
+      }
+    } catch (error) {
+      if (error instanceof SentinelError) throw error;
+      throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent could not be pinned safely');
+    } finally {
+      await handle?.close().catch(() => {});
+    }
   }
-  return verifyParent(root, destination, 'OUTPUT_PARENT_INVALID');
+  return verifyOutputParent(root, destination);
+}
+
+async function verifyOutputParent(root, destination) {
+  const parent = path.dirname(destination);
+  const relative = path.relative(root, parent);
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+    throw boundaryError('PATH_ESCAPE', 'Output parent escapes the pinned root');
+  }
+  let initial;
+  let handle;
+  try {
+    initial = await lstat(parent);
+    const allowExistingRootMode = parent === root && !root.startsWith('/proc/self/fd/');
+    const validDirectory = (stat) => (
+      allowExistingRootMode
+        ? stat.isDirectory() && !stat.isSymbolicLink()
+        : trustedOutputDirectory(stat)
+    );
+    if (!validDirectory(initial)) {
+      throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent is not a private directory');
+    }
+    handle = await open(parent, DIRECTORY_FLAGS);
+    const opened = await handle.stat();
+    const current = await lstat(parent);
+    if (!validDirectory(opened)
+        || !validDirectory(current)
+        || !sameIdentity(initial, opened)
+        || !sameIdentity(opened, current)) {
+      throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent changed during verification');
+    }
+    return parent;
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    throw boundaryError('OUTPUT_PARENT_INVALID', 'Output parent could not be verified safely');
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+// History owns the lifetime of this descriptor. Keeping its procfs spelling
+// avoids falling back to a public path after the root has been renamed.
+async function pinnedReportRoot(reportRoot) {
+  if (process.platform !== 'linux' || !PINNED_DIRECTORY.test(reportRoot)) return null;
+  let handle;
+  try {
+    const initial = await lstat(`${reportRoot}/.`);
+    if (!trustedOutputDirectory(initial)) {
+      throw boundaryError(
+        'REPORT_ROOT_PERMISSIONS_INVALID',
+        'The report root must be owned by the current uid with mode 0700',
+      );
+    }
+    handle = await open(`${reportRoot}/.`, DIRECTORY_FLAGS);
+    const opened = await handle.stat();
+    const current = await lstat(`${reportRoot}/.`);
+    if (!trustedOutputDirectory(opened)
+        || !trustedOutputDirectory(current)
+        || !sameIdentity(initial, opened)
+        || !sameIdentity(opened, current)) {
+      throw boundaryError('REPORT_ROOT_CHANGED', 'Pinned report root changed identity');
+    }
+    return { identity: opened, root: reportRoot };
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    throw boundaryError('REPORT_ROOT_INVALID', 'Pinned report root is not accessible');
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function stagingReportRoot(reportRoot) {
+  const pinned = await pinnedReportRoot(reportRoot);
+  if (pinned !== null) return pinned;
+  const canonicalRoot = await canonicalDirectory(reportRoot, {
+    symlinkCode: 'REPORT_ROOT_SYMLINK',
+    invalidCode: 'REPORT_ROOT_INVALID',
+  });
+  const identity = await lstat(canonicalRoot);
+  if (!trustedOutputDirectory(identity)) {
+    throw boundaryError(
+      'REPORT_ROOT_PERMISSIONS_INVALID',
+      'The report root must be owned by the current uid with mode 0700',
+    );
+  }
+  return { identity, root: canonicalRoot };
 }
 
 async function ensurePrivateDirectoryChain(candidate, { requirePrivateFinal = true } = {}) {
@@ -374,46 +616,37 @@ async function inspectOutputTree(root, { remove = false } = {}) {
 }
 
 export class TargetBoundary {
+  #identity;
+
   static async create(root) {
     const canonicalRoot = await canonicalDirectory(root, {
       symlinkCode: 'TARGET_ROOT_SYMLINK',
       invalidCode: 'TARGET_ROOT_INVALID',
     });
-    return new TargetBoundary(canonicalRoot);
+    const pinned = await openPinnedTargetRoot(canonicalRoot);
+    try {
+      return new TargetBoundary(canonicalRoot, pinned.identity);
+    } finally {
+      await pinned.handle.close().catch(() => {});
+    }
   }
 
-  constructor(canonicalRoot) {
+  constructor(canonicalRoot, identity) {
     this.root = canonicalRoot;
+    this.#identity = identity;
   }
 
   async readText(relativePath) {
     const candidate = resolveRelative(this.root, relativePath);
     validateInputType(candidate);
-    await inspectInput(this.root, candidate);
-
-    let handle;
-    try {
-      handle = await open(candidate, READ_FLAGS);
-      const stat = await handle.stat();
-      if (!stat.isFile()) {
-        throw boundaryError('INPUT_NOT_FILE', 'Input must be a regular file');
-      }
-      return await handle.readFile('utf8');
-    } catch (error) {
-      if (error instanceof SentinelError) throw error;
-      if (error?.code === 'ELOOP') {
-        throw boundaryError('INPUT_SYMLINK', 'Input must not be a symbolic link');
-      }
-      throw boundaryError('INPUT_READ_FAILED', 'Input could not be read');
-    } finally {
-      await handle?.close();
-    }
+    return accessPinnedTargetInput(this.root, this.#identity, candidate, { readContents: true });
   }
 
   async resolveInput(relativePath) {
     const candidate = resolveRelative(this.root, relativePath);
     validateInputType(candidate);
-    return inspectInput(this.root, candidate);
+    await accessPinnedTargetInput(this.root, this.#identity, candidate);
+    return candidate;
   }
 }
 
@@ -443,17 +676,8 @@ export class RunBoundary {
     if (!MARKER_TOKEN.test(markerToken)) {
       throw boundaryError('RUN_MARKER_INVALID', 'Run identity marker is invalid');
     }
-    const canonicalReportRoot = await canonicalDirectory(reportRoot, {
-      symlinkCode: 'REPORT_ROOT_SYMLINK',
-      invalidCode: 'REPORT_ROOT_INVALID',
-    });
-    const reportIdentity = await lstat(canonicalReportRoot);
-    if (!trustedOutputDirectory(reportIdentity)) {
-      throw boundaryError(
-        'REPORT_ROOT_PERMISSIONS_INVALID',
-        'The report root must be owned by the current uid with mode 0700',
-      );
-    }
+    const report = await stagingReportRoot(reportRoot);
+    const canonicalReportRoot = report.root;
     const name = `.sentinel-run-staging-${markerToken}`;
     if (!STAGING_NAME.test(name)) {
       throw boundaryError('RUN_STAGE_FAILED', 'Run staging identifier is invalid');
@@ -493,10 +717,7 @@ export class RunBoundary {
     if (match === null || path.basename(name) !== name) {
       throw boundaryError('RUN_STAGE_INVALID', 'Run staging identifier is invalid');
     }
-    const canonicalReportRoot = await canonicalDirectory(reportRoot, {
-      symlinkCode: 'REPORT_ROOT_SYMLINK',
-      invalidCode: 'REPORT_ROOT_INVALID',
-    });
+    const canonicalReportRoot = (await stagingReportRoot(reportRoot)).root;
     const stagingRoot = path.join(canonicalReportRoot, name);
     let identity;
     try {
@@ -564,7 +785,7 @@ export class RunBoundary {
       await handle.close();
       handle = undefined;
 
-      await verifyParent(this.root, destination, 'OUTPUT_PARENT_INVALID');
+      await verifyOutputParent(this.root, destination);
       await rename(temporary, destination);
       await syncOutputDirectory(parent);
       return destination;

@@ -38,6 +38,12 @@ import {
 const canonical = JSON.parse(
   await readFile(new URL('../fixtures/report/canonical-findings.json', import.meta.url), 'utf8'),
 );
+const manifestFixture = JSON.parse(
+  await readFile(
+    new URL('../fixtures/discovery/openapi-complete.manifest.json', import.meta.url),
+    'utf8',
+  ),
+);
 const RUN_ID = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3})?Z(?:-[a-f0-9]{8})?$/u;
 const RUN_MARKER_NAME = '.sentinel-run-identity-v2';
 const TOMBSTONE_NAME = /^\.sentinel-clean-[a-f0-9]{24}-[0-9]{4}$/u;
@@ -105,7 +111,15 @@ async function publishTestRun(reportRoot, runId, artifacts = {}) {
 }
 
 async function appendPublished(reportRoot, findings, artifacts = {}) {
-  await publishTestRun(reportRoot, findings.runId, artifacts);
+  const manifest = { ...structuredClone(manifestFixture), generatedAt: findings.manifestGeneratedAt };
+  await publishTestRun(reportRoot, findings.runId, {
+    'sentinel-manifest.json': `${JSON.stringify(manifest, null, 2)}\n`,
+    'sentinel-findings.json': `${JSON.stringify(findings, null, 2)}\n`,
+    'sweep.md': renderMarkdown(findings),
+    'dashboard.html': renderDashboard(findings),
+    'pr-comment.md': renderPrComment(findings),
+    ...artifacts,
+  });
   return appendHistoryRuntime({ reportRoot, findings });
 }
 
@@ -578,6 +592,7 @@ test('preflights tracked and kept paths before changing retention state', async 
       'CLEAN_RUN_SYMLINK',
       'CLEAN_HISTORY_MISMATCH',
       'HISTORY_RUN_IDENTITY_INVALID',
+      'HISTORY_RUN_MISSING',
     ].includes(error?.code),
   );
   assert.ok((await stat(path.join(reportRoot, oldest))).isDirectory());
