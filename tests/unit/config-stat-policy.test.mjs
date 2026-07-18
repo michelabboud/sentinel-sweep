@@ -4,10 +4,19 @@ import test from 'node:test';
 
 import * as configModule from '../../runtime/lib/config.mjs';
 
-function regularStat({ mode = 0o600, uid = 1000 } = {}) {
+function regularStat({
+  mode = 0o600,
+  uid = 1000,
+  nlink = 1,
+  dev = 10,
+  ino = 20,
+} = {}) {
   return {
     mode: fsConstants.S_IFREG | mode,
     uid,
+    nlink,
+    dev,
+    ino,
     isFile: () => true,
   };
 }
@@ -73,5 +82,66 @@ test('trusted-file stat policy rejects non-regular descriptors before trust deci
       },
     ),
     { code: 'CONFIG_NOT_FILE' },
+  );
+});
+
+test('external config stat policy rejects hard-link aliases', () => {
+  assert.throws(
+    () => configModule.validateTrustedFileStat(
+      regularStat({ nlink: 2 }),
+      {
+        label: 'CONFIG',
+        requirePrivateMode: true,
+        platform: 'linux',
+        effectiveUid: 1000,
+      },
+    ),
+    { code: 'CONFIG_LINK_COUNT_INVALID' },
+  );
+});
+
+test('opened descriptor identity must match the pre-open path identity', () => {
+  assert.equal(typeof configModule.validateOpenedFileIdentity, 'function');
+  const validate = configModule.validateOpenedFileIdentity;
+
+  assert.doesNotThrow(() => validate(
+    regularStat({ dev: 10n, ino: 20n }),
+    regularStat({ dev: 10n, ino: 20n }),
+    { label: 'CONFIG', platform: 'linux' },
+  ));
+  assert.throws(
+    () => validate(
+      regularStat({ dev: 10n, ino: 20n }),
+      regularStat({ dev: 10n, ino: 21n }),
+      { label: 'CONFIG', platform: 'linux' },
+    ),
+    { code: 'CONFIG_FILE_CHANGED' },
+  );
+  assert.throws(
+    () => validate(
+      regularStat({ dev: 10n, ino: 20n }),
+      regularStat({ dev: 11n, ino: 20n }),
+      { label: 'DEFAULTS', platform: 'linux' },
+    ),
+    { code: 'DEFAULTS_FILE_CHANGED' },
+  );
+});
+
+test('Windows descriptor identity uses available file IDs and otherwise fails closed', () => {
+  assert.equal(typeof configModule.validateOpenedFileIdentity, 'function');
+  const validate = configModule.validateOpenedFileIdentity;
+
+  assert.doesNotThrow(() => validate(
+    regularStat({ dev: 0n, ino: 12345n }),
+    regularStat({ dev: 0n, ino: 12345n }),
+    { label: 'CONFIG', platform: 'win32' },
+  ));
+  assert.throws(
+    () => validate(
+      regularStat({ dev: 0n, ino: 0n }),
+      regularStat({ dev: 0n, ino: 0n }),
+      { label: 'CONFIG', platform: 'win32' },
+    ),
+    { code: 'CONFIG_FILE_CHANGED' },
   );
 });

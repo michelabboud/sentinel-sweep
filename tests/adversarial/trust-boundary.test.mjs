@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   chmod,
+  link,
   mkdtemp,
   mkdir,
   readFile,
@@ -163,6 +164,23 @@ test('trusted config loader refuses caller-selected defaults outside the package
   await assert.rejects(
     loadTrustedConfig({ configPath, targetRoot, defaultsPath: fakeDefaultsPath }),
     { code: 'DEFAULTS_PATH_INVALID' },
+  );
+});
+
+test('external config cannot alias a target file through a hard link', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const targetConfigPath = path.join(targetRoot, 'target-owned.json');
+  const externalAliasPath = path.join(root, 'sentinel.config.json');
+  const defaultsPath = fileURLToPath(new URL('../../settings.json', import.meta.url));
+  await mkdir(targetRoot);
+  await writeFile(targetConfigPath, '{}\n', { mode: 0o600 });
+  await chmod(targetConfigPath, 0o600);
+  await link(targetConfigPath, externalAliasPath);
+
+  await assert.rejects(
+    loadTrustedConfig({ configPath: externalAliasPath, targetRoot, defaultsPath }),
+    { code: 'CONFIG_LINK_COUNT_INVALID' },
   );
 });
 

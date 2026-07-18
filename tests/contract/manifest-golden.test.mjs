@@ -337,6 +337,91 @@ test('direct buildManifest callers cannot use discovery or override aliases', as
   }
 });
 
+test('direct buildManifest rejects inherited discovery before it can select inputs', async () => {
+  const targetBoundary = await fixtureBoundary();
+  const inherited = Object.create({
+    discovery: { openapi: ['openapi-complete.json'] },
+  });
+  Object.assign(inherited, structuredClone(bundledDefaults));
+
+  await assert.rejects(
+    buildManifest({ targetBoundary, config: inherited }),
+    (error) => error?.code === 'CONFIG_INVALID',
+  );
+});
+
+test('direct buildManifest rejects inherited mutation-affecting overrides', async () => {
+  const targetBoundary = await fixtureBoundary();
+  const id = operationId('DELETE', '/api/items/{itemId}');
+  const inherited = Object.create({
+    trustedOverrides: {
+      operations: {
+        [id]: {
+          allowedRoles: ['admin'],
+          parameterExamples: [
+            { location: 'path', name: 'itemId', value: 'known-item' },
+          ],
+          deleteMode: 'hard',
+          sideEffects: { classes: ['data-delete'] },
+          rollback: 'restore-item',
+        },
+      },
+      routes: {},
+    },
+  });
+  Object.assign(inherited, configWith({
+    discovery: { openapi: ['openapi-complete.json'] },
+  }));
+
+  await assert.rejects(
+    buildManifest({ targetBoundary, config: inherited }),
+    (error) => error?.code === 'CONFIG_INVALID',
+  );
+});
+
+test('direct buildManifest rejects accessors without invoking them', async () => {
+  const targetBoundary = await fixtureBoundary();
+  const config = configWith({
+    discovery: { openapi: ['openapi-complete.json'] },
+  });
+  let getterCalls = 0;
+  Object.defineProperty(config, 'trustedOverrides', {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return { operations: {}, routes: {} };
+    },
+  });
+
+  await assert.rejects(
+    buildManifest({ targetBoundary, config }),
+    (error) => error?.code === 'CONFIG_INVALID',
+  );
+  assert.equal(getterCalls, 0);
+});
+
+test('direct buildManifest rejects nested objects with inherited config data', async () => {
+  const targetBoundary = await fixtureBoundary();
+  const id = operationId('GET', '/api/items/{itemId}');
+  const override = Object.create({
+    parameterExamples: [
+      { location: 'path', name: 'itemId', value: 'inherited-item' },
+    ],
+  });
+  const config = configWith({
+    discovery: { openapi: ['openapi-complete.json'] },
+    trustedOverrides: {
+      operations: { [id]: override },
+      routes: {},
+    },
+  });
+
+  await assert.rejects(
+    buildManifest({ targetBoundary, config }),
+    (error) => error?.code === 'CONFIG_INVALID',
+  );
+});
+
 test('missing canonical discovery remains the semantic DISCOVERY_REQUIRED error', async () => {
   const targetBoundary = await fixtureBoundary();
   await assert.rejects(

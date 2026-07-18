@@ -2,12 +2,17 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { SentinelError } from '../lib/errors.mjs';
+import { canonicalizeTrustedConfig } from '../lib/config.mjs';
 import { operationId, routeId } from '../lib/identity.mjs';
 import { loadBundledSchema, validateAgainstSchema } from '../lib/schema.mjs';
 import { discoverOpenApi } from './openapi.mjs';
 import { discoverVueRouter } from './vue-router.mjs';
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+function ownValue(value, key) {
+  return isObject(value) && hasOwn(value, key) ? value[key] : undefined;
+}
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -43,8 +48,9 @@ function mergeRecord(map, record, kind) {
 }
 
 function discoveryPaths(config) {
-  const openapi = [...(config.discovery?.openapi ?? [])].sort();
-  const vueRouter = [...(config.discovery?.vueRouter ?? [])].sort();
+  const discovery = ownValue(config, 'discovery');
+  const openapi = [...(ownValue(discovery, 'openapi') ?? [])].sort();
+  const vueRouter = [...(ownValue(discovery, 'vueRouter') ?? [])].sort();
   if (openapi.length === 0 && vueRouter.length === 0) {
     throw manifestError(
       'DISCOVERY_REQUIRED',
@@ -86,19 +92,20 @@ function exampleValues(examples, id) {
   const values = new Map();
   for (const example of examples) {
     if (!isObject(example)
-        || typeof example.location !== 'string'
-        || typeof example.name !== 'string'
+        || typeof ownValue(example, 'location') !== 'string'
+        || typeof ownValue(example, 'name') !== 'string'
         || !hasOwn(example, 'value')) {
       invalidExamples(id, `Parameter examples for ${id} must be qualified records`);
     }
-    const key = `${example.location}:${example.name}`;
+    const key = `${ownValue(example, 'location')}:${ownValue(example, 'name')}`;
+    const exampleValue = ownValue(example, 'value');
     if (values.has(key)) {
-      if (!isDeepStrictEqual(values.get(key), example.value)) {
+      if (!isDeepStrictEqual(values.get(key), exampleValue)) {
         overrideConflict(id, 'parameterExamples');
       }
       invalidExamples(id, `Parameter examples for ${id} contain duplicate ${key}`);
     }
-    values.set(key, structuredClone(example.value));
+    values.set(key, structuredClone(exampleValue));
   }
   return values;
 }
@@ -123,15 +130,15 @@ function setParameterExamples(parameters, examples, id) {
 }
 
 function collectOverrideMaps(config) {
-  const trusted = config.trustedOverrides ?? {};
+  const trusted = ownValue(config, 'trustedOverrides') ?? {};
   return {
     operationOverrides: new Map(
-      Object.entries(trusted.operations ?? {}).sort(([left], [right]) => (
+      Object.entries(ownValue(trusted, 'operations') ?? {}).sort(([left], [right]) => (
         left.localeCompare(right)
       )).map(([id, override]) => [id, structuredClone(override)]),
     ),
     routeOverrides: new Map(
-      Object.entries(trusted.routes ?? {}).sort(([left], [right]) => (
+      Object.entries(ownValue(trusted, 'routes') ?? {}).sort(([left], [right]) => (
         left.localeCompare(right)
       )).map(([id, override]) => [id, structuredClone(override)]),
     ),
@@ -157,24 +164,28 @@ function applyOperationOverride(operation, override) {
 
   const updated = structuredClone(operation);
   if (hasOwn(override, 'allowedRoles')) {
-    updated.auth.allowedRoles = stableUniqueStrings(override.allowedRoles, 'allowedRoles');
+    updated.auth.allowedRoles = stableUniqueStrings(
+      ownValue(override, 'allowedRoles'),
+      'allowedRoles',
+    );
     if (updated.auth.allowedRoles.length > 0) updated.auth.state = 'required';
   }
   updated.parameters = setParameterExamples(
     updated.parameters,
-    override.parameterExamples,
+    ownValue(override, 'parameterExamples'),
     operation.id,
   );
-  if (hasOwn(override, 'targetModel')) updated.targetModel = override.targetModel;
-  if (hasOwn(override, 'deleteMode')) updated.deleteMode = override.deleteMode;
-  if (hasOwn(override, 'rollback')) updated.rollback = override.rollback;
+  if (hasOwn(override, 'targetModel')) updated.targetModel = ownValue(override, 'targetModel');
+  if (hasOwn(override, 'deleteMode')) updated.deleteMode = ownValue(override, 'deleteMode');
+  if (hasOwn(override, 'rollback')) updated.rollback = ownValue(override, 'rollback');
   if (hasOwn(override, 'sideEffects')) {
-    if (!isObject(override.sideEffects)) {
+    const sideEffects = ownValue(override, 'sideEffects');
+    if (!isObject(sideEffects)) {
       throw manifestError('OVERRIDE_INVALID', `Side effects for ${operation.id} must be an object`);
     }
     updated.sideEffects = {
       state: 'known',
-      classes: stableUniqueStrings(override.sideEffects.classes, 'side-effect classes'),
+      classes: stableUniqueStrings(ownValue(sideEffects, 'classes'), 'side-effect classes'),
     };
   }
   return updated;
@@ -192,12 +203,15 @@ function applyRouteOverride(route, override) {
   }
   const updated = structuredClone(route);
   if (hasOwn(override, 'allowedRoles')) {
-    updated.auth.allowedRoles = stableUniqueStrings(override.allowedRoles, 'allowedRoles');
+    updated.auth.allowedRoles = stableUniqueStrings(
+      ownValue(override, 'allowedRoles'),
+      'allowedRoles',
+    );
     if (updated.auth.allowedRoles.length > 0) updated.auth.state = 'required';
   }
   updated.parameters = setParameterExamples(
     updated.parameters,
-    override.parameterExamples,
+    ownValue(override, 'parameterExamples'),
     route.id,
   );
   return updated;
@@ -224,13 +238,11 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
       || typeof targetBoundary.readText !== 'function') {
     throw manifestError('TARGET_BOUNDARY_INVALID', 'A TargetBoundary is required');
   }
-  if (!isObject(config)) {
-    throw manifestError('CONFIG_INVALID', 'Trusted discovery config must be an object');
-  }
+  const trustedConfig = canonicalizeTrustedConfig(config);
 
   const configSchema = await loadBundledSchema('settings');
-  validateAgainstSchema(config, configSchema, { name: 'trusted config' });
-  const paths = discoveryPaths(config);
+  validateAgainstSchema(trustedConfig, configSchema, { name: 'trusted config' });
+  const paths = discoveryPaths(trustedConfig);
   const results = [];
   for (const relativePath of paths.openapi) {
     results.push(await discoverOpenApi({ boundary: targetBoundary, relativePath }));
@@ -257,7 +269,7 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
     for (const source of result.schemas) mergeRecord(schemas, source, 'schema');
   }
 
-  const { operationOverrides, routeOverrides } = collectOverrideMaps(config);
+  const { operationOverrides, routeOverrides } = collectOverrideMaps(trustedConfig);
   for (const [requestedId, override] of operationOverrides) {
     if (!operations.has(requestedId)) {
       throw manifestError(
