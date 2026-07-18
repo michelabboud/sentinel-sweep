@@ -452,3 +452,148 @@ test('rejects unknown properties at every top-level contract', () => {
     );
   }
 });
+
+test('settings contract accepts only canonical discovery and trusted overrides', () => {
+  const operation = '4ebcfbf48f6c96aeeb09c6a09bb2ae383d006ff8198a62c0fe6a1d3335c00acf';
+  const route = '7b9bf97b401a4283c8aea2004d995d774faea945f8fe6c66e92248d49e585979';
+  const canonical = {
+    ...defaults,
+    discovery: {
+      openapi: ['openapi.json'],
+      vueRouter: ['src/router.ts'],
+    },
+    trustedOverrides: {
+      operations: {
+        [operation]: {
+          allowedRoles: ['admin'],
+          parameterExamples: [
+            { location: 'query', name: 'page', value: 1 },
+          ],
+          targetModel: 'Admin',
+          deleteMode: 'hard',
+          sideEffects: { classes: ['data-delete'] },
+          rollback: 'restore-admin',
+        },
+      },
+      routes: {
+        [route]: {
+          allowedRoles: ['admin'],
+          parameterExamples: [
+            { location: 'path', name: 'id', value: 'known-admin' },
+          ],
+        },
+      },
+    },
+  };
+
+  assert.doesNotThrow(() => {
+    validateAgainstSchema(canonical, schemas.settings, { name: 'canonical settings' });
+  });
+});
+
+test('settings contract rejects every discovery and override alias', () => {
+  const id = '4ebcfbf48f6c96aeeb09c6a09bb2ae383d006ff8198a62c0fe6a1d3335c00acf';
+  const discovery = { discovery: { openapi: ['openapi.json'] } };
+  const aliases = [
+    { openapi: ['openapi.json'] },
+    { openapiPaths: ['openapi.json'] },
+    { vueRouter: ['src/router.ts'] },
+    { vueRouterPaths: ['src/router.ts'] },
+    { ...discovery, operationOverrides: { [id]: { allowedRoles: ['admin'] } } },
+    { ...discovery, routeOverrides: {} },
+    { ...discovery, operationRoles: { [id]: ['admin'] } },
+    { ...discovery, routeRoles: {} },
+    {
+      ...discovery,
+      parameterExamples: [{
+        operationId: id,
+        location: 'query',
+        name: 'page',
+        value: 1,
+      }],
+    },
+    {
+      ...discovery,
+      trustedOverrides: { [id]: { allowedRoles: ['admin'] } },
+    },
+    {
+      ...discovery,
+      trustedOverrides: {
+        operations: { [id]: { parameterExamples: { page: 1 } } },
+      },
+    },
+    {
+      ...discovery,
+      trustedOverrides: {
+        operations: { [id]: { sideEffects: ['data-write'] } },
+      },
+    },
+    {
+      ...discovery,
+      trustedOverrides: {
+        operations: {
+          [id]: { sideEffects: { classes: ['data-write'], rollback: 'undo' } },
+        },
+      },
+    },
+  ];
+
+  for (const alias of aliases) {
+    assert.throws(
+      () => validateAgainstSchema(
+        { ...defaults, ...alias },
+        schemas.settings,
+        { name: 'alias settings' },
+      ),
+      (error) => error?.code === 'SCHEMA_INVALID',
+      JSON.stringify(alias),
+    );
+  }
+});
+
+test('settings contract rejects unknown properties at every canonical nested level', () => {
+  const id = '4ebcfbf48f6c96aeeb09c6a09bb2ae383d006ff8198a62c0fe6a1d3335c00acf';
+  const cases = [
+    { discovery: { openapi: ['openapi.json'], unknown: true } },
+    {
+      discovery: { openapi: ['openapi.json'] },
+      trustedOverrides: { operations: {}, routes: {}, unknown: true },
+    },
+    {
+      discovery: { openapi: ['openapi.json'] },
+      trustedOverrides: { operations: { [id]: { unknown: true } }, routes: {} },
+    },
+    {
+      discovery: { openapi: ['openapi.json'] },
+      trustedOverrides: {
+        operations: { [id]: { sideEffects: { classes: [], unknown: true } } },
+        routes: {},
+      },
+    },
+    {
+      discovery: { openapi: ['openapi.json'] },
+      trustedOverrides: {
+        operations: {
+          [id]: {
+            parameterExamples: [
+              { location: 'query', name: 'page', value: 1, unknown: true },
+            ],
+          },
+        },
+        routes: {},
+      },
+    },
+  ];
+
+  for (const nested of cases) {
+    assert.throws(
+      () => validateAgainstSchema(
+        { ...defaults, ...nested },
+        schemas.settings,
+        { name: 'strict nested settings' },
+      ),
+      (error) => error?.code === 'SCHEMA_INVALID',
+      JSON.stringify(nested),
+    );
+  }
+});

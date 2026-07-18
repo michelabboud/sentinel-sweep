@@ -89,17 +89,11 @@
       "type": "integer",
       "minimum": 1
     },
-    "operationRoles": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/roleNames" }
+    "discovery": {
+      "$ref": "#/$defs/discovery"
     },
-    "routeRoles": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/roleNames" }
-    },
-    "parameterExamples": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/parameterExample" }
+    "trustedOverrides": {
+      "$ref": "#/$defs/trustedOverrides"
     },
     "services": {
       "type": "array",
@@ -122,12 +116,87 @@
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
     },
-    "parameterExample": {
+    "discovery": {
       "type": "object",
-      "required": ["operationId", "location", "name", "value"],
       "additionalProperties": false,
       "properties": {
-        "operationId": { "type": "string", "minLength": 1 },
+        "openapi": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "vueRouter": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "trustedOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operations": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/operationOverride" }
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/routeOverride" }
+        }
+      }
+    },
+    "operationOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedRoles": { "$ref": "#/$defs/roleNames" },
+        "parameterExamples": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameterExample" }
+        },
+        "targetModel": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "deleteMode": {
+          "type": ["string", "null"],
+          "enum": ["soft", "hard", "unknown", null]
+        },
+        "sideEffects": { "$ref": "#/$defs/sideEffects" },
+        "rollback": {
+          "type": ["string", "null"],
+          "pattern": ".*\\S.*"
+        }
+      }
+    },
+    "routeOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedRoles": { "$ref": "#/$defs/roleNames" },
+        "parameterExamples": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameterExample" }
+        }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "required": ["classes"],
+      "additionalProperties": false,
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "parameterExample": {
+      "type": "object",
+      "required": ["location", "name", "value"],
+      "additionalProperties": false,
+      "properties": {
         "location": {
           "type": "string",
           "enum": ["path", "query", "header"]

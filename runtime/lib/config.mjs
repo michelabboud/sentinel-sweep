@@ -1,6 +1,7 @@
 import { constants as fsConstants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { SentinelError } from './errors.mjs';
 import { loadBundledSchema, validateAgainstSchema } from './schema.mjs';
@@ -8,6 +9,7 @@ import { loadBundledSchema, validateAgainstSchema } from './schema.mjs';
 const READ_FLAGS = fsConstants.O_RDONLY
   | (fsConstants.O_NOFOLLOW ?? 0)
   | (fsConstants.O_CLOEXEC ?? 0);
+const BUNDLED_DEFAULTS_PATH = fileURLToPath(new URL('../../settings.json', import.meta.url));
 
 function configError(code, message, details = {}) {
   return new SentinelError(code, message, details);
@@ -38,7 +40,44 @@ async function canonicalTargetRoot(targetRoot) {
   return realpath(resolved);
 }
 
-async function readTrustedJson(filePath, targetRoot, label) {
+function effectiveUserId(platform) {
+  if (platform === 'win32') return null;
+  return typeof process.geteuid === 'function' ? process.geteuid() : null;
+}
+
+export function validateTrustedFileStat(stat, {
+  label,
+  requirePrivateMode,
+  platform = process.platform,
+  effectiveUid = effectiveUserId(platform),
+} = {}) {
+  if (label !== 'CONFIG' && label !== 'DEFAULTS') {
+    throw configError('CONFIG_INVALID', 'Trusted file stat policy label is invalid');
+  }
+  if (stat === null || typeof stat !== 'object' || typeof stat.isFile !== 'function') {
+    throw configError(`${label}_NOT_FILE`, `${label} path must be a regular file`);
+  }
+  if (!stat.isFile()) {
+    throw configError(`${label}_NOT_FILE`, `${label} path must be a regular file`);
+  }
+
+  if (!requirePrivateMode || platform === 'win32') return;
+  if (!Number.isInteger(effectiveUid) || stat.uid !== effectiveUid) {
+    throw configError(
+      'CONFIG_OWNER_INVALID',
+      'CONFIG file must be owned by the effective user',
+    );
+  }
+  const permissions = stat.mode & 0o7777;
+  if (permissions !== 0o600 && permissions !== 0o400) {
+    throw configError(
+      'CONFIG_MODE_INSECURE',
+      'CONFIG file permissions must be exactly 0600 or 0400',
+    );
+  }
+}
+
+async function readTrustedJson(filePath, targetRoot, label, { requirePrivateMode }) {
   if (typeof filePath !== 'string' || filePath.length === 0) {
     throw configError(`${label}_PATH_REQUIRED`, `${label} path is required`);
   }
@@ -77,9 +116,8 @@ async function readTrustedJson(filePath, targetRoot, label) {
   let handle;
   try {
     handle = await open(resolved, READ_FLAGS);
-    if (!(await handle.stat()).isFile()) {
-      throw configError(`${label}_NOT_FILE`, `${label} path must be a regular file`);
-    }
+    const descriptorStat = await handle.stat();
+    validateTrustedFileStat(descriptorStat, { label, requirePrivateMode });
     const text = await handle.readFile('utf8');
     return JSON.parse(text);
   } catch (error) {
@@ -124,8 +162,20 @@ export async function loadTrustedConfig({ configPath, targetRoot, defaultsPath }
     lexical: path.resolve(targetRoot),
     canonical: await canonicalTargetRoot(targetRoot),
   };
-  const settings = await readTrustedJson(configPath, target, 'CONFIG');
-  const defaults = await readTrustedJson(defaultsPath, target, 'DEFAULTS');
+  const settings = await readTrustedJson(configPath, target, 'CONFIG', {
+    requirePrivateMode: true,
+  });
+  const selectedDefaultsPath = defaultsPath ?? BUNDLED_DEFAULTS_PATH;
+  if (typeof selectedDefaultsPath !== 'string'
+      || path.resolve(selectedDefaultsPath) !== BUNDLED_DEFAULTS_PATH) {
+    throw configError(
+      'DEFAULTS_PATH_INVALID',
+      'Bundled defaults must be loaded from the fixed package path',
+    );
+  }
+  const defaults = await readTrustedJson(BUNDLED_DEFAULTS_PATH, target, 'DEFAULTS', {
+    requirePrivateMode: false,
+  });
   const merged = mergeSettings(defaults, settings);
   const schema = await loadBundledSchema('settings');
   validateAgainstSchema(merged, schema, { name: 'trusted config' });

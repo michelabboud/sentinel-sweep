@@ -1,12 +1,8 @@
 {
   "schemaVersion": "2.0",
   "target": {
-    "name": "openapi-fixture",
-    "root": "tests/fixtures/discovery",
-    "framework": {
-      "frontend": "vue",
-      "backend": "unknown"
-    }
+    "name": "discovery",
+    "root": "<target-root>"
   },
   "coverage": {
     "status": "complete",

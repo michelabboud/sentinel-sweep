@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -56,6 +64,7 @@ test('trusted config merges with strict v2 defaults and rejects unknown settings
   const defaultsPath = fileURLToPath(new URL('../../settings.json', import.meta.url));
   await mkdir(targetRoot);
   await writeFile(configPath, '{"responseTimeoutMs":10000}\n');
+  await chmod(configPath, 0o600);
 
   const config = await loadTrustedConfig({ configPath, targetRoot, defaultsPath });
   assert.equal(config.responseTimeoutMs, 10000);
@@ -64,12 +73,14 @@ test('trusted config merges with strict v2 defaults and rejects unknown settings
   assert.equal(config.allowMutations, false);
 
   await writeFile(configPath, '{"unknownSetting":true}\n');
+  await chmod(configPath, 0o600);
   await assert.rejects(
     () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
     { code: 'SCHEMA_INVALID' },
   );
 
   await writeFile(configPath, '{"responseTimeoutMs":1000,"browserSettleMs":250}\n');
+  await chmod(configPath, 0o600);
   assert.equal(
     (await loadTrustedConfig({ configPath, targetRoot, defaultsPath })).browserSettleMs,
     250,
@@ -80,11 +91,79 @@ test('trusted config merges with strict v2 defaults and rejects unknown settings
       configPath,
       `${JSON.stringify({ responseTimeoutMs: 500, browserSettleMs })}\n`,
     );
+    await chmod(configPath, 0o600);
     await assert.rejects(
       () => loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
       { code: 'CONFIG_BROWSER_SETTLE_INVALID' },
     );
   }
+});
+
+test('external config accepts only exact 0600 or 0400 permissions on POSIX', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const configPath = path.join(root, 'sentinel.config.json');
+  const defaultsPath = fileURLToPath(new URL('../../settings.json', import.meta.url));
+  await mkdir(targetRoot);
+  await writeFile(configPath, '{}\n');
+
+  if (process.platform === 'win32') return;
+  for (const mode of [0o600, 0o400]) {
+    await chmod(configPath, mode);
+    await assert.doesNotReject(
+      loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
+      mode.toString(8),
+    );
+  }
+  for (const mode of [0o644, 0o640, 0o666]) {
+    await chmod(configPath, mode);
+    await assert.rejects(
+      loadTrustedConfig({ configPath, targetRoot, defaultsPath }),
+      { code: 'CONFIG_MODE_INSECURE' },
+      mode.toString(8),
+    );
+  }
+});
+
+test('config location and symlink rejection ordering remains fail closed', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const defaultsPath = fileURLToPath(new URL('../../settings.json', import.meta.url));
+  const external = path.join(root, 'external.json');
+  const outsideLink = path.join(root, 'outside-link.json');
+  const insideLink = path.join(targetRoot, 'inside-link.json');
+  await mkdir(targetRoot);
+  await writeFile(external, '{}\n', { mode: 0o600 });
+  await chmod(external, 0o600);
+  await symlink(external, outsideLink);
+  await symlink(external, insideLink);
+
+  await assert.rejects(
+    loadTrustedConfig({ configPath: insideLink, targetRoot, defaultsPath }),
+    { code: 'CONFIG_UNTRUSTED_LOCATION' },
+  );
+  await assert.rejects(
+    loadTrustedConfig({ configPath: outsideLink, targetRoot, defaultsPath }),
+    { code: 'CONFIG_SYMLINK' },
+  );
+});
+
+test('trusted config loader refuses caller-selected defaults outside the package', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const configPath = path.join(root, 'sentinel.config.json');
+  const fakeDefaultsPath = path.join(root, 'fake-defaults.json');
+  const bundledDefaultsPath = fileURLToPath(new URL('../../settings.json', import.meta.url));
+  await mkdir(targetRoot);
+  await writeFile(configPath, '{}\n', { mode: 0o600 });
+  await chmod(configPath, 0o600);
+  await writeFile(fakeDefaultsPath, await readFile(bundledDefaultsPath), { mode: 0o644 });
+  await chmod(fakeDefaultsPath, 0o644);
+
+  await assert.rejects(
+    loadTrustedConfig({ configPath, targetRoot, defaultsPath: fakeDefaultsPath }),
+    { code: 'DEFAULTS_PATH_INVALID' },
+  );
 });
 
 test('.env cannot be selected as an adapter input even when it is inside the target', async (t) => {
