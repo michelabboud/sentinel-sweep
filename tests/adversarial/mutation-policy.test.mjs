@@ -90,6 +90,13 @@ test('blocks mutations unless every trusted sandbox condition is approved', () =
       reasonCode: 'MUTATION_BLOCKED_ROLLBACK',
     },
     {
+      name: 'whitespace-only rollback',
+      candidate: mutation({ rollback: ' \t\n' }),
+      config: {},
+      acknowledged: true,
+      reasonCode: 'MUTATION_BLOCKED_ROLLBACK',
+    },
+    {
       name: 'production environment',
       candidate: approved,
       config: { targetEnvironment: 'production' },
@@ -118,6 +125,29 @@ test('blocks mutations unless every trusted sandbox condition is approved', () =
     assert.equal(decision.reasonCode, entry.reasonCode, entry.name);
     assert.deepEqual(decision.parameterValues, {}, entry.name);
     assert.ok(Object.isFrozen(decision), entry.name);
+  }
+});
+
+test('rejects malformed mutation IDs even when the allowlist contains the same value', () => {
+  const cases = [
+    { name: 'missing', value: undefined },
+    { name: 'null', value: null },
+    { name: 'empty', value: '' },
+    { name: 'blank', value: '   ' },
+    { name: 'not trimmed', value: ' op:post:/api/test-fixtures ' },
+  ];
+
+  for (const entry of cases) {
+    const candidate = mutation({ id: entry.value });
+    if (entry.name === 'missing') delete candidate.id;
+    const decision = planOperation({
+      operation: candidate,
+      config: approvedConfig(entry.value),
+      sandboxAcknowledged: true,
+    });
+
+    assert.equal(decision.action, 'skip', entry.name);
+    assert.equal(decision.reasonCode, 'MUTATION_BLOCKED_ALLOWLIST', entry.name);
   }
 });
 

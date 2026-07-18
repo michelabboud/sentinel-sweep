@@ -267,7 +267,10 @@
           "enum": ["soft", "hard", "unknown", null]
         },
         "sideEffects": { "$ref": "#/$defs/sideEffects" },
-        "rollback": { "type": ["string", "null"] },
+        "rollback": {
+          "type": ["string", "null"],
+          "pattern": "\\S"
+        },
         "mutation": { "type": "boolean" },
         "protocol": {
           "type": "string",

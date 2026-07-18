@@ -104,6 +104,36 @@ test('classifies only GET, HEAD, and OPTIONS as read-only across every HTTP meth
   }
 });
 
+test('blocks read methods with unknown side effects while allowing known empty effects', () => {
+  for (const method of READ_METHODS) {
+    const id = `op:${method.toLowerCase()}:/api/read`;
+    const unknown = planOperation({
+      operation: operation({
+        id,
+        method,
+        sideEffects: { state: 'unknown', classes: [] },
+      }),
+      config: config(),
+      sandboxAcknowledged: false,
+    });
+    assert.equal(unknown.action, 'skip', method);
+    assert.equal(unknown.reasonCode, 'READ_BLOCKED_UNKNOWN_EFFECTS', method);
+    assert.equal(unknown.riskLevel, 'critical', method);
+
+    const knownEmpty = planOperation({
+      operation: operation({
+        id,
+        method,
+        sideEffects: { state: 'known', classes: [] },
+      }),
+      config: config(),
+      sandboxAcknowledged: false,
+    });
+    assert.equal(knownEmpty.action, 'execute', method);
+    assert.equal(knownEmpty.reasonCode, 'READ_APPROVED', method);
+  }
+});
+
 test('computes risk monotonically and never trusts a source-declared safe mutation', () => {
   const safeRead = computeRisk(operation());
   assert.deepEqual(safeRead, { score: 0, level: 'safe', reasons: [] });

@@ -233,6 +233,25 @@ test('validates a realistic non-empty manifest using later-task interfaces', () 
   });
 });
 
+test('rejects whitespace-only rollback instructions', () => {
+  const manifest = JSON.parse(JSON.stringify(realisticManifest));
+  manifest.operations[1].rollback = ' \t\n';
+
+  assert.throws(
+    () => validateAgainstSchema(
+      manifest,
+      schemas['sentinel-manifest'],
+      { name: 'rollback contract' },
+    ),
+    (error) => {
+      assert.deepEqual(error.details.violations, [
+        { path: '/operations/1/rollback', keyword: 'pattern' },
+      ]);
+      return true;
+    },
+  );
+});
+
 for (const invalidCase of [
   { operationIndex: 2, method: 'DELETE', mutation: false },
   { operationIndex: 2, method: 'TRACE', mutation: false },

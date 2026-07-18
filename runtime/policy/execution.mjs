@@ -24,6 +24,14 @@ function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isNonBlankString(value) {
+  return typeof value === 'string' && /\S/u.test(value);
+}
+
+function isTrimmedNonBlankString(value) {
+  return isNonBlankString(value) && value === value.trim();
+}
+
 function deepFreeze(value) {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -151,7 +159,7 @@ export function computeRisk(operation) {
   }
 
   if (!READ_METHODS.has(method)
-      && (typeof operation?.rollback !== 'string' || operation.rollback.length === 0)) {
+      && !isNonBlankString(operation?.rollback)) {
     score += 15;
     addReason('rollback:missing');
   }
@@ -274,6 +282,9 @@ export function planOperation({ operation, config, sandboxAcknowledged } = {}) {
   );
 
   if (!mutation) {
+    if (operation?.sideEffects?.state !== 'known') {
+      return skip('READ_BLOCKED_UNKNOWN_EFFECTS');
+    }
     if (originId === null) return skip('READ_BLOCKED_ORIGIN');
     if (!parameters.complete) return skip('READ_BLOCKED_PARAMETERS');
     if (!roles.known) return skip('READ_BLOCKED_UNKNOWN_AUTH');
@@ -290,14 +301,15 @@ export function planOperation({ operation, config, sandboxAcknowledged } = {}) {
   }
 
   if (config?.allowMutations !== true) return skip('MUTATION_BLOCKED_DISABLED');
-  if (!Array.isArray(config?.mutationAllowlist)
-      || !config.mutationAllowlist.includes(operation?.id)) {
+  if (!isTrimmedNonBlankString(operation?.id)
+      || !Array.isArray(config?.mutationAllowlist)
+      || !config.mutationAllowlist.includes(operation.id)) {
     return skip('MUTATION_BLOCKED_ALLOWLIST');
   }
   if (operation?.sideEffects?.state !== 'known') {
     return skip('MUTATION_BLOCKED_UNKNOWN_EFFECTS');
   }
-  if (typeof operation?.rollback !== 'string' || operation.rollback.length === 0) {
+  if (!isNonBlankString(operation?.rollback)) {
     return skip('MUTATION_BLOCKED_ROLLBACK');
   }
   if (config?.targetEnvironment !== 'development' && config?.targetEnvironment !== 'test') {
