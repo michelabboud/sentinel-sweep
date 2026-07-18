@@ -24,10 +24,14 @@ function completeConfig() {
     target: {
       name: 'openapi-fixture',
       root: 'tests/fixtures/discovery',
-      framework: { frontend: 'none', backend: 'unknown' }
+      framework: { frontend: 'vue', backend: 'unknown' }
     },
     discovery: {
-      openapi: ['openapi-complete.json']
+      openapi: ['openapi-complete.json'],
+      vueRouter: [
+        'vue-complete/router.js',
+        'vue-complete/public-router.ts'
+      ]
     },
     trustedOverrides: {
       [operationId('GET', '/api/admin')]: {
@@ -62,6 +66,11 @@ test('builds the strict golden manifest and remains deterministic', async () => 
   const first = stripGeneratedAt(await buildManifest({ targetBoundary, config, generatedAt: '2026-07-18T00:00:00.000Z' }));
   const second = stripGeneratedAt(await buildManifest({ targetBoundary, config, generatedAt: '2030-01-01T00:00:00.000Z' }));
 
+  assert.ok(first.routes.some((route) => route.path === '/admin/users/{id}'));
+  assert.deepEqual(
+    first.routes.find((route) => route.path === '/admin').auth.allowedRoles,
+    [],
+  );
   assert.deepEqual(first, goldenManifest);
   assert.deepEqual(second, goldenManifest);
 });

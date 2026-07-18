@@ -83,10 +83,30 @@ test('TargetBoundary readText preserves approved OpenAPI and Vue adapter inputs'
   await mkdir(targetRoot);
   await writeFile(path.join(targetRoot, 'openapi.yaml'), 'openapi: 3.1.0\n');
   await writeFile(path.join(targetRoot, 'AccountView.vue'), '<template />\n');
+  await writeFile(path.join(targetRoot, 'router.js'), 'export const routes = [];\n');
+  await writeFile(path.join(targetRoot, 'router.ts'), 'export const routes = [];\n');
 
   const boundary = await TargetBoundary.create(targetRoot);
   assert.equal(await boundary.readText('openapi.yaml'), 'openapi: 3.1.0\n');
   assert.equal(await boundary.readText('AccountView.vue'), '<template />\n');
+  assert.equal(await boundary.readText('router.js'), 'export const routes = [];\n');
+  assert.equal(await boundary.readText('router.ts'), 'export const routes = [];\n');
+});
+
+test('TargetBoundary source extensions do not override secret filename denials', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'credentials.js'), 'export default {};\n');
+  await writeFile(path.join(targetRoot, 'private-key.ts'), 'export default {};\n');
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  await assert.rejects(() => boundary.readText('credentials.js'), {
+    code: 'INPUT_TYPE_BLOCKED',
+  });
+  await assert.rejects(() => boundary.readText('private-key.ts'), {
+    code: 'INPUT_TYPE_BLOCKED',
+  });
 });
 
 test('TargetBoundary never accepts .env as an adapter input', async (t) => {

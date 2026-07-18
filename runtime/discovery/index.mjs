@@ -5,6 +5,7 @@ import { SentinelError } from '../lib/errors.mjs';
 import { operationId, routeId } from '../lib/identity.mjs';
 import { loadBundledSchema, validateAgainstSchema } from '../lib/schema.mjs';
 import { discoverOpenApi } from './openapi.mjs';
+import { discoverVueRouter } from './vue-router.mjs';
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -41,14 +42,34 @@ function mergeRecord(map, record, kind) {
   if (provenanceOrder(record, existing) < 0) map.set(record.id, record);
 }
 
-function discoveryPaths(config) {
-  const configured = config?.discovery?.openapi ?? config?.openapi ?? config?.openapiPaths;
+function configuredPaths(configured, code, label) {
+  if (configured === undefined) return [];
   const paths = typeof configured === 'string' ? [configured] : configured;
   if (!Array.isArray(paths) || paths.length === 0
       || paths.some((entry) => typeof entry !== 'string' || entry.length === 0)) {
-    throw manifestError('OPENAPI_DISCOVERY_REQUIRED', 'At least one OpenAPI JSON path is required');
+    throw manifestError(code, `At least one ${label} path is required`);
   }
   return [...paths].sort();
+}
+
+function discoveryPaths(config) {
+  const openapi = configuredPaths(
+    config?.discovery?.openapi ?? config?.openapi ?? config?.openapiPaths,
+    'OPENAPI_DISCOVERY_REQUIRED',
+    'OpenAPI JSON',
+  );
+  const vueRouter = configuredPaths(
+    config?.discovery?.vueRouter ?? config?.vueRouter ?? config?.vueRouterPaths,
+    'VUE_DISCOVERY_REQUIRED',
+    'Vue Router source',
+  );
+  if (openapi.length === 0 && vueRouter.length === 0) {
+    throw manifestError(
+      'DISCOVERY_REQUIRED',
+      'At least one OpenAPI or Vue Router discovery path is required',
+    );
+  }
+  return { openapi, vueRouter };
 }
 
 function stableUniqueStrings(values, label) {
@@ -392,9 +413,16 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
     throw manifestError('CONFIG_INVALID', 'Trusted discovery config must be an object');
   }
 
+  const paths = discoveryPaths(config);
   const results = [];
-  for (const relativePath of discoveryPaths(config)) {
+  for (const relativePath of paths.openapi) {
     results.push(await discoverOpenApi({ boundary: targetBoundary, relativePath }));
+  }
+  if (paths.vueRouter.length > 0) {
+    results.push(await discoverVueRouter({
+      boundary: targetBoundary,
+      relativePaths: paths.vueRouter,
+    }));
   }
 
   const operations = new Map();

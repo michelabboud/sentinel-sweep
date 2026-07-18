@@ -21,7 +21,7 @@ const WRITE_FLAGS = fsConstants.O_CREAT
   | fsConstants.O_WRONLY
   | (fsConstants.O_NOFOLLOW ?? 0)
   | (fsConstants.O_CLOEXEC ?? 0);
-const INPUT_EXTENSIONS = new Set(['.har', '.json', '.vue', '.yaml', '.yml']);
+const INPUT_EXTENSIONS = new Set(['.har', '.js', '.json', '.ts', '.vue', '.yaml', '.yml']);
 const BLOCKED_INPUT_NAME = /(?:^|[._-])(?:credential|credentials|secret|secrets|private[-_]?key)(?:[._-]|$)/u;
 
 function boundaryError(code, message, details = {}) {
