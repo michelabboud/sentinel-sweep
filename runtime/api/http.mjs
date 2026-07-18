@@ -32,6 +32,16 @@ const SCHEMA_VIOLATION_KEYWORDS = new Set([
 ]);
 const MAX_SCHEMA_VIOLATIONS = 100;
 const MAX_SCHEMA_PATH_LENGTH = 1024;
+const SENSITIVE_REQUEST_HEADERS = new Set([
+  'api-key',
+  'authorization',
+  'cookie',
+  'proxy-authorization',
+  'set-cookie',
+  'x-access-token',
+  'x-api-key',
+  'x-auth-token',
+]);
 
 function elapsedSince(startedAt) {
   return Math.max(0, performance.now() - startedAt);
@@ -72,30 +82,44 @@ function containsRawBody(value, rawBody) {
   return rawBody.length > 0 && value.includes(rawBody);
 }
 
-function normalizedSchemaViolations(value, rawBody) {
+function hasSensitiveRequestHeaders(headers) {
+  for (const name of headers.keys()) {
+    if (SENSITIVE_REQUEST_HEADERS.has(name.toLowerCase())) return true;
+  }
+  return false;
+}
+
+function normalizedSchemaViolations(value, rawBody, redactPaths) {
   if (!Array.isArray(value)) return [];
   const normalized = [];
+  const seen = new Set();
+  let examined = 0;
   for (const violation of value) {
-    if (normalized.length >= MAX_SCHEMA_VIOLATIONS) break;
+    if (examined >= MAX_SCHEMA_VIOLATIONS) break;
+    examined += 1;
     if (violation === null
         || typeof violation !== 'object'
         || typeof violation.path !== 'string'
         || typeof violation.keyword !== 'string'
         || !isJsonPointer(violation.path)
         || !SCHEMA_VIOLATION_KEYWORDS.has(violation.keyword)
-        || containsRawBody(violation.path, rawBody)
         || containsRawBody(violation.keyword, rawBody)) {
       continue;
     }
+    const path = redactPaths ? '/[REDACTED]' : violation.path;
+    if (containsRawBody(path, rawBody)) continue;
+    const identity = `${path}\u0000${violation.keyword}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     normalized.push(Object.freeze({
-      path: violation.path,
+      path,
       keyword: violation.keyword,
     }));
   }
   return normalized;
 }
 
-function normalizedInspection(value, rawBody = '') {
+function normalizedInspection(value, rawBody = '', redactPaths = false) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return Object.freeze({
       reasonCode: 'BODY_INSPECTION_FAILED',
@@ -109,7 +133,9 @@ function normalizedInspection(value, rawBody = '') {
       : 'BODY_INSPECTION_FAILED');
   return Object.freeze({
     reasonCode,
-    schemaViolations: Object.freeze(normalizedSchemaViolations(value.schemaViolations, rawBody)),
+    schemaViolations: Object.freeze(
+      normalizedSchemaViolations(value.schemaViolations, rawBody, redactPaths),
+    ),
   });
 }
 
@@ -308,6 +334,7 @@ export async function requestApproved({
   if (currentHeaders === null) {
     return failure(startedAt, redirects, 'blocked', 'HEADERS_INVALID');
   }
+  const redactInspectionPaths = hasSensitiveRequestHeaders(currentHeaders);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref?.();
@@ -404,7 +431,7 @@ export async function requestApproved({
             contentType,
             responses,
             schemaRegistry,
-          }), bounded.text);
+          }), bounded.text, redactInspectionPaths);
         } catch {
           inspection = normalizedInspection(null);
         }

@@ -130,6 +130,57 @@ test('rejects response inspector callbacks before they can receive raw text', as
   assert.equal(observation.inspection, null);
 });
 
+test('redacts reflected credentials from deterministic schema paths', async () => {
+  const origin = 'http://127.0.0.1:34567';
+  const encodedToken = Buffer.from(ADMIN_TOKEN).toString('base64');
+  const tokenMidpoint = Math.floor(ADMIN_TOKEN.length / 2);
+  const tokenParts = [
+    ADMIN_TOKEN.slice(0, tokenMidpoint),
+    ADMIN_TOKEN.slice(tokenMidpoint),
+  ];
+  const observation = await requestApproved({
+    origin,
+    path: '/public',
+    method: 'GET',
+    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    timeoutMs: 1000,
+    maxBytes: 1024,
+    approvedOrigins: [origin],
+    responses: { '200': { contentType: 'application/json', schemaId: 'strict' } },
+    schemaRegistry: {
+      strict: {
+        schema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      [ADMIN_TOKEN]: true,
+      [encodedToken]: true,
+      [tokenParts[0]]: true,
+      [tokenParts[1]]: true,
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  });
+
+  assertExactTransportShape(observation);
+  assert.equal(observation.inspection.reasonCode, 'SCHEMA_VIOLATION');
+  assert.deepEqual(observation.inspection.schemaViolations, [{
+    path: '/[REDACTED]',
+    keyword: 'additionalProperties',
+  }]);
+  const serialized = JSON.stringify(observation);
+  assert.equal(serialized.includes(ADMIN_TOKEN), false);
+  assert.equal(serialized.includes(encodedToken), false);
+  assert.equal(serialized.includes(tokenParts[0]), false);
+  assert.equal(serialized.includes(tokenParts[1]), false);
+  assert.equal(serialized.includes('Bearer'), false);
+});
+
 test('requires trusted non-loopback approval before sweep transport executes', async () => {
   const origin = 'https://example.test';
   const operation = {
