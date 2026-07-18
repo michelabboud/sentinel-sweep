@@ -37,6 +37,15 @@ echo ""
 
 echo "-- Packaged resource and body parity --"
 require_fixed '${CLAUDE_PLUGIN_ROOT}/runtime/cli.mjs' "host resolves packaged runtime/cli.mjs"
+require_fixed 'does not auto-approve Bash' "host leaves Bash under normal operator permission"
+
+COMMAND_ALLOWED_TOOLS=$(sed -n '/^---$/,/^---$/p' "$COMMAND" | grep -E '^allowed-tools:' | head -1)
+SKILL_ALLOWED_TOOLS=$(sed -n '/^---$/,/^---$/p' "$SKILL" | grep -E '^allowed-tools:' | head -1)
+if [[ "$COMMAND_ALLOWED_TOOLS" == 'allowed-tools: ["Read"]' && "$SKILL_ALLOWED_TOOLS" == 'allowed-tools: ["Read"]' ]]; then
+  pass "Bash is not auto-approved by either Claude host"
+else
+  fail "Claude hosts must auto-approve only Read, not unrestricted Bash"
+fi
 
 COMMAND_BODY=$(mktemp)
 SKILL_BODY=$(mktemp)

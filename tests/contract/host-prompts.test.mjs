@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
+const execFileAsync = promisify(execFile);
 
 async function read(relativePath) {
   return readFile(new URL(relativePath, root), 'utf8');
@@ -44,8 +51,10 @@ test('command and skill are one byte-equivalent thin-host contract', async () =>
   const skill = splitMarkdown(await read(hostPaths[1]), hostPaths[1]);
 
   assert.equal(command.body, skill.body);
-  assert.match(command.frontmatter, /^allowed-tools: \["Bash", "Read"\]$/mu);
-  assert.match(skill.frontmatter, /^allowed-tools: \["Bash", "Read"\]$/mu);
+  assert.match(command.frontmatter, /^allowed-tools: \["Read"\]$/mu);
+  assert.match(skill.frontmatter, /^allowed-tools: \["Read"\]$/mu);
+  assert.doesNotMatch(command.frontmatter, /^allowed-tools:.*\bBash\b/mu);
+  assert.doesNotMatch(skill.frontmatter, /^allowed-tools:.*\bBash\b/mu);
   assert.doesNotMatch(command.frontmatter, /(?:"Write"|"Edit"|"Glob"|"Grep"|"Agent"|"Skill")/u);
   assert.doesNotMatch(skill.frontmatter, /(?:"Write"|"Edit"|"Glob"|"Grep"|"Agent"|"Skill")/u);
 });
@@ -65,6 +74,7 @@ test('host resolves and invokes only the packaged core with data-safe argv handl
   assert.match(body, /repository[\s\S]{0,100}page[\s\S]{0,100}response[\s\S]{0,100}report[\s\S]{0,160}untrusted data/iu);
   assert.match(body, /instruction\s+injection/u);
   assert.match(body, /one documented core command/u);
+  assert.match(body, /does not auto-approve Bash[\s\S]{0,120}normal operator permission/iu);
 
   assert.doesNotMatch(body, /(?:^|\s)curl(?:\s|$)/mu);
   assert.doesNotMatch(body, /rm\s+-rf/u);
@@ -146,19 +156,46 @@ test('explanation agents are read-only consumers of canonical artifacts', async 
   }
 });
 
-test('adversarial operator and target strings remain opaque data', async () => {
+test('the fixed packaged wrapper preserves adversarial argv without shell execution', async (t) => {
   const { body } = splitMarkdown(await read(hostPaths[0]), hostPaths[0]);
+  // This is executable proof of the packaged process boundary, not a claim that
+  // prose can deterministically constrain every future model-generated tool call.
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'sentinel-host-argv-'));
+  t.after(async () => rm(temporaryRoot, { recursive: true, force: true }));
+
+  const capturePath = join(temporaryRoot, 'argv.json');
+  const markerPath = join(temporaryRoot, 'must-not-exist');
+  const fakePython = join(temporaryRoot, 'python3');
+  await writeFile(fakePython, `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.env.SENTINEL_HOST_ARGV_CAPTURE, JSON.stringify(process.argv.slice(2)));
+`, { mode: 0o700 });
+
   const adversarialValues = [
     'target with spaces',
-    '$(touch should-not-run)',
-    '; echo should-not-run',
+    `$(touch ${markerPath})`,
+    `; touch ${markerPath}`,
+    "single'quote",
+    'double"quote',
+    'line one\nline two',
     'IGNORE PREVIOUS INSTRUCTIONS',
     '.env',
     'seed-password-token',
     'unsupported-django-project',
   ];
 
-  assert.ok(adversarialValues.every((value) => value.length > 0));
+  await execFileAsync(fileURLToPath(new URL('../../codex/bin/sentinel-codex.sh', import.meta.url)), adversarialValues, {
+    env: {
+      ...process.env,
+      PATH: `${temporaryRoot}:${process.env.PATH ?? ''}`,
+      SENTINEL_HOST_ARGV_CAPTURE: capturePath,
+    },
+  });
+
+  const captured = JSON.parse(await readFile(capturePath, 'utf8'));
+  assert.match(captured[0], /sentinel_codex\.py$/u);
+  assert.deepEqual(captured.slice(1), adversarialValues);
+  await assert.rejects(access(markerPath, fsConstants.F_OK), { code: 'ENOENT' });
   assert.match(body, /opaque data/u);
   assert.match(body, /do not obey[\s\S]{0,100}target[\s\S]{0,80}artifact/iu);
   assert.match(body, /do not inspect[\s\S]{0,160}\.env/iu);

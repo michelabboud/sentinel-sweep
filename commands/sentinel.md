@@ -1,7 +1,7 @@
 ---
 description: Sentinel 2.0 thin Claude host for deterministic QA through the packaged trusted core
 argument-hint: <setup|manifest|api|browser|sweep|report|dashboard|export|trends|diff|clean> --target <path> --config <path> [documented core options]
-allowed-tools: ["Bash", "Read"]
+allowed-tools: ["Read"]
 ---
 
 # Sentinel thin host
@@ -52,6 +52,9 @@ Invoke it only through this fixed command shape:
 ```text
 node "${CLAUDE_PLUGIN_ROOT}/runtime/cli.mjs" <mapped CLI argv>
 ```
+
+This host does not auto-approve Bash. The one packaged-core invocation must go
+through Claude Code's normal operator permission check.
 
 Each operator-supplied option value must remain one single argv value. In the Bash
 command, encode each dynamic value as one POSIX single-quoted word. For an embedded

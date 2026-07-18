@@ -160,16 +160,16 @@ COMMAND_TOOLS=$(get_field "$COMMAND_FM" "allowed-tools")
 SKILL_FM=$(extract_frontmatter "$PROJECT_ROOT/skills/run/SKILL.md")
 SKILL_TOOLS=$(get_field "$SKILL_FM" "allowed-tools")
 
-if [[ "$COMMAND_TOOLS" == '["Bash", "Read"]' ]]; then
-  pass "commands/sentinel.md: allowed-tools is exactly Bash + Read"
+if [[ "$COMMAND_TOOLS" == '["Read"]' ]]; then
+  pass "commands/sentinel.md: only Read is auto-approved"
 else
-  fail "commands/sentinel.md: expected Bash + Read only, got $COMMAND_TOOLS"
+  fail "commands/sentinel.md: expected only Read to be auto-approved, got $COMMAND_TOOLS"
 fi
 
-if [[ "$SKILL_TOOLS" == '["Bash", "Read"]' ]]; then
-  pass "skills/run/SKILL.md: allowed-tools is exactly Bash + Read"
+if [[ "$SKILL_TOOLS" == '["Read"]' ]]; then
+  pass "skills/run/SKILL.md: only Read is auto-approved"
 else
-  fail "skills/run/SKILL.md: expected Bash + Read only, got $SKILL_TOOLS"
+  fail "skills/run/SKILL.md: expected only Read to be auto-approved, got $SKILL_TOOLS"
 fi
 
 for filepath in "${AGENT_FILES[@]}"; do
