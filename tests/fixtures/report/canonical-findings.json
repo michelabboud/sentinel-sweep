@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "2.0",
+  "runId": "2026-07-18T12-00-00-000Z",
+  "startedAt": "2026-07-18T12:00:00.000Z",
+  "finishedAt": "2026-07-18T12:00:03.000Z",
+  "manifestGeneratedAt": "2026-07-18T11:59:59.000Z",
+  "coverage": {
+    "status": "partial",
+    "diagnostics": [
+      {
+        "code": "VUE_DYNAMIC_ROUTE",
+        "message": "One dynamic route was not executed",
+        "sourcePath": "src/router.js",
+        "pointer": "/routes/3"
+      }
+    ]
+  },
+  "summary": {
+    "critical": 1,
+    "error": 1,
+    "warning": 1,
+    "info": 0,
+    "skipped": 1
+  },
+  "responseTimePercentiles": {
+    "p50": 12,
+    "p95": 44,
+    "p99": 44,
+    "average": 28
+  },
+  "findings": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "severity": "critical",
+      "category": "rbac",
+      "message": "User could access admin data",
+      "service": "api",
+      "subject": {
+        "type": "operation",
+        "id": "op:get:/admin"
+      },
+      "role": "user",
+      "evidence": {
+        "expected": "401 or 403",
+        "actual": "200",
+        "statusCode": 200,
+        "durationMs": 12
+      },
+      "provenance": [
+        {
+          "source": "manifest",
+          "sourcePath": "openapi.json",
+          "pointer": "#/paths/~1admin/get"
+        },
+        {
+          "source": "api",
+          "sourcePath": null,
+          "pointer": null
+        }
+      ]
+    },
+    {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "severity": "error",
+      "category": "console",
+      "message": "The dashboard raised an uncaught exception",
+      "service": "web",
+      "subject": {
+        "type": "route",
+        "id": "route:/dashboard"
+      },
+      "role": null,
+      "evidence": {
+        "expected": "no console errors",
+        "actual": "uncaught exception",
+        "durationMs": 44,
+        "viewport": 375,
+        "screenshotPath": "dashboard-375.png"
+      },
+      "provenance": [
+        {
+          "source": "manifest",
+          "sourcePath": "src/router.js",
+          "pointer": "/routes/0"
+        },
+        {
+          "source": "browser",
+          "sourcePath": null,
+          "pointer": null
+        }
+      ]
+    },
+    {
+      "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "severity": "warning",
+      "category": "coverage",
+      "message": "One dynamic route was not executed",
+      "service": null,
+      "subject": {
+        "type": "run",
+        "id": "coverage"
+      },
+      "role": null,
+      "evidence": {},
+      "provenance": [
+        {
+          "source": "manifest",
+          "sourcePath": "src/router.js",
+          "pointer": "/routes/3"
+        }
+      ]
+    },
+    {
+      "id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "severity": "info",
+      "category": "policy",
+      "message": "Policy skipped POST /items",
+      "service": "api",
+      "subject": {
+        "type": "operation",
+        "id": "op:post:/items"
+      },
+      "role": null,
+      "evidence": {
+        "expected": "policy approval",
+        "actual": "MUTATION_BLOCKED_DISABLED"
+      },
+      "provenance": [
+        {
+          "source": "manifest",
+          "sourcePath": "openapi.json",
+          "pointer": "#/paths/~1items/post"
+        },
+        {
+          "source": "policy",
+          "sourcePath": null,
+          "pointer": null
+        }
+      ]
+    }
+  ]
+}
