@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { chmod, lstat, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -11,7 +19,7 @@ import { TargetBoundary } from '../../runtime/lib/fs-boundary.mjs';
 import { operationId, routeId } from '../../runtime/lib/identity.mjs';
 import { buildExecutionPlan } from '../../runtime/policy/execution.mjs';
 
-const targetRoot = fileURLToPath(new URL('../fixtures/discovery/', import.meta.url));
+const fixtureTargetRoot = fileURLToPath(new URL('../fixtures/discovery/', import.meta.url));
 const defaultsPath = fileURLToPath(new URL('../../settings.json', import.meta.url));
 
 test('0600 external config and 0644 defaults reach discovery and execution planning', async (t) => {
@@ -19,7 +27,11 @@ test('0600 external config and 0644 defaults reach discovery and execution plann
   t.after(async () => {
     await rm(temporary, { recursive: true, force: true });
   });
-  const configPath = path.join(temporary, 'sentinel.config.json');
+  const targetRoot = path.join(temporary, 'target');
+  const trustedConfigRoot = path.join(temporary, 'trusted');
+  const configPath = path.join(trustedConfigRoot, 'sentinel.config.json');
+  await cp(fixtureTargetRoot, targetRoot, { recursive: true });
+  await mkdir(trustedConfigRoot);
   const adminOperation = operationId('GET', '/api/admin');
   const itemOperation = operationId('GET', '/api/items/{itemId}');
   const adminRoute = routeId('/admin/users/{id}');

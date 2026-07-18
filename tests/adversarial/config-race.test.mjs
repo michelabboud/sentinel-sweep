@@ -275,6 +275,59 @@ test('detects higher-ancestor relocation restored while the immediate parent sta
   assert.equal(intercepted, true);
 });
 
+test('does not trust an environment-selected temp ancestor during verified read', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const attackerTemp = path.join(root, 'attacker-controlled-tmp');
+  const trustedParent = path.join(attackerTemp, 'nested', 'config-parent');
+  const movedTemp = path.join(targetRoot, 'relocated-attacker-tmp');
+  const configPath = path.join(trustedParent, 'sentinel.config.json');
+  await mkdir(targetRoot);
+  await mkdir(trustedParent, { recursive: true });
+  await writeFile(configPath, '{}\n', { mode: 0o600 });
+  await chmod(configPath, 0o600);
+
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = attackerTemp;
+  let isolatedConfigModule;
+  try {
+    isolatedConfigModule = await import(`${configModuleUrl}?untrusted-tmpdir=${Date.now()}`);
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+  }
+
+  const probe = await open(configPath, 'r');
+  const fileHandlePrototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const originalDescriptor = Object.getOwnPropertyDescriptor(fileHandlePrototype, 'readFile');
+  let intercepted = false;
+  Object.defineProperty(fileHandlePrototype, 'readFile', {
+    ...originalDescriptor,
+    value: async function relocateEnvironmentTempDuringRead(...args) {
+      if (intercepted) return originalDescriptor.value.apply(this, args);
+      intercepted = true;
+      await rename(attackerTemp, movedTemp);
+      await symlink(movedTemp, attackerTemp, 'dir');
+      try {
+        return await originalDescriptor.value.apply(this, args);
+      } finally {
+        await unlink(attackerTemp);
+        await rename(movedTemp, attackerTemp);
+      }
+    },
+  });
+  t.after(() => {
+    Object.defineProperty(fileHandlePrototype, 'readFile', originalDescriptor);
+  });
+
+  await assert.rejects(
+    isolatedConfigModule.loadTrustedConfig({ configPath, targetRoot }),
+    { code: 'CONFIG_FILE_CHANGED' },
+  );
+  assert.equal(intercepted, true);
+});
+
 test('ignores unrelated churn in the shared target and config ancestor', async (t) => {
   const root = await fixture(t);
   const targetRoot = path.join(root, 'target');
