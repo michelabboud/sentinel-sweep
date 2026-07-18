@@ -638,6 +638,40 @@ test('discovered values that collide with configured secrets fail before publica
   assert.deepEqual(entries, []);
 });
 
+test('present short or non-bearer credentials fail before standalone artifact writes', async (t) => {
+  const { config, output, target } = await fixture(t, {
+    roles: { admin: { tokenRef: 'env:API_TOKEN' } },
+  });
+  const openapiPath = path.join(target, 'openapi.json');
+  const original = JSON.parse(await readFile(openapiPath, 'utf8'));
+
+  for (const [label, secret] of [
+    ['short', 'abc'],
+    ['punctuation', 'abc,def'],
+  ]) {
+    const document = structuredClone(original);
+    document.paths['/health'].get.summary = secret;
+    await writeFile(openapiPath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
+    const destination = path.join(output, `${label}.json`);
+    const result = await invoke({
+      env: { API_TOKEN: secret },
+      stdin: { isTTY: false },
+    }, [
+      'manifest', '--target', target, '--config', config,
+      '--output', destination, '--json',
+    ]);
+    assert.equal(result.exit, 1);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout.includes(secret), false);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: false,
+      code: 'CLI_COMMAND_FAILED',
+      message: 'Command failed',
+    });
+    await assert.rejects(lstat(destination), { code: 'ENOENT' });
+  }
+});
+
 test('credential rotation blocks every old-run consumer before a new secret can escape', async (t) => {
   const canary = 'LaterSecret+/Token';
   const app = await loopbackServer(t);

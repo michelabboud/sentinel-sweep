@@ -69,6 +69,10 @@ function asciiAlphaNumeric(character) {
     || (character >= '0' && character <= '9');
 }
 
+function visibleUnicodeEscape(code) {
+  return `\\u${code.toString(16).padStart(4, '0')}`;
+}
+
 function escapeHtml(value) {
   const source = STRING(value);
   let escaped = '';
@@ -79,13 +83,9 @@ function escapeHtml(value) {
     else if (character === '>') escaped += '&gt;';
     else if (character === '"') escaped += '&quot;';
     else if (character === "'") escaped += '&#39;';
-    else if (character === '\u2028') escaped += '&#8232;';
-    else if (character === '\u2029') escaped += '&#8233;';
-    else if (character === '\r') escaped += '&#13;';
-    else if (character === '\n') escaped += '&#10;';
     else {
       const code = unsafeFormatCode(character);
-      escaped += code >= 0 ? `&#${code};` : character;
+      escaped += code >= 0 ? visibleUnicodeEscape(code) : character;
     }
   }
   return escaped;

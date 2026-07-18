@@ -265,18 +265,26 @@ test('escapes Markdown, HTML, and embedded JSON independently without remote ass
       assert.equal(output.includes(character), false);
     }
   }
-  // Keep the numeric form visibly escaped in Markdown so a renderer cannot
-  // decode it back into an active right-to-left override character.
-  assert.ok(markdown.includes('&\\#8238;'));
-  assert.ok(dashboard.includes('&#8294;'));
+  assert.ok(markdown.includes('\\\\u202e'));
+  assert.ok(dashboard.includes('\\u2066'));
+  assert.equal(dashboard.includes('&#8294;'), false);
 
   assert.ok(dashboard.includes("default-src 'none'"));
   assert.equal(/<(?:script)[^>]*src=/iu.test(dashboard), false);
   assert.equal(/<(?:link|img)[^>]+https?:/iu.test(dashboard), false);
   assert.equal(dashboard.includes('<script>alert'), false);
   assert.ok(dashboard.includes('&lt;script&gt;'));
-  assert.ok(dashboard.includes('&#8232;'));
-  assert.ok(dashboard.includes('&#8233;'));
+  assert.ok(dashboard.includes('\\u2028'));
+  assert.ok(dashboard.includes('\\u2029'));
+
+  // Numeric references are decoded by HTML parsers. The decoded text must
+  // still contain no active terminal or bidi formatting characters.
+  const htmlDecoded = dashboard.replace(/&#(\d+);/gu, (_entity, digits) => (
+    String.fromCodePoint(Number(digits))
+  ));
+  for (const character of ['\u202e', '\u2066', '\u200b', '\u061c', '\u0085', '\t']) {
+    assert.equal(htmlDecoded.includes(character), false);
+  }
 
   const embedded = /<script id="sentinel-summary" type="application\/json">([\s\S]*?)<\/script>/u
     .exec(dashboard);

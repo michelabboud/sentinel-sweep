@@ -47,17 +47,14 @@ test('resolveSecret returns the referenced value and never exposes missing value
     'top-secret',
   );
 
-  for (const env of [{}, { SENTINEL_ADMIN_TOKEN: '' }]) {
-    assert.throws(
-      () => resolveSecret('env:SENTINEL_ADMIN_TOKEN', env),
-      (error) => {
-        assert.equal(error.code, 'SECRET_UNAVAILABLE');
-        assert.match(JSON.stringify(error), /SENTINEL_ADMIN_TOKEN/);
-        assert.doesNotMatch(JSON.stringify(error), /top-secret/);
-        return true;
-      },
-    );
-  }
+  assert.throws(
+    () => resolveSecret('env:SENTINEL_ADMIN_TOKEN', {}),
+    (error) => error?.code === 'SECRET_UNAVAILABLE',
+  );
+  assert.throws(
+    () => resolveSecret('env:SENTINEL_ADMIN_TOKEN', { SENTINEL_ADMIN_TOKEN: '' }),
+    (error) => error?.code === 'SECRET_INVALID',
+  );
 });
 
 test('resolveSecret rejects inherited, accessor, non-enumerable, and proxy environment data', () => {
@@ -117,21 +114,23 @@ test('createRedactor removes resolved values and common authorization encodings'
   assert.doesNotMatch(persistedError, /top-secret/);
 });
 
-test('rejects configured secrets too short to redact without corrupting canonical output', () => {
+test('fails closed on present secrets that cannot be safely used or redacted', () => {
   assert.throws(
     () => resolveSecret('env:API_TOKEN', { API_TOKEN: 'abc' }),
-    (error) => error?.code === 'SECRET_UNAVAILABLE',
+    (error) => error?.code === 'SECRET_INVALID',
   );
   assert.throws(
     () => createRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' }),
-    (error) => error?.code === 'SECRET_UNAVAILABLE',
+    (error) => error?.code === 'SECRET_INVALID',
   );
-  const tolerant = createAvailableRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' });
-  assert.equal(tolerant('alphabet abc'), 'alphabet abc');
+  assert.throws(
+    () => createAvailableRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' }),
+    (error) => error?.code === 'SECRET_INVALID',
+  );
   for (const invalid of ['token with spaces', 'abc,def', 'quoted"token']) {
     assert.throws(
       () => resolveSecret('env:API_TOKEN', { API_TOKEN: invalid }),
-      (error) => error?.code === 'SECRET_UNAVAILABLE',
+      (error) => error?.code === 'SECRET_INVALID',
     );
   }
 });

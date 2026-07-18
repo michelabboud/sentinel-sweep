@@ -25,13 +25,32 @@ const FILE_FLAGS = fsConstants.O_CREAT
   | fsConstants.O_WRONLY
   | (fsConstants.O_NOFOLLOW ?? 0)
   | (fsConstants.O_CLOEXEC ?? 0);
+const READ_FILE_FLAGS = fsConstants.O_RDONLY
+  | (fsConstants.O_NOFOLLOW ?? 0)
+  | (fsConstants.O_CLOEXEC ?? 0);
 const MAX_TREE_NODES = 2048;
 const MAX_TREE_DEPTH = 32;
 const MAX_TREE_PATH_UNITS = 128 * 1024;
 const MAX_TREE_BYTES = 8 * 1024 * 1024;
+const MAX_LOCK_BYTES = 1024;
+const STAGE_MARKER = '.sentinel-output-stage-v2';
 
 function outputError(code, message) {
   return new SentinelError(code, message);
+}
+
+function unsafePathText(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f
+        || (code >= 0x7f && code <= 0x9f)
+        || code === 0x061c
+        || (code >= 0x200b && code <= 0x200f)
+        || (code >= 0x2028 && code <= 0x202e)
+        || (code >= 0x2060 && code <= 0x206f)
+        || code === 0xfeff) return true;
+  }
+  return false;
 }
 
 function sameIdentity(left, right) {
@@ -50,6 +69,16 @@ function privateFile(stat) {
     && stat.uid === uid
     && (stat.mode & 0o7777) === 0o600
     && stat.nlink === 1;
+}
+
+function privateReservationFile(stat) {
+  const uid = currentUid();
+  return uid !== null
+    && stat.isFile()
+    && !stat.isSymbolicLink()
+    && stat.uid === uid
+    && (stat.mode & 0o7777) === 0o600
+    && (stat.nlink === 1 || stat.nlink === 2);
 }
 
 function privateDirectory(stat) {
@@ -73,7 +102,8 @@ function trustedParentDirectory(stat) {
 function outputPath(value) {
   if (typeof value !== 'string'
       || value.length === 0
-      || value.includes('\0')) {
+      || value.includes('\0')
+      || unsafePathText(value)) {
     throw outputError('OUTPUT_PATH_INVALID', 'Output path is invalid');
   }
   const resolved = path.resolve(value);
@@ -178,17 +208,254 @@ async function writePrivateFile(candidate, contents) {
   }
 }
 
+function decimalText(value) {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] < '0' || value[index] > '9') return false;
+  }
+  return true;
+}
+
+async function processStartTime(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return null;
+  let handle;
+  try {
+    handle = await open(`/proc/${pid}/stat`, READ_FILE_FLAGS);
+    const buffer = Buffer.alloc(4097);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead === buffer.length) {
+      throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation owner record is oversized');
+    }
+    const text = buffer.subarray(0, bytesRead).toString('utf8');
+    const commandEnd = text.lastIndexOf(')');
+    if (commandEnd < 2) {
+      throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation owner record is invalid');
+    }
+    const fields = text.slice(commandEnd + 1).trim().split(/\s+/u);
+    const startTime = fields[19];
+    if (fields.length < 20 || !decimalText(startTime)) {
+      throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation owner identity is invalid');
+    }
+    return startTime;
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ESRCH') return null;
+    if (error instanceof SentinelError) throw error;
+    throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation owner could not be inspected');
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+function lockRecord(pid, startTime, nonce) {
+  return `${JSON.stringify({ version: 2, pid, startTime, nonce })}\n`;
+}
+
+function validNonce(value) {
+  if (typeof value !== 'string' || value.length !== 32) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (!((character >= '0' && character <= '9')
+        || (character >= 'a' && character <= 'f'))) return false;
+  }
+  return true;
+}
+
+async function readPrivateText(
+  candidate,
+  invalidCode,
+  invalidMessage,
+  statPolicy = privateFile,
+) {
+  let before;
+  let handle;
+  try {
+    before = await lstat(candidate);
+    if (!statPolicy(before)) throw outputError(invalidCode, invalidMessage);
+    handle = await open(candidate, READ_FILE_FLAGS);
+    const opened = await handle.stat();
+    if (!statPolicy(opened) || !sameIdentity(before, opened)) {
+      throw outputError(invalidCode, invalidMessage);
+    }
+    const buffer = Buffer.alloc(MAX_LOCK_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > MAX_LOCK_BYTES) throw outputError(invalidCode, invalidMessage);
+    const current = await lstat(candidate);
+    if (!statPolicy(current) || !sameIdentity(opened, current)) {
+      throw outputError(invalidCode, invalidMessage);
+    }
+    return { identity: opened, text: buffer.subarray(0, bytesRead).toString('utf8') };
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    throw outputError(invalidCode, invalidMessage);
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function inspectReservation(candidate) {
+  const snapshot = await readPrivateText(
+    candidate,
+    'OUTPUT_LOCK_INVALID',
+    'Output reservation is not a private regular file',
+    privateReservationFile,
+  );
+  let record;
+  try {
+    record = JSON.parse(snapshot.text);
+  } catch {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation record is invalid');
+  }
+  if (record === null
+      || typeof record !== 'object'
+      || Array.isArray(record)
+      || Object.getPrototypeOf(record) !== Object.prototype
+      || Reflect.ownKeys(record).length !== 4
+      || !Object.hasOwn(record, 'version')
+      || !Object.hasOwn(record, 'pid')
+      || !Object.hasOwn(record, 'startTime')
+      || !Object.hasOwn(record, 'nonce')
+      || record.version !== 2
+      || !Number.isSafeInteger(record.pid)
+      || record.pid < 1
+      || !decimalText(record.startTime)
+      || !validNonce(record.nonce)) {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation record is invalid');
+  }
+  return { candidate, identity: snapshot.identity, record };
+}
+
+async function recoverReservedStage(parent, record) {
+  const staging = path.join(
+    parent.anchor,
+    `.${parent.name}.sentinel-${record.nonce}.stage`,
+  );
+  let stage;
+  try {
+    stage = await lstat(staging);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw outputError('OUTPUT_LOCK_INVALID', 'Reserved output staging could not be inspected');
+  }
+  if (!privateDirectory(stage)) {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Reserved output staging is not private');
+  }
+  const current = await lstat(staging);
+  if (!privateDirectory(current) || !sameIdentity(stage, current)) {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Reserved output staging changed during recovery');
+  }
+  await removeCreatedTree(staging);
+  await parent.handle.sync();
+}
+
+async function removeReservationTemporary(parent, existing) {
+  if (existing.identity.nlink === 1) return;
+  const temporary = path.join(
+    parent.anchor,
+    `.${parent.name}.sentinel-${existing.record.nonce}.locktmp`,
+  );
+  let linked;
+  try {
+    linked = await lstat(temporary);
+  } catch {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation has an unknown hard-link alias');
+  }
+  if (!privateReservationFile(linked)
+      || linked.nlink !== 2
+      || !sameIdentity(existing.identity, linked)) {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Output reservation hard-link alias is invalid');
+  }
+  await unlink(temporary);
+  const current = await lstat(existing.candidate);
+  if (!privateFile(current) || !sameIdentity(existing.identity, current)) {
+    throw outputError('OUTPUT_LOCK_CHANGED', 'Output reservation changed during alias recovery');
+  }
+  existing.identity = current;
+  await parent.handle.sync();
+}
+
+async function acquireReservation(parent, nonce) {
+  const candidate = path.join(parent.anchor, `.${parent.name}.sentinel.lock`);
+  const temporary = path.join(parent.anchor, `.${parent.name}.sentinel-${nonce}.locktmp`);
+  const startTime = await processStartTime(process.pid);
+  if (startTime === null) {
+    throw outputError('OUTPUT_LOCK_INVALID', 'Current output reservation identity is unavailable');
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let temporaryIdentity = null;
+    try {
+      temporaryIdentity = await writePrivateFile(
+        temporary,
+        lockRecord(process.pid, startTime, nonce),
+      );
+      try {
+        await link(temporary, candidate);
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+        await unlinkIfIdentity(temporary, temporaryIdentity);
+        temporaryIdentity = null;
+        const existing = await inspectReservation(candidate);
+        const ownerStartTime = await processStartTime(existing.record.pid);
+        if (ownerStartTime === existing.record.startTime) {
+          throw outputError('OUTPUT_BUSY', 'Another process owns the output reservation');
+        }
+        await removeReservationTemporary(parent, existing);
+        await recoverReservedStage(parent, existing.record);
+        const current = await lstat(candidate);
+        if (!privateFile(current) || !sameIdentity(existing.identity, current)) {
+          throw outputError('OUTPUT_LOCK_CHANGED', 'Output reservation changed during recovery');
+        }
+        await unlink(candidate);
+        await parent.handle.sync();
+        continue;
+      }
+      await unlink(temporary);
+      temporaryIdentity = null;
+      const identity = await lstat(candidate);
+      if (!privateFile(identity)) {
+        throw outputError('OUTPUT_LOCK_INVALID', 'Published output reservation is invalid');
+      }
+      await parent.handle.sync();
+      return { candidate, identity, nonce };
+    } catch (error) {
+      await unlinkIfIdentity(temporary, temporaryIdentity);
+      if (error instanceof SentinelError) throw error;
+      throw outputError('OUTPUT_LOCK_FAILED', 'Output reservation could not be acquired');
+    }
+  }
+  throw outputError('OUTPUT_LOCK_FAILED', 'Output reservation recovery did not converge');
+}
+
+async function releaseReservation(parent, reservation) {
+  if (reservation === null) return;
+  try {
+    const current = await lstat(reservation.candidate);
+    if (!privateFile(current) || !sameIdentity(current, reservation.identity)) {
+      throw outputError('OUTPUT_LOCK_CHANGED', 'Output reservation changed before release');
+    }
+    await unlink(reservation.candidate);
+    await parent.handle.sync();
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    throw outputError('OUTPUT_LOCK_RELEASE_FAILED', 'Output reservation could not be released');
+  }
+}
+
 function artifactPath(value) {
   if (typeof value !== 'string'
       || value.length === 0
       || value.includes('\0')
       || value.includes('\\')
+      || unsafePathText(value)
       || path.isAbsolute(value)
       || path.win32.isAbsolute(value)) {
     throw outputError('OUTPUT_ARTIFACT_INVALID', 'Output artifact path is invalid');
   }
   const segments = value.split('/');
-  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+  if (segments.some((segment) => segment.length === 0
+    || segment === '.'
+    || segment === '..'
+    || Buffer.byteLength(segment) > 255)
+      || (segments.length === 1 && segments[0] === STAGE_MARKER)) {
     throw outputError('OUTPUT_ARTIFACT_INVALID', 'Output artifact path is not canonical');
   }
   return segments;
@@ -422,16 +689,25 @@ export class OutputBoundary {
     const nonce = randomBytes(16).toString('hex');
     const staging = path.join(parent.anchor, `.${parent.name}.sentinel-${nonce}.stage`);
     const target = path.join(parent.anchor, parent.name);
+    const stageMarker = path.join(staging, STAGE_MARKER);
+    let reservation = null;
     let stagePublished = false;
     let stageCreated = false;
     let stageIdentity = null;
+    let markerIdentity = null;
     try {
+      reservation = await acquireReservation(parent, nonce);
+      await verifyParent(parent);
+      if (!await absent(target)) {
+        throw outputError('OUTPUT_EXISTS', 'Output destination already exists');
+      }
       await mkdir(staging, { mode: 0o700 });
       stageIdentity = await lstat(staging);
       if (!privateDirectory(stageIdentity)) {
         throw outputError('OUTPUT_TREE_INVALID', 'Output staging directory is not private');
       }
       stageCreated = true;
+      markerIdentity = await writePrivateFile(stageMarker, `${nonce}\n`);
       for (const artifact of trustedArtifacts) {
         const { segments } = artifact;
         let directory = staging;
@@ -448,6 +724,12 @@ export class OutputBoundary {
         }
         await writePrivateFile(path.join(directory, segments[segments.length - 1]), artifact.content);
       }
+      const currentMarker = await lstat(stageMarker);
+      if (!privateFile(currentMarker) || !sameIdentity(markerIdentity, currentMarker)) {
+        throw outputError('OUTPUT_TREE_CHANGED', 'Output staging marker changed before publication');
+      }
+      await unlink(stageMarker);
+      markerIdentity = null;
       await syncTree(staging);
       const syncedIdentity = await lstat(staging);
       if (!sameIdentity(stageIdentity, syncedIdentity)) {
@@ -490,7 +772,14 @@ export class OutputBoundary {
       if (error instanceof SentinelError) throw error;
       throw outputError('OUTPUT_WRITE_FAILED', 'Output tree could not be published atomically');
     } finally {
+      let releaseError = null;
+      try {
+        await releaseReservation(parent, reservation);
+      } catch (error) {
+        releaseError = error;
+      }
       await parent.handle.close().catch(() => {});
+      if (releaseError !== null) throw releaseError;
     }
   }
 }

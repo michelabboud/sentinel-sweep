@@ -53,11 +53,18 @@ export function resolveSecret(ref, env = process.env) {
         && (!Object.hasOwn(descriptor, 'value') || descriptor.enumerable !== true))) {
     throw secretError('SECRET_ENV_INVALID', 'Secret must be an own enumerable data property');
   }
-  const value = descriptor?.value;
-  if (typeof value !== 'string' || value.length < 4 || !BEARER_TOKEN.test(value)) {
+  if (descriptor === undefined) {
     throw secretError(
       'SECRET_UNAVAILABLE',
       `Secret reference ${name} is unavailable`,
+      { ref: name },
+    );
+  }
+  const value = descriptor.value;
+  if (typeof value !== 'string' || value.length < 4 || !BEARER_TOKEN.test(value)) {
+    throw secretError(
+      'SECRET_INVALID',
+      `Secret reference ${name} is present but is not a supported bearer token`,
       { ref: name },
     );
   }
@@ -107,7 +114,12 @@ export function captureRoleCredentials(roleNames, roles, env = process.env) {
       captured.set(role, Object.freeze({ token: resolveSecret(tokenRef.value, env), error: null }));
     } catch (error) {
       if (error?.code === 'SECRET_ENV_INVALID') throw error;
-      captured.set(role, Object.freeze({ token: null, error: error?.code ?? 'SECRET_UNAVAILABLE' }));
+      captured.set(role, Object.freeze({
+        token: null,
+        error: error?.code === 'SECRET_INVALID'
+          ? 'SECRET_UNAVAILABLE'
+          : error?.code ?? 'SECRET_UNAVAILABLE',
+      }));
     }
   }
   return captured;
