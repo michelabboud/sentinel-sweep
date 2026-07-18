@@ -21,6 +21,9 @@ import { buildExecutionPlan } from '../../runtime/policy/execution.mjs';
 
 const ADMIN_TOKEN = 'sentinel-browser-admin-secret';
 const USER_TOKEN = 'sentinel-browser-user-secret';
+const REDIRECT_QUERY_CANARY = 'sentinel-redirect-query-secret';
+const PLANNED_PATH_CANARY = 'sentinel-planned-browser-path-secret';
+const PLANNED_QUERY_CANARY = 'q9';
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -68,6 +71,7 @@ async function startBrowserFixture(t) {
     const requested = new URL(request.url, 'http://fixture.invalid');
     approvedRequests.push({
       path: requested.pathname,
+      search: requested.search,
       authorization: request.headers.authorization ?? null,
     });
     if (requested.pathname === '/service-worker.js') {
@@ -193,6 +197,36 @@ async function startBrowserFixture(t) {
         status = 401;
         body = html('Unauthorized', '<main>unauthorized</main>');
       }
+    } else if (requested.pathname === '/public-login-redirect') {
+      response.writeHead(302, {
+        location: `/login?token=${encodeURIComponent(REDIRECT_QUERY_CANARY)}`,
+        'cache-control': 'no-store',
+      });
+      response.end();
+      return;
+    } else if (requested.pathname === '/protected-login-redirect') {
+      response.writeHead(302, {
+        location: `/login?token=${encodeURIComponent(REDIRECT_QUERY_CANARY)}`,
+        'cache-control': 'no-store',
+      });
+      response.end();
+      return;
+    } else if (requested.pathname === '/protected-302') {
+      if (request.headers.authorization === `Bearer ${ADMIN_TOKEN}`) {
+        status = 302;
+        body = html('Redirect without location', '<main>not rendered</main>');
+      } else if (request.headers.authorization === `Bearer ${USER_TOKEN}`) {
+        status = 403;
+        body = html('Forbidden', '<main>forbidden</main>');
+      } else {
+        status = 401;
+        body = html('Unauthorized', '<main>unauthorized</main>');
+      }
+    } else if (requested.pathname === '/login') {
+      body = html(
+        'Login',
+        '<main>login</main><script>history.replaceState({}, "", "/protected-login-redirect")</script>',
+      );
     } else if (requested.pathname === '/auth-visual') {
       if (request.headers.authorization === `Bearer ${ADMIN_TOKEN}`) {
         body = html(
@@ -216,7 +250,8 @@ async function startBrowserFixture(t) {
         status = 401;
         body = html('Unauthorized', '<main>unauthorized</main>');
       }
-    } else if (requested.pathname === '/ok') {
+    } else if (requested.pathname === '/ok'
+        || requested.pathname === `/planned-query/${PLANNED_PATH_CANARY}`) {
       body = html('Ready', '<main>ready</main>');
     } else if (requested.pathname === '/console') {
       body = html('Console', '<script>console.error("target console body must not escape")</script>');
@@ -623,6 +658,202 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
   assert.equal(serialized.includes('target console body'), false);
   assert.equal(serialized.includes('target exception body'), false);
   assert.equal(serialized.includes(chromePath), false);
+});
+
+test('uses plan-bound browser inputs and binds every exact target in real Chrome', async (t) => {
+  const chromePath = await findChromeOrSkip(t);
+  if (chromePath === null) return;
+  const fixture = await startBrowserFixture(t);
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-target-bind-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
+  const manifest = browserManifest([
+    route('public-login-redirect'),
+    route('protected-login-redirect', {
+      auth: { state: 'required', allowedRoles: ['admin'] },
+    }),
+    route('protected-302', {
+      auth: { state: 'required', allowedRoles: ['admin'] },
+    }),
+    route('planned-query', {
+      path: '/planned-query/{recordId}',
+      parameters: [
+        {
+          name: 'recordId',
+          location: 'path',
+          required: true,
+          schema: { type: 'string' },
+          example: PLANNED_PATH_CANARY,
+        },
+        {
+          name: 'view',
+          location: 'query',
+          required: true,
+          schema: { type: 'string' },
+          example: PLANNED_QUERY_CANARY,
+        },
+      ],
+    }),
+  ]);
+  const config = browserConfig(fixture.origin, chromePath, {
+    screenshotOnError: false,
+    browserSettleMs: 100,
+    viewports: [375, 640],
+  });
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+  const env = {
+    SENTINEL_BROWSER_ADMIN_TOKEN: ADMIN_TOKEN,
+    SENTINEL_BROWSER_USER_TOKEN: USER_TOKEN,
+  };
+
+  const sweep = sweepBrowser({
+    manifest,
+    plan,
+    config,
+    env,
+    runBoundary,
+    targetBoundary,
+  });
+  env.SENTINEL_BROWSER_ADMIN_TOKEN = 'mutated-admin-token';
+  env.SENTINEL_BROWSER_USER_TOKEN = 'mutated-user-token';
+  config.viewports.splice(0, config.viewports.length, 999);
+  config.approvedOrigins[0] = 'http://127.0.0.1:9';
+  config.services[0].approvedOrigin = 'http://127.0.0.1:9';
+  manifest.routes.find((entry) => (
+    entry.id === 'route:/protected-login-redirect'
+  )).auth = { state: 'public', allowedRoles: [] };
+  const observations = await sweep;
+
+  const publicMismatches = observations.filter((entry) => (
+    entry.subjectId === 'route:/public-login-redirect'
+      && entry.reasonCode === 'NAVIGATION_TARGET_MISMATCH'
+      && entry.role === null
+  ));
+  assert.deepEqual(
+    publicMismatches.map((entry) => entry.evidence.viewport),
+    [375, 640],
+    JSON.stringify(observations),
+  );
+  assert.ok(publicMismatches.every((entry) => entry.outcome === 'fail'));
+
+  const mismatch = observationFor(
+    observations,
+    'route:/protected-login-redirect',
+    'NAVIGATION_TARGET_MISMATCH',
+    'admin',
+  );
+  assert.ok(mismatch, JSON.stringify(observations));
+  assert.equal(mismatch.outcome, 'fail');
+  assert.equal(mismatch.category, 'security');
+  assert.equal(mismatch.evidence.path, '/[TARGET_MISMATCH]');
+  assert.deepEqual(
+    observations.filter((entry) => (
+      entry.subjectId === 'route:/protected-login-redirect'
+        && entry.reasonCode === 'NAVIGATION_TARGET_MISMATCH'
+        && entry.role === 'admin'
+    )).map((entry) => entry.evidence.viewport),
+    [375, 640],
+  );
+  for (const role of [null, 'user']) {
+    const deniedMismatches = observations.filter((entry) => (
+      entry.subjectId === 'route:/protected-login-redirect'
+        && entry.reasonCode === 'NAVIGATION_TARGET_MISMATCH'
+        && entry.role === role
+    ));
+    assert.deepEqual(
+      deniedMismatches.map((entry) => entry.evidence.viewport),
+      [375, 640],
+      JSON.stringify(observations),
+    );
+  }
+  assert.equal(JSON.stringify(observations).includes(REDIRECT_QUERY_CANARY), false);
+  const unresolvedRedirect = observationFor(
+    observations,
+    'route:/protected-302',
+    'DOCUMENT_STATUS_UNEXPECTED',
+    'admin',
+  );
+  assert.ok(unresolvedRedirect, JSON.stringify(observations));
+  assert.equal(unresolvedRedirect.evidence.status, 302);
+  assert.ok(fixture.approvedRequests.some((request) => (
+    request.path === `/planned-query/${PLANNED_PATH_CANARY}`
+      && new URLSearchParams(request.search).get('view') === PLANNED_QUERY_CANARY
+  )), JSON.stringify(fixture.approvedRequests));
+  const plannedQuery = observationFor(
+    observations,
+    'route:/planned-query',
+    'DOCUMENT_STATUS_EXPECTED',
+  );
+  assert.equal(
+    plannedQuery.evidence.path,
+    '/planned-query/{recordId}?[QUERY_PRESENT]',
+  );
+  assert.equal(JSON.stringify(observations).includes(PLANNED_PATH_CANARY), false);
+  assert.equal(JSON.stringify(observations).includes(PLANNED_QUERY_CANARY), false);
+});
+
+test('rejects a cloned browser plan before reading run output or launching Chrome', async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-plan-auth-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const targetRoot = path.join(temporary, 'target');
+  await mkdir(targetRoot);
+  const targetBoundary = await TargetBoundary.create(targetRoot);
+  const manifest = browserManifest([]);
+  const config = browserConfig('http://127.0.0.1:4317', '/definitely/not/chrome');
+  const plan = structuredClone(buildExecutionPlan({ manifest, config, mode: 'browser' }));
+  let rootReads = 0;
+  const runBoundary = {
+    get root() {
+      rootReads += 1;
+      return path.join(temporary, 'run');
+    },
+  };
+
+  await assert.rejects(
+    sweepBrowser({ manifest, plan, config, runBoundary, targetBoundary }),
+    (error) => error?.code === 'EXECUTION_PLAN_UNTRUSTED',
+  );
+  assert.equal(rootReads, 0);
+});
+
+test('rejects a proxy credential environment before browser output or Chrome launch', async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-env-auth-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const targetRoot = path.join(temporary, 'target');
+  await mkdir(targetRoot);
+  const targetBoundary = await TargetBoundary.create(targetRoot);
+  const manifest = browserManifest([
+    route('protected', { auth: { state: 'required', allowedRoles: ['admin'] } }),
+  ]);
+  const config = browserConfig('http://127.0.0.1:4317', '/definitely/not/chrome', {
+    roles: { admin: { tokenRef: 'env:SENTINEL_BROWSER_ADMIN_TOKEN' } },
+  });
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+  let envReads = 0;
+  const env = new Proxy({ SENTINEL_BROWSER_ADMIN_TOKEN: ADMIN_TOKEN }, {
+    get(target, property, receiver) {
+      envReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+    getOwnPropertyDescriptor(target, property) {
+      envReads += 1;
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+  });
+  let rootReads = 0;
+  const runBoundary = {
+    get root() {
+      rootReads += 1;
+      return path.join(temporary, 'run');
+    },
+  };
+
+  await assert.rejects(
+    sweepBrowser({ manifest, plan, config, env, runBoundary, targetBoundary }),
+    (error) => error?.code === 'SECRET_ENV_INVALID',
+  );
+  assert.equal(envReads, 0);
+  assert.equal(rootReads, 0);
 });
 
 test('does not create screenshots when screenshot-on-error is disabled', async (t) => {

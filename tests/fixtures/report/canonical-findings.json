@@ -30,7 +30,9 @@
   },
   "findings": [
     {
-      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "id": "5b405d4b0c11a1f411dfe93267c039d3a7fbe10d096dee6f9cf686d95091f03d",
+      "reasonCode": "RBAC_ACCESS_GRANTED",
+      "outcome": "fail",
       "severity": "critical",
       "category": "rbac",
       "message": "User could access admin data",
@@ -60,7 +62,9 @@
       ]
     },
     {
-      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "id": "8ff79105a11e608e5354e57b441f9298d81f8a8fddde271e89c352f981e92a98",
+      "reasonCode": "UNCAUGHT_EXCEPTION",
+      "outcome": "fail",
       "severity": "error",
       "category": "console",
       "message": "The dashboard raised an uncaught exception",
@@ -75,7 +79,7 @@
         "actual": "uncaught exception",
         "durationMs": 44,
         "viewport": 375,
-        "screenshotPath": "dashboard-375.png"
+        "screenshotPath": "browser-0123456789abcdef01234567.png"
       },
       "provenance": [
         {
@@ -91,7 +95,9 @@
       ]
     },
     {
-      "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "id": "643de41d25c362b647fb7967723fe3b2bf43fd0db7b29880ef529afdbffa8a48",
+      "reasonCode": "VUE_DYNAMIC_ROUTE",
+      "outcome": "fail",
       "severity": "warning",
       "category": "coverage",
       "message": "One dynamic route was not executed",
@@ -111,7 +117,9 @@
       ]
     },
     {
-      "id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "id": "12fad8f922134f154b269ff8b198500cf18eebf3959b5eab35d86b559489cef1",
+      "reasonCode": "MUTATION_BLOCKED_DISABLED",
+      "outcome": "skip",
       "severity": "info",
       "category": "policy",
       "message": "Policy skipped POST /items",

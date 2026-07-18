@@ -1,8 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 
 import { SentinelError } from '../../runtime/lib/errors.mjs';
 import { validateAgainstSchema } from '../../runtime/lib/schema.mjs';
+
+function captureError(callback) {
+  try {
+    callback();
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+function withPrototypeValue(prototype, key, value, callback) {
+  const previous = Object.getOwnPropertyDescriptor(prototype, key);
+  Object.defineProperty(prototype, key, {
+    configurable: true,
+    writable: true,
+    value,
+  });
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) delete prototype[key];
+    else Object.defineProperty(prototype, key, previous);
+  }
+}
 
 const schema = {
   type: 'object',
@@ -151,6 +176,12 @@ test('rejects every assertion keyword with exact paths and keywords', () => {
       value: [],
       schema: { type: 'array', minItems: 1 },
       expected: [{ path: '', keyword: 'minItems' }],
+    },
+    {
+      name: 'maxItems',
+      value: [1, 2],
+      schema: { type: 'array', maxItems: 1 },
+      expected: [{ path: '', keyword: 'maxItems' }],
     },
     {
       name: 'minLength',
@@ -328,4 +359,321 @@ test('serializes Sentinel errors with the stable public fields', () => {
       violations: [{ path: '/field', keyword: 'type' }],
     },
   });
+});
+
+test('rejects accessor-backed values and schemas without invoking attacker code', () => {
+  let valueReads = 0;
+  const accessorValue = {};
+  Object.defineProperty(accessorValue, 'name', {
+    enumerable: true,
+    get() {
+      valueReads += 1;
+      return 'app';
+    },
+  });
+  assert.throws(
+    () => validateAgainstSchema(accessorValue, schema, { name: 'accessor value' }),
+    (error) => error?.code === 'SCHEMA_INVALID',
+  );
+  assert.equal(valueReads, 0);
+
+  let schemaReads = 0;
+  const accessorSchema = {};
+  Object.defineProperty(accessorSchema, 'type', {
+    enumerable: true,
+    get() {
+      schemaReads += 1;
+      return 'object';
+    },
+  });
+  assert.throws(
+    () => validateAgainstSchema({}, accessorSchema, { name: 'accessor schema' }),
+    (error) => error?.code === 'SCHEMA_DEFINITION_INVALID',
+  );
+  assert.equal(schemaReads, 0);
+
+  let optionReads = 0;
+  const accessorOptions = {};
+  Object.defineProperty(accessorOptions, 'name', {
+    enumerable: true,
+    get() {
+      optionReads += 1;
+      return 'accessor options';
+    },
+  });
+  assert.throws(
+    () => validateAgainstSchema({}, { type: 'object' }, accessorOptions),
+    (error) => error?.code === 'SCHEMA_INVALID',
+  );
+  assert.equal(optionReads, 0);
+});
+
+test('fails closed when schema validation exceeds its global work budget', () => {
+  const excessive = Array.from({ length: 100_000 }, () => 'valid');
+
+  assert.throws(
+    () => validateAgainstSchema(
+      excessive,
+      { type: 'array', items: { type: 'string' } },
+      { name: 'excessive' },
+    ),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+});
+
+test('reports every exact path when the same invalid object appears more than once', () => {
+  const sharedInvalid = { name: 42 };
+
+  assert.throws(
+    () => validateAgainstSchema(
+      { items: [sharedInvalid, sharedInvalid] },
+      {
+        properties: {
+          items: {
+            type: 'array',
+            items: { properties: { name: { type: 'string' } } },
+          },
+        },
+      },
+      { name: 'shared invalid object' },
+    ),
+    (error) => {
+      assert.deepEqual(error?.details?.violations, [
+        { path: '/items/0/name', keyword: 'type' },
+        { path: '/items/1/name', keyword: 'type' },
+      ]);
+      return true;
+    },
+  );
+});
+
+test('bounds validation of a deeply shared invalid DAG', () => {
+  let sharedInvalid = { value: 42 };
+  for (let depth = 0; depth < 20; depth += 1) {
+    sharedInvalid = { allOf: [sharedInvalid, sharedInvalid] };
+  }
+
+  assert.throws(
+    () => validateAgainstSchema(
+      sharedInvalid,
+      {
+        properties: {
+          allOf: { type: 'array', items: { $ref: '#' } },
+          value: { type: 'string' },
+        },
+      },
+      { name: 'shared invalid DAG' },
+    ),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+});
+
+test('maps deeply acyclic value and schema inputs to the validation limit', () => {
+  let deepValue = null;
+  let deepSchema = { type: 'null' };
+  for (let depth = 0; depth < 20_000; depth += 1) {
+    deepValue = { child: deepValue };
+    deepSchema = { properties: { child: deepSchema } };
+  }
+
+  assert.throws(
+    () => validateAgainstSchema(deepValue, { type: 'object' }),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+  assert.throws(
+    () => validateAgainstSchema({}, deepSchema),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+});
+
+test('rejects oversized scalar strings before minLength and pattern work', () => {
+  const oversized = 'x'.repeat(10_000_000);
+
+  assert.throws(
+    () => validateAgainstSchema(oversized, { type: 'string', minLength: oversized.length + 1 }),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+  assert.throws(
+    () => validateAgainstSchema('safe', { type: 'string', pattern: oversized }),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+  assert.throws(
+    () => validateAgainstSchema('safe', { const: oversized }),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+  assert.throws(
+    () => validateAgainstSchema('safe', { enum: [oversized] }),
+    (error) => error?.code === 'SCHEMA_VALIDATION_LIMIT_EXCEEDED',
+  );
+});
+
+test('does not memoize successful primitive validations across negative and positive zero', () => {
+  const itemSchema = { type: 'array', items: { const: -0 } };
+
+  for (const [values, invalidIndex] of [
+    [[-0, +0], 1],
+    [[+0, -0], 0],
+  ]) {
+    assert.throws(
+      () => validateAgainstSchema(values, itemSchema),
+      (error) => {
+        assert.deepEqual(error?.details?.violations, [
+          { path: `/${invalidIndex}`, keyword: 'const' },
+        ]);
+        return true;
+      },
+    );
+  }
+});
+
+test('does not trust ambient Array prototype methods during validation', () => {
+  const forEachError = withPrototypeValue(
+    Array.prototype,
+    'forEach',
+    function suppressedForEach() {},
+    () => captureError(() => validateAgainstSchema(
+      ['bad'],
+      { type: 'array', items: { type: 'number' } },
+    )),
+  );
+  assert.deepEqual(forEachError?.details?.violations, [{ path: '/0', keyword: 'type' }]);
+
+  const someError = withPrototypeValue(
+    Array.prototype,
+    'some',
+    function forgedSome() { return true; },
+    () => captureError(() => validateAgainstSchema('bad', { enum: ['good'] })),
+  );
+  assert.deepEqual(someError?.details?.violations, [{ path: '', keyword: 'enum' }]);
+
+  const reduceError = withPrototypeValue(
+    Array.prototype,
+    'reduce',
+    function forgedReduce() { return 1; },
+    () => captureError(() => validateAgainstSchema(
+      true,
+      { oneOf: [{ type: 'string' }, { type: 'number' }] },
+    )),
+  );
+  assert.deepEqual(reduceError?.details?.violations, [{ path: '', keyword: 'oneOf' }]);
+
+  const orderingError = withPrototypeValue(
+    Array.prototype,
+    'sort',
+    function suppressedSort() { return this; },
+    () => withPrototypeValue(
+      Array.prototype,
+      'filter',
+      function suppressedFilter() { return []; },
+      () => captureError(() => validateAgainstSchema(
+        { z: true, a: true },
+        { type: 'object', additionalProperties: false },
+      )),
+    ),
+  );
+  assert.deepEqual(orderingError?.details?.violations, [
+    { path: '/a', keyword: 'additionalProperties' },
+    { path: '/z', keyword: 'additionalProperties' },
+  ]);
+});
+
+test('does not trust ambient Array or String iterators during validation', () => {
+  const arrayIteratorError = withPrototypeValue(
+    Array.prototype,
+    Symbol.iterator,
+    function* emptyIterator() {},
+    () => captureError(() => validateAgainstSchema(
+      'bad',
+      { allOf: [{ type: 'number' }] },
+    )),
+  );
+  assert.deepEqual(arrayIteratorError?.details?.violations, [{ path: '', keyword: 'type' }]);
+
+  const stringIteratorError = withPrototypeValue(
+    String.prototype,
+    Symbol.iterator,
+    function forgedStringIterator() {
+      let emitted = false;
+      return {
+        next() {
+          if (emitted) return { done: true, value: undefined };
+          emitted = true;
+          return { done: false, value: 'x' };
+        },
+      };
+    },
+    () => captureError(() => validateAgainstSchema('', { type: 'string', minLength: 1 })),
+  );
+  assert.deepEqual(stringIteratorError?.details?.violations, [
+    { path: '', keyword: 'minLength' },
+  ]);
+});
+
+test('does not dispatch pattern checks through a mutable RegExp prototype', () => {
+  let calls = 0;
+  const error = withPrototypeValue(
+    RegExp.prototype,
+    'test',
+    function forgedPatternMatch() {
+      calls += 1;
+      return true;
+    },
+    () => captureError(() => validateAgainstSchema(
+      'lower',
+      { type: 'string', pattern: '^[A-Z]+$' },
+      { name: 'pattern poison' },
+    )),
+  );
+
+  assert.equal(calls, 0);
+  assert.deepEqual(error?.details?.violations, [{ path: '', keyword: 'pattern' }]);
+});
+
+test('uses pristine pattern matching when RegExp.test is poisoned before import', () => {
+  const moduleUrl = new URL('../../runtime/lib/schema.mjs', import.meta.url).href;
+  const script = `
+    let calls = 0;
+    RegExp.prototype.test = function poisonedTest() {
+      calls += 1;
+      return true;
+    };
+    const { validateAgainstSchema: validate } = await import(${JSON.stringify(moduleUrl)});
+    let code = null;
+    try {
+      validate('attacker', { type: 'string', pattern: '^trusted$' });
+    } catch (error) {
+      code = error?.code ?? String(error);
+    }
+    process.stdout.write(JSON.stringify({ calls, code }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', script],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { calls: 0, code: 'SCHEMA_INVALID' });
+});
+
+test('does not dispatch JSON pointer escaping through a mutable String prototype', () => {
+  let calls = 0;
+  const error = withPrototypeValue(
+    String.prototype,
+    'replaceAll',
+    function forgedReplacement() {
+      calls += 1;
+      return String(this);
+    },
+    () => captureError(() => validateAgainstSchema(
+      { 'a/b~c': true },
+      { type: 'object', additionalProperties: false },
+      { name: 'pointer poison' },
+    )),
+  );
+
+  assert.equal(calls, 0);
+  assert.deepEqual(error?.details?.violations, [
+    { path: '/a~1b~0c', keyword: 'additionalProperties' },
+  ]);
 });

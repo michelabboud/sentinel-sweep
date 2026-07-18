@@ -251,6 +251,7 @@ test('builds an explicit immutable decision for every discovered operation and r
   });
 
   assert.equal(plan.mode, 'sweep');
+  assert.deepEqual(plan.browserViewports, [375]);
   assert.deepEqual(
     plan.operations.map(({ subjectId, action }) => ({ subjectId, action })),
     [
@@ -270,6 +271,7 @@ test('builds an explicit immutable decision for every discovered operation and r
   assert.ok(Object.isFrozen(plan));
   assert.ok(Object.isFrozen(plan.operations));
   assert.ok(Object.isFrozen(plan.routes));
+  assert.ok(Object.isFrozen(plan.browserViewports));
   assert.ok(plan.operations.every(Object.isFrozen));
   assert.ok(plan.routes.every(Object.isFrozen));
 });
@@ -301,8 +303,144 @@ test('exposes the trusted role universe for lower-privilege RBAC attempts withou
   });
 
   assert.deepEqual(plan.roleUniverse, ['admin', 'operator', 'owner', 'user']);
+  assert.deepEqual(plan.operations[0].roles, [
+    'admin', 'operator', 'owner', 'user', 'unauthenticated',
+  ]);
+  assert.deepEqual(plan.routes[0].roles, [
+    'admin', 'operator', 'owner', 'user', 'unauthenticated',
+  ]);
   assert.ok(Object.isFrozen(plan.roleUniverse));
   assert.equal(JSON.stringify(plan).includes('tokenRef'), false);
   assert.equal(JSON.stringify(plan).includes('env:'), false);
   assert.equal(JSON.stringify(plan).includes('SENTINEL_'), false);
+});
+
+test('executes every protected subject across the complete trusted role universe', () => {
+  const manifest = {
+    operations: [
+      operation({
+        id: 'op:get:/api/public',
+        path: '/api/public',
+      }),
+      operation({
+        id: 'op:get:/api/admin',
+        path: '/api/admin',
+        auth: { state: 'required', allowedRoles: ['admin'] },
+      }),
+    ],
+    routes: [
+      route({ id: 'route:/public', path: '/public' }),
+      route({
+        id: 'route:/audit',
+        path: '/audit',
+        auth: { state: 'required', allowedRoles: ['auditor'] },
+      }),
+    ],
+  };
+  const plan = buildExecutionPlan({
+    manifest,
+    config: config({
+      roles: { user: { tokenRef: 'env:SENTINEL_USER_TOKEN' } },
+    }),
+    mode: 'sweep',
+  });
+
+  assert.deepEqual(plan.roleUniverse, ['admin', 'auditor', 'user']);
+  assert.deepEqual(plan.operations[0].roles, ['unauthenticated']);
+  assert.deepEqual(plan.routes[0].roles, ['unauthenticated']);
+  assert.deepEqual(
+    plan.operations[1].roles,
+    ['admin', 'auditor', 'user', 'unauthenticated'],
+  );
+  assert.deepEqual(
+    plan.routes[1].roles,
+    ['admin', 'auditor', 'user', 'unauthenticated'],
+  );
+});
+
+test('never executes required-auth subjects with an empty allowed-role contract', () => {
+  const protectedOperation = operation({
+    auth: { state: 'required', allowedRoles: [] },
+  });
+  const plan = buildExecutionPlan({
+    manifest: {
+      operations: [protectedOperation],
+      routes: [route({ auth: { state: 'required', allowedRoles: [] } })],
+    },
+    config: config({
+      roles: { user: { tokenRef: 'env:SENTINEL_USER_TOKEN' } },
+    }),
+    mode: 'sweep',
+  });
+
+  assert.deepEqual(
+    plan.operations.map(({ action, reasonCode }) => ({ action, reasonCode })),
+    [{ action: 'skip', reasonCode: 'READ_BLOCKED_UNKNOWN_AUTH' }],
+  );
+  assert.deepEqual(
+    plan.routes.map(({ action, reasonCode }) => ({ action, reasonCode })),
+    [{ action: 'skip', reasonCode: 'ROUTE_BLOCKED_UNKNOWN_AUTH' }],
+  );
+  assert.deepEqual(plan.operations[0].roles, ['user', 'unauthenticated']);
+  assert.deepEqual(plan.routes[0].roles, ['user', 'unauthenticated']);
+});
+
+test('rejects inherited, accessor, and proxy role configuration without invoking traps', () => {
+  const manifest = {
+    operations: [operation({
+      auth: { state: 'required', allowedRoles: ['admin'] },
+    })],
+    routes: [],
+  };
+  let getterReads = 0;
+  let proxyReads = 0;
+  const accessorRoles = {};
+  Object.defineProperty(accessorRoles, 'admin', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return { tokenRef: 'env:SENTINEL_ADMIN_TOKEN' };
+    },
+  });
+  const accessorRecord = {};
+  Object.defineProperty(accessorRecord, 'tokenRef', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return 'env:SENTINEL_ADMIN_TOKEN';
+    },
+  });
+  const proxyRoles = new Proxy({
+    admin: { tokenRef: 'env:SENTINEL_ADMIN_TOKEN' },
+  }, {
+    ownKeys(target) {
+      proxyReads += 1;
+      return Reflect.ownKeys(target);
+    },
+    get(target, property, receiver) {
+      proxyReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const candidates = [
+    Object.create({ admin: { tokenRef: 'env:SENTINEL_ADMIN_TOKEN' } }),
+    accessorRoles,
+    { admin: accessorRecord },
+    proxyRoles,
+  ];
+
+  for (const roles of candidates) {
+    assert.throws(
+      () => buildExecutionPlan({
+        manifest,
+        config: config({ roles }),
+        mode: 'api',
+      }),
+      (error) => error?.code === 'EXECUTION_INPUT_INVALID',
+    );
+  }
+  assert.equal(getterReads, 0);
+  assert.equal(proxyReads, 0);
 });

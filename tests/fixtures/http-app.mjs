@@ -1,5 +1,7 @@
 import http from 'node:http';
 
+export const HTTP_REDIRECT_QUERY_CANARY = 'sentinel-api-redirect-query-secret';
+
 function json(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
@@ -55,6 +57,14 @@ export async function startHttpFixture({ adminToken, userToken, slowDelayMs = 15
       return;
     }
 
+    if (request.method === 'GET' && url.pathname === '/public-login-redirect') {
+      response.writeHead(302, {
+        location: `/login?token=${encodeURIComponent(HTTP_REDIRECT_QUERY_CANARY)}`,
+      });
+      response.end();
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/user') {
       if (authorization === undefined) {
         json(response, 401, { error: 'authentication required' });
@@ -75,6 +85,23 @@ export async function startHttpFixture({ adminToken, userToken, slowDelayMs = 15
       } else {
         json(response, 403, { error: 'forbidden' });
       }
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/admin-login-redirect') {
+      if (authorization === undefined) {
+        json(response, 401, { error: 'authentication required' });
+      } else if (authorization === `Bearer ${adminToken}`) {
+        response.writeHead(302, { location: '/login' });
+        response.end();
+      } else {
+        json(response, 403, { error: 'forbidden' });
+      }
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/login') {
+      json(response, 200, { login: true });
       return;
     }
 

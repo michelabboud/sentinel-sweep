@@ -1,4 +1,8 @@
+import { SentinelError } from '../lib/errors.mjs';
+import { snapshotJson } from '../lib/json-snapshot.mjs';
+
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const EXECUTION_CONTEXTS = new WeakMap();
 
 const METHOD_RISK = new Map([
   ['GET', 0],
@@ -219,15 +223,25 @@ function resolveParameters(subject) {
   return { complete: true, values };
 }
 
-function resolveRoles(subject) {
+function resolveRoles(subject, config, roleUniverse = null) {
   const authState = subject?.auth?.state;
   const allowedRoles = stableStrings(subject?.auth?.allowedRoles)
+    .filter((role) => role !== 'unauthenticated');
+  const configuredRoles = stableStrings(
+    isObject(config?.roles) ? Object.keys(config.roles) : [],
+  ).filter((role) => role !== 'unauthenticated');
+  const trustedRoles = stableStrings(roleUniverse ?? [...allowedRoles, ...configuredRoles])
     .filter((role) => role !== 'unauthenticated');
   const known = authState === 'public'
     || (authState === 'required' && allowedRoles.length > 0);
   return {
     known,
-    roles: [...allowedRoles, 'unauthenticated'],
+    roles: [
+      ...stableStrings(authState === 'public'
+        ? []
+        : trustedRoles),
+      'unauthenticated',
+    ],
   };
 }
 
@@ -264,12 +278,17 @@ function responsesAreKnown(operation) {
  * Produces one explicit decision for an operation. The HTTP method, not
  * source-provided mutation metadata, determines whether mutation gates apply.
  */
-export function planOperation({ operation, config, sandboxAcknowledged } = {}) {
+export function planOperation({
+  operation,
+  config,
+  sandboxAcknowledged,
+  roleUniverse,
+} = {}) {
   const method = normalizedMethod(operation);
   const mutation = !READ_METHODS.has(method);
   const risk = computeRisk(operation);
   const originId = resolveOrigin(operation, config);
-  const roles = resolveRoles(operation);
+  const roles = resolveRoles(operation, config, roleUniverse);
   const parameters = resolveParameters(operation);
   const skip = (reasonCode) => operationDecision(
     operation,
@@ -331,10 +350,10 @@ export function planOperation({ operation, config, sandboxAcknowledged } = {}) {
   );
 }
 
-function planRoute(route, config) {
+function planRoute(route, config, roleUniverse) {
   const risk = deepFreeze({ score: 0, level: 'safe', reasons: [] });
   const originId = resolveOrigin(route, config);
-  const roles = resolveRoles(route);
+  const roles = resolveRoles(route, config, roleUniverse);
   const parameters = resolveParameters(route);
   let action = 'execute';
   let reasonCode = 'ROUTE_APPROVED';
@@ -361,36 +380,126 @@ function planRoute(route, config) {
   });
 }
 
-function buildRoleUniverse({ manifest, config, operations, routes }) {
+function buildRoleUniverse({ manifest, config }) {
   const configuredRoles = isObject(config?.roles) ? Object.keys(config.roles) : [];
   const manifestRoles = [
     ...(Array.isArray(manifest?.operations) ? manifest.operations : []),
     ...(Array.isArray(manifest?.routes) ? manifest.routes : []),
   ].flatMap((subject) => stableStrings(subject?.auth?.allowedRoles));
-  const decisionRoles = [...operations, ...routes]
-    .flatMap((entry) => stableStrings(entry?.roles));
-
   return stableStrings([
     ...configuredRoles,
     ...manifestRoles,
-    ...decisionRoles,
   ]).filter((role) => role !== 'unauthenticated');
+}
+
+function browserViewports(config) {
+  if (!Array.isArray(config?.viewports)) return [];
+  return [...new Set(config.viewports.filter((value) => (
+    Number.isInteger(value) && value > 0 && value <= 10_000
+  )))].sort((left, right) => left - right);
+}
+
+function planningSnapshot(value, name) {
+  return snapshotJson(value ?? {}, {
+    code: 'EXECUTION_INPUT_INVALID',
+    message: `${name} must contain recursively plain own-data JSON`,
+  });
+}
+
+function validateCompletePlan(plan, manifest) {
+  if (!['api', 'browser', 'sweep'].includes(plan.mode)) {
+    throw new SentinelError('EXECUTION_PLAN_INVALID', 'Execution mode is invalid');
+  }
+  const subjects = [
+    ['operation', Array.isArray(manifest.operations) ? manifest.operations : [], plan.operations],
+    ['route', Array.isArray(manifest.routes) ? manifest.routes : [], plan.routes],
+  ];
+  for (const [subjectType, discovered, decisions] of subjects) {
+    if (decisions.length !== discovered.length) {
+      throw new SentinelError(
+        'EXECUTION_PLAN_INVALID',
+        `Execution plan is missing a discovered ${subjectType}`,
+      );
+    }
+    const ids = new Set();
+    for (let index = 0; index < discovered.length; index += 1) {
+      const subject = discovered[index];
+      const entry = decisions[index];
+      if (!isTrimmedNonBlankString(subject?.id)
+          || ids.has(subject.id)
+          || entry.subjectId !== subject.id
+          || !Array.isArray(entry.roles)
+          || entry.roles.length === 0
+          || entry.roles.some((role) => !isTrimmedNonBlankString(role))
+          || new Set(entry.roles).size !== entry.roles.length
+          || !entry.roles.includes('unauthenticated')) {
+        throw new SentinelError(
+          'EXECUTION_PLAN_INVALID',
+          `Execution plan contains an invalid ${subjectType} decision`,
+        );
+      }
+      ids.add(subject.id);
+    }
+  }
+  if (['browser', 'sweep'].includes(plan.mode)
+      && plan.routes.some((entry) => entry.action === 'execute')
+      && plan.browserViewports.length === 0) {
+    throw new SentinelError(
+      'EXECUTION_PLAN_INVALID',
+      'Browser execution requires at least one planned viewport',
+    );
+  }
+}
+
+/** Returns immutable inputs bound to a complete plan created by this module. */
+export function requireExecutionContext(plan, source) {
+  const context = plan !== null && typeof plan === 'object'
+    ? EXECUTION_CONTEXTS.get(plan)
+    : undefined;
+  if (context === undefined) {
+    throw new SentinelError(
+      'EXECUTION_PLAN_UNTRUSTED',
+      'Execution requires the original complete plan returned by buildExecutionPlan',
+    );
+  }
+  if ((source === 'api' && !['api', 'sweep'].includes(plan.mode))
+      || (source === 'browser' && !['browser', 'sweep'].includes(plan.mode))) {
+    throw new SentinelError(
+      'EXECUTION_PLAN_MODE_INVALID',
+      'Execution plan does not authorize this sweep mode',
+    );
+  }
+  return context;
 }
 
 /** Builds a complete, immutable policy ledger without filtering skipped work. */
 export function buildExecutionPlan({ manifest, config, mode, sandboxAcknowledged } = {}) {
-  const operations = Array.isArray(manifest?.operations)
-    ? manifest.operations.map((operation) => planOperation({
+  const trustedManifest = planningSnapshot(manifest, 'Manifest');
+  const trustedConfig = planningSnapshot(config, 'Config');
+  const roleUniverse = buildRoleUniverse({ manifest: trustedManifest, config: trustedConfig });
+  const operations = Array.isArray(trustedManifest?.operations)
+    ? trustedManifest.operations.map((operation) => planOperation({
       operation,
-      config,
+      config: trustedConfig,
       sandboxAcknowledged,
+      roleUniverse,
     }))
     : [];
-  const routes = Array.isArray(manifest?.routes)
-    ? manifest.routes.map((route) => planRoute(route, config))
+  const routes = Array.isArray(trustedManifest?.routes)
+    ? trustedManifest.routes.map((route) => planRoute(route, trustedConfig, roleUniverse))
     : [];
 
-  const roleUniverse = buildRoleUniverse({ manifest, config, operations, routes });
-
-  return deepFreeze({ mode, roleUniverse, operations, routes });
+  const plan = deepFreeze({
+    mode,
+    roleUniverse,
+    browserViewports: browserViewports(trustedConfig),
+    operations,
+    routes,
+  });
+  validateCompletePlan(plan, trustedManifest);
+  EXECUTION_CONTEXTS.set(plan, Object.freeze({
+    manifest: trustedManifest,
+    config: trustedConfig,
+  }));
+  return plan;
 }

@@ -2,9 +2,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 
 import { SentinelError } from '../lib/errors.mjs';
+import {
+  materializeRequestTarget,
+  materializeTargetPath,
+} from '../lib/findings-contract.mjs';
 import { TargetBoundary } from '../lib/fs-boundary.mjs';
 import { parseApprovedOrigin, resolveRequestUrl } from '../lib/origin.mjs';
-import { resolveSecret } from '../lib/secrets.mjs';
+import { captureRoleCredentials } from '../lib/secrets.mjs';
+import { requireExecutionContext } from '../policy/execution.mjs';
 import { CdpClient } from './cdp.mjs';
 import { launchChrome } from './chrome.mjs';
 
@@ -130,7 +135,9 @@ function deepFreeze(value) {
 
 function evidence(route, fields = {}) {
   return deepFreeze({
-    path: typeof route?.path === 'string' ? route.path : '/',
+    path: typeof fields.path === 'string'
+      ? fields.path
+      : (typeof route?.path === 'string' ? route.path : '/'),
     status: Number.isInteger(fields.status) ? fields.status : null,
     durationMs: typeof fields.durationMs === 'number' ? Math.max(0, fields.durationMs) : null,
     viewport: Number.isInteger(fields.viewport) ? fields.viewport : null,
@@ -163,6 +170,9 @@ function policySkip(route, decision) {
     message: 'Browser route was skipped by the execution policy',
     expected: 'policy approval',
     actual: decision?.reasonCode ?? 'missing decision',
+    evidence: {
+      path: materializeTargetPath(route, decision?.parameterValues ?? {}),
+    },
   });
 }
 
@@ -177,51 +187,34 @@ function resolveOrigin(config, originId) {
   return matches.length === 1 ? matches[0].approvedOrigin : null;
 }
 
-function configuredRoles(config) {
-  if (config?.roles === null || typeof config?.roles !== 'object' || Array.isArray(config.roles)) {
-    return [];
-  }
-  return Object.keys(config.roles).sort();
-}
-
-function attemptsFor(route, config) {
-  if (route?.auth?.state === 'public') return [{ role: null, accessExpected: true }];
+function attemptsFor(route, decision) {
   const allowed = new Set(
     (Array.isArray(route?.auth?.allowedRoles) ? route.auth.allowedRoles : [])
       .filter((role) => typeof role === 'string' && role !== 'unauthenticated'),
   );
-  const roles = [...new Set([...allowed, ...configuredRoles(config)])].sort();
-  return [
-    { role: null, accessExpected: false },
-    ...roles.map((role) => ({ role, accessExpected: allowed.has(role) })),
+  const roles = [
+    ...decision.roles.filter((role) => role === 'unauthenticated'),
+    ...decision.roles.filter((role) => role !== 'unauthenticated'),
   ];
+  return roles.map((plannedRole) => {
+    const role = plannedRole === 'unauthenticated' ? null : plannedRole;
+    return {
+      role,
+      accessExpected: route?.auth?.state === 'public' || allowed.has(role),
+    };
+  });
 }
 
-function scalar(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return JSON.stringify(value);
-}
-
-function materializePath(route, parameterValues) {
-  let result = route.path;
-  for (const [key, value] of Object.entries(parameterValues ?? {})) {
-    if (!key.startsWith('path:')) continue;
-    result = result.split(`{${key.slice(5)}}`).join(encodeURIComponent(scalar(value)));
-  }
-  return result;
-}
-
-function roleCredential(config, role, env) {
+function roleCredential(credentials, role) {
   if (role === null) return { token: null };
-  const tokenRef = config?.roles?.[role]?.tokenRef;
-  if (typeof tokenRef !== 'string') return { error: 'ROLE_CREDENTIAL_UNCONFIGURED' };
-  try {
-    return { token: resolveSecret(tokenRef, env) };
-  } catch (error) {
-    return { error: error?.code ?? 'SECRET_UNAVAILABLE' };
-  }
+  return credentials.get(role) ?? { error: 'ROLE_CREDENTIAL_UNCONFIGURED' };
+}
+
+function plannedCredentialRoles(decisions) {
+  return decisions
+    .filter((decision) => decision.action === 'execute')
+    .flatMap((decision) => decision.roles)
+    .filter((role) => role !== 'unauthenticated');
 }
 
 function requestHeaders(headers, token) {
@@ -242,6 +235,16 @@ function exactNetworkOrigin(value, approvedOrigin) {
     return url.origin === approvedOrigin ? 'approved' : 'blocked';
   } catch {
     return 'blocked';
+  }
+}
+
+function exactRelativeTarget(value, approvedOrigin) {
+  try {
+    const url = new URL(value);
+    if (url.origin !== approvedOrigin) return null;
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return null;
   }
 }
 
@@ -298,19 +301,19 @@ function statusRecord(status, accessExpected) {
       expected: 'successful document response', actual: String(status),
     };
   }
-  if (status >= 200 && status < 400) {
+  if (status >= 200 && status < 300) {
     return {
       category: 'health', severity: 'info', outcome: 'pass',
       reasonCode: 'DOCUMENT_STATUS_EXPECTED',
       message: 'Browser route returned an expected document status',
-      expected: '200-399', actual: String(status),
+      expected: '200-299', actual: String(status),
     };
   }
   return {
     category: 'health', severity: 'error', outcome: 'fail',
     reasonCode: 'DOCUMENT_STATUS_UNEXPECTED',
     message: 'Browser route returned an unexpected document status',
-    expected: '200-399', actual: String(status),
+    expected: '200-299', actual: String(status),
   };
 }
 
@@ -468,6 +471,8 @@ async function runAttempt({
   runBoundary,
 }) {
   const startedAt = performance.now();
+  const requestedTarget = materializeRequestTarget(route, decision.parameterValues);
+  const evidencePath = materializeTargetPath(route, decision.parameterValues);
   const rawClient = client;
   const deadline = new AttemptDeadline(config.responseTimeoutMs);
   client = Object.freeze({
@@ -487,6 +492,8 @@ async function runAttempt({
   };
   let documentStatus = null;
   let blockedOrigin = false;
+  let navigationTargetMismatch = false;
+  let verifiedDocumentPath = null;
   let navigationStarted = false;
   let mainFrameId = null;
   let browserContextId;
@@ -520,6 +527,25 @@ async function runAttempt({
       if (sessionId !== undefined) {
         await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
       }
+    };
+    const bindNavigationTarget = async (url) => {
+      const actualPath = exactRelativeTarget(url, approvedOrigin);
+      if (actualPath === null) return false;
+      if (actualPath === requestedTarget) {
+        verifiedDocumentPath = evidencePath;
+        return false;
+      }
+      navigationTargetMismatch = true;
+      recordOnce(records, {
+        category: 'security', severity: 'error', outcome: 'fail',
+        reasonCode: 'NAVIGATION_TARGET_MISMATCH',
+        message: 'Browser blocked a navigation outside the exact planned route',
+        expected: 'exact materialized route target', actual: 'different same-origin target',
+        path: '/[TARGET_MISMATCH]',
+      });
+      await stopMainLoading();
+      settleNavigation('target-mismatch');
+      return true;
     };
     const closeControlledSession = async (controlledSessionId) => {
       const controlledTargetId = sessionTargetIds.get(controlledSessionId);
@@ -753,6 +779,19 @@ async function runAttempt({
         settleNavigation('blocked');
         return;
       }
+      const mainDocument = controlledSessionId === sessionId
+        && params?.resourceType === 'Document'
+        && typeof params?.frameId === 'string'
+        && params.frameId === mainFrameId;
+      if (classification === 'approved'
+          && mainDocument
+          && await bindNavigationTarget(params?.request?.url)) {
+        await client.send('Fetch.failRequest', {
+          requestId: params.requestId,
+          errorReason: 'BlockedByClient',
+        }, controlledSessionId);
+        return;
+      }
       await client.send('Fetch.continueRequest', {
         requestId: params.requestId,
         headers: requestHeaders(params?.request?.headers, classification === 'approved' ? token : null),
@@ -777,6 +816,13 @@ async function runAttempt({
         await stopMainLoading();
         settleNavigation('blocked');
       }
+      const mainDocument = controlledSessionId === sessionId
+        && params?.type === 'Document'
+        && typeof params?.frameId === 'string'
+        && params.frameId === mainFrameId;
+      if (origin === 'approved' && mainDocument) {
+        await bindNavigationTarget(params?.request?.url);
+      }
     })));
     unsubscriptions.push(client.on('Network.loadingFinished', scoped(async (
       params,
@@ -790,7 +836,10 @@ async function runAttempt({
       const classification = exactNetworkOrigin(params?.response?.url, approvedOrigin);
       if (controlledSessionId === sessionId
           && params.type === 'Document'
+          && typeof params?.frameId === 'string'
+          && params.frameId === mainFrameId
           && classification === 'approved') {
+        if (await bindNavigationTarget(params?.response?.url)) return;
         documentStatus = Number.isInteger(params?.response?.status)
           ? params.response.status
           : Math.trunc(params?.response?.status);
@@ -935,6 +984,25 @@ async function runAttempt({
         });
         await stopMainLoading();
         settleNavigation('blocked');
+      } else {
+        await bindNavigationTarget(params?.frame?.url);
+      }
+    }, { mainOnly: true })));
+    unsubscriptions.push(client.on('Page.navigatedWithinDocument', scoped(async (params) => {
+      if (!navigationStarted
+          || (mainFrameId !== null && params?.frameId !== mainFrameId)) return;
+      if (exactNetworkOrigin(params?.url, approvedOrigin) !== 'approved') {
+        blockedOrigin = true;
+        recordOnce(records, {
+          category: 'security', severity: 'critical', outcome: 'fail',
+          reasonCode: 'NAVIGATION_ORIGIN_BLOCKED',
+          message: 'Browser blocked a same-document navigation outside the approved origin',
+          expected: 'exact approved origin', actual: 'unapproved origin',
+        });
+        await stopMainLoading();
+        settleNavigation('blocked');
+      } else {
+        await bindNavigationTarget(params?.url);
       }
     }, { mainOnly: true })));
 
@@ -953,6 +1021,11 @@ async function runAttempt({
     }));
     sessionId = await deadline.race(mainSessionReady);
     if (sessionId === null) throw new Error('main target policy unavailable');
+    const frameTree = await client.send('Page.getFrameTree', {}, sessionId);
+    mainFrameId = frameTree?.frameTree?.frame?.id;
+    if (typeof mainFrameId !== 'string' || mainFrameId.length === 0) {
+      throw new Error('main frame identity unavailable');
+    }
     await client.send('Log.enable', {}, sessionId);
     await client.send('Emulation.setDeviceMetricsOverride', {
       width: viewport,
@@ -961,8 +1034,7 @@ async function runAttempt({
       mobile: false,
     }, sessionId);
 
-    const requestedPath = materializePath(route, decision.parameterValues);
-    const navigationUrl = resolveRequestUrl(approvedOrigin, requestedPath);
+    const navigationUrl = resolveRequestUrl(approvedOrigin, requestedTarget);
     let navigationError = null;
     navigationStarted = true;
     void client.send('Page.navigate', { url: navigationUrl }, sessionId).catch((error) => {
@@ -991,7 +1063,7 @@ async function runAttempt({
       inFlightRequests,
       activity,
     });
-    if (!blockedOrigin) {
+    if (!blockedOrigin && !navigationTargetMismatch) {
       const overflow = await client.send('Runtime.evaluate', {
         expression: OVERFLOW_EXPRESSION,
         returnByValue: true,
@@ -1039,7 +1111,9 @@ async function runAttempt({
       }
     }
 
-    recordOnce(records, statusRecord(documentStatus, accessExpected));
+    if (!navigationTargetMismatch) {
+      recordOnce(records, statusRecord(documentStatus, accessExpected));
+    }
     if (role === null
         && config.screenshotOnError === true
         && records.some((record) => record.outcome === 'fail')) {
@@ -1095,7 +1169,9 @@ async function runAttempt({
         expected: 'completed bounded browser check', actual: 'runtime error',
       });
     }
-    recordOnce(records, statusRecord(documentStatus, accessExpected));
+    if (!navigationTargetMismatch) {
+      recordOnce(records, statusRecord(documentStatus, accessExpected));
+    }
   } finally {
     attemptActive = false;
     for (const unsubscribe of unsubscriptions) unsubscribe();
@@ -1163,6 +1239,7 @@ async function runAttempt({
     ...record,
     role,
     evidence: {
+      path: record.path ?? verifiedDocumentPath ?? evidencePath,
       status: documentStatus,
       durationMs,
       viewport,
@@ -1180,6 +1257,15 @@ export async function sweepBrowser({
   runBoundary,
   targetBoundary,
 } = {}) {
+  ({ manifest, config } = requireExecutionContext(plan, 'browser'));
+  const trustedPlan = plan;
+  const routes = Array.isArray(manifest?.routes) ? manifest.routes : [];
+  const decisions = Array.isArray(trustedPlan?.routes) ? trustedPlan.routes : [];
+  const credentials = captureRoleCredentials(
+    plannedCredentialRoles(decisions),
+    config?.roles,
+    env,
+  );
   if (!(targetBoundary instanceof TargetBoundary)) {
     throw new SentinelError(
       'BROWSER_TARGET_BOUNDARY_INVALID',
@@ -1187,8 +1273,6 @@ export async function sweepBrowser({
     );
   }
   validateBrowserTiming(config);
-  const routes = Array.isArray(manifest?.routes) ? manifest.routes : [];
-  const decisions = Array.isArray(plan?.routes) ? plan.routes : [];
   const decisionsById = new Map(decisions.map((decision) => [decision.subjectId, decision]));
   const observations = [];
   const profileDir = path.join(
@@ -1212,6 +1296,10 @@ export async function sweepBrowser({
         continue;
       }
       const configuredOrigin = resolveOrigin(config, decision.originId);
+      const requestedPath = materializeTargetPath(
+        route,
+        decision.parameterValues,
+      );
       let approvedOrigin;
       try {
         if (!Array.isArray(config?.approvedOrigins)
@@ -1222,27 +1310,31 @@ export async function sweepBrowser({
           allowNonLoopback: config?.allowNonLoopback === true,
         });
       } catch (error) {
-        observations.push(observation(route, {
-          category: 'security', severity: 'error', outcome: 'fail',
-          reasonCode: error?.code ?? 'ORIGIN_NOT_APPROVED',
-          message: 'Browser route has no valid exact approved origin',
-          expected: 'approved exact origin', actual: 'origin unavailable',
-        }));
+        for (const attempt of attemptsFor(route, decision)) {
+          observations.push(observation(route, {
+            category: 'security', severity: 'error', outcome: 'fail', role: attempt.role,
+            reasonCode: error?.code ?? 'ORIGIN_NOT_APPROVED',
+            message: 'Browser route has no valid exact approved origin',
+            expected: 'approved exact origin', actual: 'origin unavailable',
+            evidence: { path: requestedPath },
+          }));
+        }
         continue;
       }
 
-      for (const attempt of attemptsFor(route, config)) {
-        const credential = roleCredential(config, attempt.role, env);
+      for (const attempt of attemptsFor(route, decision)) {
+        const credential = roleCredential(credentials, attempt.role);
         if (credential.error) {
           observations.push(observation(route, {
             category: 'security', severity: 'error', outcome: 'fail', role: attempt.role,
             reasonCode: credential.error,
             message: 'Browser role credential is unavailable',
             expected: 'trusted environment secret reference', actual: credential.error,
+            evidence: { path: requestedPath },
           }));
           continue;
         }
-        for (const viewport of config.viewports) {
+        for (const viewport of trustedPlan.browserViewports) {
           const attemptObservations = await runAttempt({
             client, route, decision, config, approvedOrigin,
             role: attempt.role,

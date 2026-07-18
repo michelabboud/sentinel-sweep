@@ -1,5 +1,10 @@
-import { requestApproved } from './http.mjs';
-import { resolveSecret } from '../lib/secrets.mjs';
+import { requestApproved, responseDefinition } from './http.mjs';
+import {
+  materializeRequestTarget,
+  materializeTargetPath,
+} from '../lib/findings-contract.mjs';
+import { requireExecutionContext } from '../policy/execution.mjs';
+import { captureRoleCredentials } from '../lib/secrets.mjs';
 
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 const DENIAL_STATUSES = new Set([401, 403]);
@@ -23,7 +28,9 @@ function deepFreeze(value) {
 function evidence(operation, fields = {}) {
   const value = {
     method: typeof operation?.method === 'string' ? operation.method.toUpperCase() : 'UNKNOWN',
-    path: typeof operation?.path === 'string' ? operation.path : '/',
+    path: typeof fields.path === 'string'
+      ? fields.path
+      : (typeof operation?.path === 'string' ? operation.path : '/'),
     status: fields.status ?? null,
     durationMs: fields.durationMs ?? null,
     bytes: fields.bytes ?? null,
@@ -61,6 +68,9 @@ function policySkip(operation, decision) {
     message: `Policy skipped ${operation?.method ?? 'UNKNOWN'} ${operation?.path ?? '/'}`,
     expected: 'policy approval',
     actual: decision?.reasonCode ?? 'missing decision',
+    evidence: {
+      path: materializeTargetPath(operation, decision?.parameterValues ?? {}),
+    },
   });
 }
 
@@ -75,64 +85,54 @@ function resolveOrigin(config, originId) {
   return matching.length === 1 ? matching[0].approvedOrigin : null;
 }
 
-function scalar(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return JSON.stringify(value);
-}
-
 function materializeRequest(operation, parameterValues) {
-  let path = operation.path;
+  const values = parameterValues ?? {};
+  const path = materializeRequestTarget(operation, values);
+  const evidencePath = materializeTargetPath(operation, values);
   const headers = {};
-  const query = new URLSearchParams();
 
   for (const [key, value] of Object.entries(parameterValues ?? {})) {
     const separator = key.indexOf(':');
     if (separator < 1) continue;
     const location = key.slice(0, separator);
     const name = key.slice(separator + 1);
-    if (location === 'path') {
-      path = path.split(`{${name}}`).join(encodeURIComponent(scalar(value)));
-    } else if (location === 'query') {
-      query.append(name, scalar(value));
-    } else if (location === 'header' && !RESERVED_AUTH_HEADERS.has(name.toLowerCase())) {
-      headers[name] = scalar(value);
+    if (location === 'header' && !RESERVED_AUTH_HEADERS.has(name.toLowerCase())) {
+      const scalar = value === null || value === undefined
+        ? ''
+        : typeof value === 'string'
+          ? value
+          : typeof value === 'number' || typeof value === 'boolean'
+            ? String(value)
+            : JSON.stringify(value);
+      headers[name] = scalar;
     }
   }
-
-  const suffix = query.toString();
-  if (suffix.length > 0) path += `${path.includes('?') ? '&' : '?'}${suffix}`;
-  return { path, headers };
+  return { path, evidencePath, headers };
 }
 
-function configuredRoles(config) {
-  if (config?.roles === null || typeof config?.roles !== 'object'
-      || Array.isArray(config.roles)) return [];
-  return Object.keys(config.roles).sort();
-}
-
-function attemptsFor(operation, config) {
-  if (operation?.auth?.state === 'public') return [{ role: null, accessExpected: true }];
+function attemptsFor(operation, decision) {
   const allowed = new Set(
     (Array.isArray(operation?.auth?.allowedRoles) ? operation.auth.allowedRoles : [])
       .filter((role) => typeof role === 'string' && role !== 'unauthenticated'),
   );
-  const roles = [...new Set([...allowed, ...configuredRoles(config)])].sort();
-  return [
-    { role: null, accessExpected: false },
-    ...roles.map((role) => ({ role, accessExpected: allowed.has(role) })),
+  const roles = [
+    ...decision.roles.filter((role) => role === 'unauthenticated'),
+    ...decision.roles.filter((role) => role !== 'unauthenticated'),
   ];
+  return roles.map((plannedRole) => {
+    const role = plannedRole === 'unauthenticated' ? null : plannedRole;
+    return {
+      role,
+      accessExpected: operation?.auth?.state === 'public' || allowed.has(role),
+    };
+  });
 }
 
-function responseDefinition(operation, status) {
-  const responses = operation?.responses;
-  if (responses === null || typeof responses !== 'object' || Array.isArray(responses)) return null;
-  const exact = responses[String(status)];
-  if (exact !== undefined) return exact;
-  const wildcard = responses[`${Math.floor(status / 100)}XX`]
-    ?? responses[`${Math.floor(status / 100)}xx`];
-  return wildcard ?? responses.default ?? null;
+function plannedCredentialRoles(decisions) {
+  return decisions
+    .filter((decision) => decision.action === 'execute')
+    .flatMap((decision) => decision.roles)
+    .filter((role) => role !== 'unauthenticated');
 }
 
 function declaredStatuses(operation) {
@@ -262,7 +262,9 @@ function inspectionObservation(operation, role, result, definition) {
   if (reasonCode === 'CONTENT_TYPE_MISMATCH') {
     fields.message = `${operation.method} ${operation.path} returned an unexpected media type`;
     fields.expected = expectedMediaType;
-    fields.actual = normalizedMediaType(result.contentType) ?? 'missing or invalid content type';
+    fields.actual = result.contentType === 'valid'
+      ? 'different valid media type'
+      : 'missing or invalid content type';
   } else if (reasonCode === 'JSON_RESPONSE_INVALID') {
     fields.message = `${operation.method} ${operation.path} returned invalid declared JSON`;
     fields.expected = expectedMediaType;
@@ -294,7 +296,7 @@ function accessPassObservation(operation, role, result) {
   });
 }
 
-function secretFailure(operation, role, error) {
+function secretFailure(operation, role, error, requestPath) {
   return observation(operation, {
     category: 'security',
     severity: 'error',
@@ -304,10 +306,11 @@ function secretFailure(operation, role, error) {
     message: `Credential for role ${role} was unavailable`,
     expected: 'available environment secret reference',
     actual: error?.code ?? 'SECRET_UNAVAILABLE',
+    evidence: { path: requestPath },
   });
 }
 
-function roleCredentialUnconfigured(operation, role) {
+function roleCredentialUnconfigured(operation, role, requestPath) {
   return observation(operation, {
     category: 'security',
     severity: 'error',
@@ -317,10 +320,20 @@ function roleCredentialUnconfigured(operation, role) {
     message: `Credential mapping for allowed role ${role} is not configured`,
     expected: 'trusted role token reference',
     actual: 'role credential mapping unavailable',
+    evidence: { path: requestPath },
   });
 }
 
-async function executeAttempt({ operation, decision, config, env, fetchImpl, role, accessExpected }) {
+async function executeAttempt({
+  operation,
+  decision,
+  config,
+  credentials,
+  fetchImpl,
+  role,
+  accessExpected,
+}) {
+  const request = materializeRequest(operation, decision.parameterValues);
   const origin = resolveOrigin(config, decision.originId);
   if (typeof origin !== 'string') {
     return observation(operation, {
@@ -332,26 +345,25 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
       message: `${operation.method} ${operation.path} has no approved origin`,
       expected: 'approved service origin',
       actual: 'origin unavailable',
+      evidence: { path: request.evidencePath },
     });
   }
 
-  const request = materializeRequest(operation, decision.parameterValues);
   if (role !== null) {
-    const roleConfig = config?.roles?.[role];
-    if (roleConfig === null || typeof roleConfig !== 'object'
-        || typeof roleConfig.tokenRef !== 'string') {
-      return roleCredentialUnconfigured(operation, role);
+    const credential = credentials.get(role);
+    if (credential?.error === 'ROLE_CREDENTIAL_UNCONFIGURED'
+        || credential === undefined) {
+      return roleCredentialUnconfigured(operation, role, request.evidencePath);
     }
-    try {
-      request.headers.authorization = `Bearer ${resolveSecret(roleConfig.tokenRef, env)}`;
-    } catch (error) {
-      return secretFailure(operation, role, error);
+    if (credential.error !== null) {
+      return secretFailure(operation, role, { code: credential.error }, request.evidencePath);
     }
+    request.headers.authorization = `Bearer ${credential.token}`;
   }
 
   let result;
   try {
-    result = await requestApproved({
+    const transport = await requestApproved({
       origin,
       path: request.path,
       method: operation.method,
@@ -361,10 +373,15 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
       maxBytes: config?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
       approvedOrigins: config?.approvedOrigins,
       allowNonLoopback: config?.allowNonLoopback === true,
+      bindPath: true,
       responses: operation.responses,
       schemaRegistry: config.__manifestSchemas,
       fetchImpl,
     });
+    result = {
+      ...transport,
+      path: request.evidencePath,
+    };
   } catch {
     return observation(operation, {
       category: 'network',
@@ -375,6 +392,7 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
       message: `${operation.method} ${operation.path} failed inside the HTTP runtime`,
       expected: 'bounded HTTP observation',
       actual: 'runtime error',
+      evidence: { path: request.evidencePath },
     });
   }
 
@@ -382,7 +400,7 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
   if (!accessExpected) return denialObservation(operation, role, result);
   if (DENIAL_STATUSES.has(result.status)) return accessDeniedObservation(operation, role, result);
 
-  const definition = responseDefinition(operation, result.status);
+  const definition = responseDefinition(operation.responses, result.status);
   if (definition === null) return statusObservation(operation, role, result);
   return inspectionObservation(operation, role, result, definition)
     ?? accessPassObservation(operation, role, result);
@@ -390,11 +408,19 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
 
 /** Executes the immutable policy ledger and returns secret-free API observations. */
 export async function sweepApi({ manifest, plan, config, env = process.env, fetchImpl } = {}) {
+  ({ manifest, config } = requireExecutionContext(plan, 'api'));
+  const trustedPlan = plan;
   const operations = Array.isArray(manifest?.operations) ? manifest.operations : [];
-  const decisions = Array.isArray(plan?.operations) ? plan.operations : [];
+  const decisions = Array.isArray(trustedPlan?.operations) ? trustedPlan.operations : [];
   const decisionsById = new Map(decisions.map((decision) => [decision.subjectId, decision]));
+  const credentials = captureRoleCredentials(
+    plannedCredentialRoles(decisions),
+    config?.roles,
+    env,
+  );
   const observations = [];
-  const runtimeConfig = { ...config, __manifestSchemas: manifest?.schemas ?? {} };
+  const schemaRegistry = manifest?.schemas ?? Object.freeze(Object.create(null));
+  const runtimeConfig = { ...config, __manifestSchemas: schemaRegistry };
 
   for (const operation of operations) {
     const decision = decisionsById.get(operation?.id);
@@ -403,12 +429,12 @@ export async function sweepApi({ manifest, plan, config, env = process.env, fetc
       continue;
     }
 
-    for (const attempt of attemptsFor(operation, config)) {
+    for (const attempt of attemptsFor(operation, decision)) {
       observations.push(await executeAttempt({
         operation,
         decision,
         config: runtimeConfig,
-        env,
+        credentials,
         fetchImpl,
         ...attempt,
       }));

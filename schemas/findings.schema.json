@@ -70,6 +70,8 @@
       "type": "object",
       "required": [
         "id",
+        "reasonCode",
+        "outcome",
         "severity",
         "category",
         "message",
@@ -81,6 +83,14 @@
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "minLength": 1 },
+        "reasonCode": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["fail", "skip"]
+        },
         "severity": {
           "type": "string",
           "enum": ["critical", "error", "warning", "info"]
@@ -130,12 +140,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "expected": { "type": ["string", "null"] },
-        "actual": { "type": ["string", "null"] },
-        "statusCode": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
-        "durationMs": { "type": ["number", "null"], "minimum": 0 },
-        "viewport": { "type": ["integer", "null"], "minimum": 1 },
-        "screenshotPath": { "type": ["string", "null"] }
+        "expected": { "type": "string" },
+        "actual": { "type": "string" },
+        "statusCode": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "viewport": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "screenshotPath": {
+          "type": "string",
+          "pattern": "^browser-[a-f0-9]{24}\\.png$"
+        }
       }
     },
     "percentiles": {

@@ -1,11 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { validateCanonicalFindings } from './lib/findings-contract.mjs';
 
-import { SentinelError } from './lib/errors.mjs';
-import { validateAgainstSchema } from './lib/schema.mjs';
+const JSON_STRINGIFY = JSON.stringify;
+const OBJECT_HAS_OWN = Object.hasOwn;
+const STRING = String;
+const CONTROL_CHARACTERS = '\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007'
+  + '\u0008\u0009\u000a\u000b\u000c\u000d\u000e\u000f'
+  + '\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017'
+  + '\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f';
 
-const FINDINGS_SCHEMA = JSON.parse(
-  readFileSync(new URL('../schemas/findings.schema.json', import.meta.url), 'utf8'),
-);
 const SUMMARY_ROWS = [
   ['Critical', 'critical'],
   ['Error', 'error'],
@@ -22,99 +24,137 @@ const EVIDENCE_FIELDS = [
   'screenshotPath',
 ];
 
-function reportError() {
-  return new SentinelError(
-    'FINDINGS_DOCUMENT_INVALID',
-    'Report input is not a canonical Sentinel findings document',
-  );
+function validateFindings(findings) {
+  return validateCanonicalFindings(findings, {
+    code: 'FINDINGS_DOCUMENT_INVALID',
+    message: 'Report input is not a canonical Sentinel findings document',
+  });
 }
 
-function validateFindings(findings) {
-  try {
-    validateAgainstSchema(findings, FINDINGS_SCHEMA, { name: 'findings' });
-  } catch {
-    throw reportError();
+function join(values, separator) {
+  let result = '';
+  for (let index = 0; index < values.length; index += 1) {
+    if (index > 0) result += separator;
+    result += values[index];
   }
+  return result;
+}
+
+function controlCode(character) {
+  if (character === '\u007f') return 127;
+  for (let index = 0; index < CONTROL_CHARACTERS.length; index += 1) {
+    if (character === CONTROL_CHARACTERS[index]) return index;
+  }
+  return -1;
+}
+
+function asciiAlphaNumeric(character) {
+  return (character >= 'A' && character <= 'Z')
+    || (character >= 'a' && character <= 'z')
+    || (character >= '0' && character <= '9');
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-    .replaceAll('\u2028', '&#8232;')
-    .replaceAll('\u2029', '&#8233;')
-    .replaceAll('\r', '&#13;')
-    .replaceAll('\n', '&#10;')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, (
-      character,
-    ) => `&#${character.codePointAt(0)};`);
+  const source = STRING(value);
+  let escaped = '';
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '&') escaped += '&amp;';
+    else if (character === '<') escaped += '&lt;';
+    else if (character === '>') escaped += '&gt;';
+    else if (character === '"') escaped += '&quot;';
+    else if (character === "'") escaped += '&#39;';
+    else if (character === '\u2028') escaped += '&#8232;';
+    else if (character === '\u2029') escaped += '&#8233;';
+    else if (character === '\r') escaped += '&#13;';
+    else if (character === '\n') escaped += '&#10;';
+    else {
+      const code = controlCode(character);
+      escaped += code >= 0 && code !== 9 ? `&#${code};` : character;
+    }
+  }
+  return escaped;
 }
 
 function escapeMarkdown(value) {
-  return escapeHtml(value)
-    .replaceAll('\\', '\\\\')
-    .replaceAll('|', '\\|')
-    .replaceAll('`', '\\`')
-    .replace(/[\[\]()*!#~]/gu, '\\$&')
-    .replace(/(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])/gu, '\\$&');
+  const escaped = escapeHtml(value);
+  let markdown = '';
+  for (let index = 0; index < escaped.length; index += 1) {
+    const character = escaped[index];
+    const structural = character === '\\'
+      || character === '|'
+      || character === '`'
+      || character === '['
+      || character === ']'
+      || character === '('
+      || character === ')'
+      || character === '*'
+      || character === '!'
+      || character === '#'
+      || character === '~';
+    const exposedUnderscore = character === '_'
+      && (!asciiAlphaNumeric(escaped[index - 1]) || !asciiAlphaNumeric(escaped[index + 1]));
+    if (structural || exposedUnderscore) markdown += '\\';
+    markdown += character;
+  }
+  return markdown;
 }
 
 function evidenceText(evidence) {
-  const fields = [];
-  for (const name of EVIDENCE_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(evidence, name)) {
-      fields.push(`${name}=${String(evidence[name])}`);
+  let fields = '';
+  for (let index = 0; index < EVIDENCE_FIELDS.length; index += 1) {
+    const name = EVIDENCE_FIELDS[index];
+    if (OBJECT_HAS_OWN(evidence, name)) {
+      if (fields.length > 0) fields += '; ';
+      fields += `${name}=${STRING(evidence[name])}`;
     }
   }
-  return fields.length === 0 ? 'none' : fields.join('; ');
+  return fields.length === 0 ? 'none' : fields;
 }
 
 function markdownSummary(summary) {
-  return [
-    '| Result | Count |',
-    '| --- | ---: |',
-    ...SUMMARY_ROWS.map(([label, key]) => `| ${label} | ${summary[key]} |`),
-  ].join('\n');
+  let output = '| Result | Count |\n| --- | ---: |';
+  for (let index = 0; index < SUMMARY_ROWS.length; index += 1) {
+    const row = SUMMARY_ROWS[index];
+    output += `\n| ${row[0]} | ${summary[row[1]]} |`;
+  }
+  return output;
 }
 
 function markdownDiagnostics(coverage) {
   if (coverage.diagnostics.length === 0) return 'None.';
-  return [
-    '| Code | Source | Pointer | Message |',
-    '| --- | --- | --- | --- |',
-    ...coverage.diagnostics.map((diagnostic) => [
-      diagnostic.code,
-      diagnostic.sourcePath ?? 'unknown',
-      diagnostic.pointer ?? 'unknown',
-      diagnostic.message,
-    ].map(escapeMarkdown).join(' | ')).map((row) => `| ${row} |`),
-  ].join('\n');
+  let output = '| Code | Source | Pointer | Message |\n| --- | --- | --- | --- |';
+  for (let index = 0; index < coverage.diagnostics.length; index += 1) {
+    const diagnostic = coverage.diagnostics[index];
+    output += `\n| ${escapeMarkdown(diagnostic.code)}`
+      + ` | ${escapeMarkdown(diagnostic.sourcePath ?? 'unknown')}`
+      + ` | ${escapeMarkdown(diagnostic.pointer ?? 'unknown')}`
+      + ` | ${escapeMarkdown(diagnostic.message)} |`;
+  }
+  return output;
 }
 
 function markdownFindings(findings) {
   if (findings.length === 0) return 'No findings.';
-  return [
-    '| Severity | Category | Subject | Role | Service | Message | Evidence |',
-    '| --- | --- | --- | --- | --- | --- | --- |',
-    ...findings.map((finding) => [
-      finding.severity,
-      finding.category,
-      `${finding.subject.type}:${finding.subject.id}`,
-      finding.role ?? 'unauthenticated',
-      finding.service ?? 'default',
-      finding.message,
-      evidenceText(finding.evidence),
-    ].map(escapeMarkdown).join(' | ')).map((row) => `| ${row} |`),
-  ].join('\n');
+  let output = '| Severity | Category | Subject | Role | Service | Message | Evidence |\n'
+    + '| --- | --- | --- | --- | --- | --- | --- |';
+  for (let index = 0; index < findings.length; index += 1) {
+    const finding = findings[index];
+    output += `\n| ${escapeMarkdown(finding.severity)}`
+      + ` | ${escapeMarkdown(finding.category)}`
+      + ` | ${escapeMarkdown(`${finding.subject.type}:${finding.subject.id}`)}`
+      + ` | ${escapeMarkdown(finding.role ?? 'unauthenticated')}`
+      + ` | ${escapeMarkdown(finding.service ?? 'default')}`
+      + ` | ${escapeMarkdown(finding.message)}`
+      + ` | ${escapeMarkdown(evidenceText(finding.evidence))} |`;
+  }
+  return output;
 }
 
 /** Renders the canonical human-readable report without recomputing any counts. */
 export function renderMarkdown(findings) {
-  validateFindings(findings);
-  return [
+  findings = validateFindings(findings);
+  return join([
     '# Sentinel sweep report',
     '',
     `- Run: \`${escapeMarkdown(findings.runId)}\``,
@@ -134,54 +174,68 @@ export function renderMarkdown(findings) {
     '',
     markdownFindings(findings.findings),
     '',
-  ].join('\n');
+  ], '\n');
 }
 
 function htmlSummary(summary) {
-  return SUMMARY_ROWS.map(([label, key]) => (
-    `<div class="metric metric-${key}"><strong>${summary[key]}</strong><span>${label}</span></div>`
-  )).join('');
+  let output = '';
+  for (let index = 0; index < SUMMARY_ROWS.length; index += 1) {
+    const row = SUMMARY_ROWS[index];
+    output += `<div class="metric metric-${row[1]}"><strong>${summary[row[1]]}</strong>`
+      + `<span>${row[0]}</span></div>`;
+  }
+  return output;
 }
 
 function htmlDiagnostics(coverage) {
   if (coverage.diagnostics.length === 0) return '<p>None.</p>';
-  const rows = coverage.diagnostics.map((diagnostic) => (
-    `<tr><td>${escapeHtml(diagnostic.code)}</td>`
+  let rows = '';
+  for (let index = 0; index < coverage.diagnostics.length; index += 1) {
+    const diagnostic = coverage.diagnostics[index];
+    rows += `<tr><td>${escapeHtml(diagnostic.code)}</td>`
       + `<td>${escapeHtml(diagnostic.sourcePath ?? 'unknown')}</td>`
       + `<td>${escapeHtml(diagnostic.pointer ?? 'unknown')}</td>`
-      + `<td>${escapeHtml(diagnostic.message)}</td></tr>`
-  )).join('');
+      + `<td>${escapeHtml(diagnostic.message)}</td></tr>`;
+  }
   return '<table><thead><tr><th>Code</th><th>Source</th><th>Pointer</th><th>Message</th>'
     + `</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function htmlFindings(findings) {
   if (findings.length === 0) return '<p>No findings.</p>';
-  const rows = findings.map((finding) => (
-    `<tr><td>${escapeHtml(finding.severity)}</td>`
+  let rows = '';
+  for (let index = 0; index < findings.length; index += 1) {
+    const finding = findings[index];
+    rows += `<tr><td>${escapeHtml(finding.severity)}</td>`
       + `<td>${escapeHtml(finding.category)}</td>`
       + `<td>${escapeHtml(`${finding.subject.type}:${finding.subject.id}`)}</td>`
       + `<td>${escapeHtml(finding.role ?? 'unauthenticated')}</td>`
       + `<td>${escapeHtml(finding.service ?? 'default')}</td>`
       + `<td>${escapeHtml(finding.message)}</td>`
-      + `<td>${escapeHtml(evidenceText(finding.evidence))}</td></tr>`
-  )).join('');
+      + `<td>${escapeHtml(evidenceText(finding.evidence))}</td></tr>`;
+  }
   return '<table><thead><tr><th>Severity</th><th>Category</th><th>Subject</th><th>Role</th>'
     + `<th>Service</th><th>Message</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function safeEmbeddedJson(value) {
-  return JSON.stringify(value)
-    .replaceAll('&', '\\u0026')
-    .replaceAll('<', '\\u003c')
-    .replaceAll('>', '\\u003e')
-    .replaceAll('\u2028', '\\u2028')
-    .replaceAll('\u2029', '\\u2029');
+  const serialized = JSON_STRINGIFY(value);
+  let embedded = '';
+  for (let index = 0; index < serialized.length; index += 1) {
+    const character = serialized[index];
+    if (character === '&') embedded += '\\u0026';
+    else if (character === '<') embedded += '\\u003c';
+    else if (character === '>') embedded += '\\u003e';
+    else if (character === '\u2028') embedded += '\\u2028';
+    else if (character === '\u2029') embedded += '\\u2029';
+    else embedded += character;
+  }
+  return embedded;
 }
 
 /** Renders a self-contained, non-executable static dashboard. */
 export function renderDashboard(findings) {
-  validateFindings(findings);
+  findings = validateFindings(findings);
   const embeddedSummary = safeEmbeddedJson(findings.summary);
   return '<!doctype html>\n'
     + '<html lang="en"><head><meta charset="utf-8">'
@@ -207,22 +261,36 @@ export function renderDashboard(findings) {
 
 /** Renders PR-ready Markdown; publishing remains an explicit host action. */
 export function renderPrComment(findings) {
-  validateFindings(findings);
-  const summary = SUMMARY_ROWS.map(([label, key]) => `${label} ${findings.summary[key]}`)
-    .join(' · ');
-  const diagnostics = findings.coverage.diagnostics.length === 0
-    ? 'None.'
-    : findings.coverage.diagnostics.map((diagnostic) => (
-      `- **${escapeMarkdown(diagnostic.code)}** — ${escapeMarkdown(diagnostic.message)}`
-    )).join('\n');
-  const rows = findings.findings.length === 0
-    ? 'No findings.'
-    : findings.findings.map((finding) => (
-      `- **${escapeMarkdown(finding.severity)} / ${escapeMarkdown(finding.category)}** `
-      + `${escapeMarkdown(finding.subject.type)}:${escapeMarkdown(finding.subject.id)} — `
-      + escapeMarkdown(finding.message)
-    )).join('\n');
-  return [
+  findings = validateFindings(findings);
+  let summary = '';
+  for (let index = 0; index < SUMMARY_ROWS.length; index += 1) {
+    const row = SUMMARY_ROWS[index];
+    if (summary.length > 0) summary += ' · ';
+    summary += `${row[0]} ${findings.summary[row[1]]}`;
+  }
+  let diagnostics = 'None.';
+  if (findings.coverage.diagnostics.length > 0) {
+    diagnostics = '';
+    for (let index = 0; index < findings.coverage.diagnostics.length; index += 1) {
+      const diagnostic = findings.coverage.diagnostics[index];
+      if (diagnostics.length > 0) diagnostics += '\n';
+      diagnostics += `- **${escapeMarkdown(diagnostic.code)}**`
+        + ` — ${escapeMarkdown(diagnostic.message)}`;
+    }
+  }
+  let rows = 'No findings.';
+  if (findings.findings.length > 0) {
+    rows = '';
+    for (let index = 0; index < findings.findings.length; index += 1) {
+      const finding = findings.findings[index];
+      if (rows.length > 0) rows += '\n';
+      rows += `- **${escapeMarkdown(finding.severity)}`
+        + ` / ${escapeMarkdown(finding.category)}** `
+        + `${escapeMarkdown(finding.subject.type)}:${escapeMarkdown(finding.subject.id)} — `
+        + escapeMarkdown(finding.message);
+    }
+  }
+  return join([
     '## Sentinel sweep',
     '',
     `Run \`${escapeMarkdown(findings.runId)}\` · Coverage \`${escapeMarkdown(findings.coverage.status)}\``,
@@ -240,11 +308,11 @@ export function renderPrComment(findings) {
     '',
     '</details>',
     '',
-  ].join('\n');
+  ], '\n');
 }
 
 /** Returns 2 for a completed sweep with critical/error findings, otherwise 0. */
 export function summaryExitCode(findings) {
-  validateFindings(findings);
+  findings = validateFindings(findings);
   return findings.summary.critical > 0 || findings.summary.error > 0 ? 2 : 0;
 }

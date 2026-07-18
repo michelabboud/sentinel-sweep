@@ -1,12 +1,23 @@
 import { readFileSync } from 'node:fs';
+import { types as utilTypes } from 'node:util';
 
 import { SentinelError } from './lib/errors.mjs';
+import {
+  materializeTargetPath,
+  subjectAccessExpected,
+  trustedObservationContract,
+  trustedPolicyDecisionContract,
+  validateCanonicalFindings,
+} from './lib/findings-contract.mjs';
 import { findingId } from './lib/identity.mjs';
+import { snapshotJson } from './lib/json-snapshot.mjs';
 import { validateAgainstSchema } from './lib/schema.mjs';
+import {
+  identityRedactor,
+  isTrustedRedactor,
+} from './lib/secrets.mjs';
+import { responseDefinition } from './api/http.mjs';
 
-const FINDINGS_SCHEMA = JSON.parse(
-  readFileSync(new URL('../schemas/findings.schema.json', import.meta.url), 'utf8'),
-);
 const MANIFEST_SCHEMA = JSON.parse(
   readFileSync(new URL('../schemas/sentinel-manifest.schema.json', import.meta.url), 'utf8'),
 );
@@ -35,6 +46,67 @@ const CATEGORIES = new Set([
 ]);
 const OUTCOMES = new Set(['pass', 'fail', 'skip']);
 const COVERAGE_STATUSES = new Set(['complete', 'partial', 'unsupported']);
+const TRUSTED_COVERAGE_CODES = new Set([
+  'COVERAGE_PARTIAL_WITHOUT_DIAGNOSTIC',
+  'COVERAGE_UNSUPPORTED_WITHOUT_DIAGNOSTIC',
+  'OPENAPI_CALLBACK',
+  'OPENAPI_EXTERNAL_REF',
+  'OPENAPI_INVALID_PATH',
+  'OPENAPI_NON_JSON_CONTENT',
+  'OPENAPI_UNRESOLVED_REF',
+  'OPENAPI_UNTRUSTED_EXTENSION_IGNORED',
+  'OPENAPI_VERSION_UNSUPPORTED',
+  'OPENAPI_WEBHOOK',
+  'VUE_COMPUTED_PATH',
+  'VUE_COMPUTED_PROPERTY',
+  'VUE_DYNAMIC_ROUTE',
+  'VUE_DYNAMIC_ROUTER_CONFIG',
+  'VUE_DYNAMIC_ROUTES',
+  'VUE_IMPORTED_ROUTES',
+  'VUE_INTERPOLATED_TEMPLATE',
+  'VUE_INVALID_ALIAS',
+  'VUE_INVALID_CHILDREN',
+  'VUE_INVALID_LITERAL',
+  'VUE_INVALID_PATH',
+  'VUE_INVALID_PROPERTY',
+  'VUE_INVALID_ROUTE',
+  'VUE_INVALID_ROUTE_FIELD',
+  'VUE_MISSING_PATH',
+  'VUE_ROUTE_CONFLICT',
+  'VUE_ROUTES_NOT_FOUND',
+  'VUE_SPREAD',
+  'VUE_UNSUPPORTED_EXPRESSION',
+  'VUE_UNTERMINATED_ARRAY',
+  'VUE_UNTERMINATED_EXPRESSION',
+  'VUE_UNTERMINATED_OBJECT',
+]);
+const BROWSER_STATUS_REASONS = new Set([
+  'DOCUMENT_STATUS_EXPECTED',
+  'DOCUMENT_STATUS_UNAVAILABLE',
+  'DOCUMENT_STATUS_UNEXPECTED',
+  'RBAC_ACCESS_DENIED',
+  'RBAC_ACCESS_GRANTED',
+  'RBAC_DENIAL_EXPECTED',
+  'RBAC_DENIAL_NOT_PROVEN',
+]);
+const BROWSER_SUBJECT_TERMINALS = new Set([
+  'ORIGIN_NOT_APPROVED',
+  'ORIGIN_INVALID',
+  'ORIGIN_SCHEME',
+  'ORIGIN_USERINFO',
+  'ORIGIN_QUERY',
+  'ORIGIN_FRAGMENT',
+  'ORIGIN_BASE_PATH',
+  'ORIGIN_NON_LOOPBACK_BLOCKED',
+]);
+const BROWSER_ATTEMPT_TERMINALS = new Set([
+  'ROLE_CREDENTIAL_UNCONFIGURED',
+  'SECRET_REF_INVALID',
+  'SECRET_UNAVAILABLE',
+]);
+const BROWSER_VIEWPORT_TERMINALS = new Set([
+  'NAVIGATION_TARGET_MISMATCH',
+]);
 const REASON_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u;
 const OBSERVATION_KEYS = new Set([
   'source',
@@ -75,7 +147,19 @@ const DECISION_KEYS = new Set([
   'roles',
   'parameterValues',
 ]);
-const PLAN_KEYS = new Set(['mode', 'roleUniverse', 'operations', 'routes']);
+const PLAN_KEYS = new Set([
+  'mode', 'roleUniverse', 'browserViewports', 'operations', 'routes',
+]);
+const BUILD_KEYS = new Set([
+  'runId',
+  'manifest',
+  'plan',
+  'observations',
+  'coverage',
+  'startedAt',
+  'finishedAt',
+  'redact',
+]);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -85,6 +169,46 @@ function fail(stage) {
     'Findings input does not satisfy the trusted normalization contract',
     { stage },
   );
+}
+
+function snapshotBuildOptions(options) {
+  if (options === null
+      || typeof options !== 'object'
+      || Array.isArray(options)
+      || utilTypes.isProxy(options)
+      || Object.getPrototypeOf(options) !== Object.prototype) {
+    fail('arguments');
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(options);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.some((key) => typeof key !== 'string' || !BUILD_KEYS.has(key))) fail('arguments');
+  const json = {};
+  let redact = identityRedactor;
+  for (const key of keys) {
+    const descriptor = descriptors[key];
+    if (!Object.hasOwn(descriptor, 'value') || descriptor.enumerable !== true) fail('arguments');
+    if (key === 'redact') {
+      if (!isTrustedRedactor(descriptor.value)) fail('arguments');
+      redact = descriptor.value;
+    } else {
+      Object.defineProperty(json, key, {
+        value: descriptor.value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
+  let snapshot;
+  try {
+    snapshot = snapshotJson(json, {
+      code: 'FINDINGS_INPUT_INVALID',
+      message: 'Findings input does not satisfy the trusted normalization contract',
+    });
+  } catch {
+    fail('snapshot');
+  }
+  return { ...snapshot, redact };
 }
 
 function isObject(value) {
@@ -134,27 +258,32 @@ function exactKeys(value, allowed, required, stage) {
   if (required.some((key) => !hasOwn(value, key))) fail(stage);
 }
 
-function redactString(value, redact, stage) {
-  if (typeof value !== 'string') fail(stage);
-  let result;
-  try {
-    result = redact(value);
-  } catch {
-    fail('redaction');
-  }
-  if (typeof result !== 'string') fail('redaction');
-  return result;
+function createRedactionSession(redact) {
+  const results = new Map();
+  const remember = (input, output) => {
+    if (results.has(input) && results.get(input) !== output) fail('redaction');
+    results.set(input, output);
+  };
+  return (value, stage) => {
+    if (typeof value !== 'string') fail(stage);
+    let result;
+    let repeated;
+    try {
+      result = redact(value);
+      repeated = typeof result === 'string' ? redact(result) : undefined;
+    } catch {
+      fail('redaction');
+    }
+    if (typeof result !== 'string' || repeated !== result) fail('redaction');
+    remember(value, result);
+    remember(result, result);
+    return result;
+  };
 }
 
-function redactDocument(value, redact) {
-  if (typeof value === 'string') return redactString(value, redact, 'redaction');
-  if (Array.isArray(value)) return value.map((entry) => redactDocument(entry, redact));
-  if (isPlainObject(value)) {
-    return Object.fromEntries(Object.entries(value).map(
-      ([key, entry]) => [key, redactDocument(entry, redact)],
-    ));
-  }
-  return value;
+function redactString(value, redact, stage) {
+  if (typeof value !== 'string') fail(stage);
+  return redact(value, stage);
 }
 
 function validateManifest(manifest) {
@@ -173,11 +302,19 @@ function validateRoleList(roles, stage) {
   }
 }
 
-function validateDecision(decision, expectedId, stage) {
+function validateDecision(decision, subject, subjectType, stage) {
   exactKeys(decision, DECISION_KEYS, [...DECISION_KEYS], stage);
-  if (decision.subjectId !== expectedId
+  const policy = trustedPolicyDecisionContract(subjectType, decision.reasonCode);
+  const operationKind = subjectType === 'operation'
+    && ['GET', 'HEAD', 'OPTIONS'].includes(subject.method)
+    ? 'read'
+    : subjectType === 'operation' ? 'mutation' : null;
+  if (decision.subjectId !== subject.id
       || !['execute', 'skip'].includes(decision.action)
       || !REASON_CODE.test(decision.reasonCode)
+      || policy === null
+      || policy.action !== decision.action
+      || policy.operationKind !== operationKind
       || !Number.isInteger(decision.riskScore)
       || decision.riskScore < 0
       || decision.riskScore > 100
@@ -189,7 +326,7 @@ function validateDecision(decision, expectedId, stage) {
   validateRoleList(decision.roles, stage);
 }
 
-function indexDecisions(decisions, subjects, stage) {
+function indexDecisions(decisions, subjects, subjectType, stage) {
   if (!Array.isArray(decisions) || decisions.length !== subjects.length) fail(stage);
   const subjectsById = new Map();
   for (const subject of subjects) {
@@ -201,7 +338,7 @@ function indexDecisions(decisions, subjects, stage) {
     if (!isPlainObject(decision) || !isNonBlank(decision.subjectId)) fail(stage);
     const subject = subjectsById.get(decision.subjectId);
     if (subject === undefined || indexed.has(decision.subjectId)) fail(stage);
-    validateDecision(decision, subject.id, stage);
+    validateDecision(decision, subject, subjectType, stage);
     indexed.set(subject.id, { subject, decision });
   }
   return indexed;
@@ -211,23 +348,62 @@ function validatePlan(plan, manifest) {
   exactKeys(plan, PLAN_KEYS, [...PLAN_KEYS], 'plan');
   if (!['api', 'browser', 'sweep'].includes(plan.mode)) fail('plan');
   validateRoleList(plan.roleUniverse, 'plan-role-universe');
+  if (!Array.isArray(plan.browserViewports)
+      || plan.browserViewports.some((value) => (
+        !Number.isInteger(value) || value < 1 || value > 10_000
+      ))
+      || new Set(plan.browserViewports).size !== plan.browserViewports.length
+      || plan.browserViewports.some((value, index) => (
+        index > 0 && plan.browserViewports[index - 1] >= value
+      ))) {
+    fail('plan-browser-viewports');
+  }
   if (plan.roleUniverse.includes('unauthenticated')) fail('plan-role-universe');
   const sortedRoles = [...plan.roleUniverse].sort(compareCodeUnits);
   if (canonicalJson(sortedRoles) !== canonicalJson(plan.roleUniverse)) {
     fail('plan-role-universe');
   }
 
-  const operations = indexDecisions(plan.operations, manifest.operations, 'plan-operations');
-  const routes = indexDecisions(plan.routes, manifest.routes, 'plan-routes');
+  const operations = indexDecisions(
+    plan.operations,
+    manifest.operations,
+    'operation',
+    'plan-operations',
+  );
+  const routes = indexDecisions(plan.routes, manifest.routes, 'route', 'plan-routes');
   const universe = new Set(plan.roleUniverse);
   for (const { subject, decision } of [...operations.values(), ...routes.values()]) {
-    const knownRoles = [
-      ...(Array.isArray(subject.auth?.allowedRoles) ? subject.auth.allowedRoles : []),
-      ...decision.roles,
-    ].filter((role) => role !== 'unauthenticated');
-    if (knownRoles.some((role) => !universe.has(role))) fail('plan-role-universe');
+    const authState = subject.auth?.state;
+    const allowedRoles = Array.isArray(subject.auth?.allowedRoles)
+      ? subject.auth.allowedRoles.filter((role) => role !== 'unauthenticated')
+      : [];
+    if ((authState === 'public' && allowedRoles.length !== 0)
+        || (decision.action === 'execute'
+          && (authState === 'required'
+            ? allowedRoles.length === 0
+            : authState !== 'public'))) {
+      fail('plan-auth');
+    }
+    if (allowedRoles.some((role) => !universe.has(role))) fail('plan-role-universe');
+    const expectedRoles = authState === 'public'
+      ? ['unauthenticated']
+      : [...plan.roleUniverse, 'unauthenticated'];
+    if (canonicalJson(decision.roles) !== canonicalJson(expectedRoles)) {
+      fail('plan-subject-roles');
+    }
   }
-  return { operations, routes, roleUniverse: universe };
+  if (['browser', 'sweep'].includes(plan.mode)
+      && [...routes.values()].some(({ decision }) => decision.action === 'execute')
+      && plan.browserViewports.length === 0) {
+    fail('plan-browser-viewports');
+  }
+  return {
+    mode: plan.mode,
+    operations,
+    routes,
+    roleUniverse: universe,
+    browserViewports: plan.browserViewports,
+  };
 }
 
 function validateNullableString(value, stage) {
@@ -288,6 +464,132 @@ function validateBrowserEvidence(evidence) {
   validateDuration(evidence.durationMs, 'browser-evidence');
 }
 
+const DENIAL_STATUSES = new Set([401, 403]);
+const API_INSPECTION_REASONS = new Set([
+  'BODY_INSPECTION_FAILED',
+  'CONTENT_TYPE_MISMATCH',
+  'JSON_RESPONSE_INVALID',
+  'SCHEMA_NOT_FOUND',
+  'SCHEMA_VIOLATION',
+]);
+const CONTENT_TYPE_MISMATCH_ACTUALS = new Set([
+  'different valid media type',
+  'missing or invalid content type',
+]);
+
+function isSuccessStatus(status) {
+  return Number.isInteger(status) && status >= 200 && status < 300;
+}
+
+function validateApiEvidenceSemantics(observation, subject, decision) {
+  const expectedPath = materializeTargetPath(subject, decision.parameterValues, 'api');
+  const expectedMethod = subject.method.toUpperCase();
+  const { status } = observation.evidence;
+  if (observation.evidence.method !== expectedMethod
+      || observation.evidence.path !== expectedPath) {
+    fail('api-evidence-target');
+  }
+  if (observation.outcome === 'skip') {
+    if (status !== null) fail('api-evidence-status');
+    return;
+  }
+
+  const accessExpected = subjectAccessExpected(subject, observation.role);
+  const definition = Number.isInteger(status)
+    ? responseDefinition(subject.responses, status)
+    : null;
+  if (observation.reasonCode === 'CONTENT_TYPE_MISMATCH'
+      && !CONTENT_TYPE_MISMATCH_ACTUALS.has(observation.actual)) {
+    fail('api-evidence-inspection');
+  }
+  switch (observation.reasonCode) {
+    case 'HTTP_STATUS_EXPECTED':
+      if (!accessExpected || DENIAL_STATUSES.has(status) || definition === null) {
+        fail('api-evidence-status');
+      }
+      break;
+    case 'RBAC_DENIAL_EXPECTED':
+      if (accessExpected || !DENIAL_STATUSES.has(status)) fail('api-evidence-rbac');
+      break;
+    case 'RBAC_ACCESS_GRANTED':
+      if (accessExpected || !isSuccessStatus(status)) fail('api-evidence-rbac');
+      break;
+    case 'RBAC_DENIAL_NOT_PROVEN':
+      if (accessExpected || !Number.isInteger(status)
+          || DENIAL_STATUSES.has(status) || isSuccessStatus(status)) {
+        fail('api-evidence-rbac');
+      }
+      break;
+    case 'RBAC_ACCESS_DENIED':
+      if (!accessExpected || !DENIAL_STATUSES.has(status)) fail('api-evidence-rbac');
+      break;
+    case 'HTTP_STATUS_UNEXPECTED':
+      if (!accessExpected || !Number.isInteger(status)
+          || DENIAL_STATUSES.has(status) || definition !== null) {
+        fail('api-evidence-status');
+      }
+      break;
+    default:
+      if (API_INSPECTION_REASONS.has(observation.reasonCode)
+          && (!accessExpected || !Number.isInteger(status)
+            || DENIAL_STATUSES.has(status) || definition === null)) {
+        fail('api-evidence-inspection');
+      }
+  }
+}
+
+function validateBrowserEvidenceSemantics(observation, subject, decision) {
+  const expectedPath = materializeTargetPath(subject, decision.parameterValues, 'browser');
+  const { status } = observation.evidence;
+  if (observation.reasonCode === 'NAVIGATION_TARGET_MISMATCH') {
+    if (observation.evidence.path !== '/[TARGET_MISMATCH]'
+        || observation.evidence.path === expectedPath) {
+      fail('browser-evidence-target');
+    }
+  } else if (observation.evidence.path !== expectedPath) {
+    fail('browser-evidence-target');
+  }
+  if (observation.outcome === 'skip') {
+    if (status !== null || observation.evidence.viewport !== null) {
+      fail('browser-evidence-status');
+    }
+    return;
+  }
+
+  const accessExpected = subjectAccessExpected(subject, observation.role);
+  switch (observation.reasonCode) {
+    case 'DOCUMENT_STATUS_EXPECTED':
+      if (!accessExpected || !Number.isInteger(status)
+          || status < 200 || status >= 300) fail('browser-evidence-status');
+      break;
+    case 'DOCUMENT_STATUS_UNAVAILABLE':
+      if (status !== null) fail('browser-evidence-status');
+      break;
+    case 'DOCUMENT_STATUS_UNEXPECTED':
+      if (!accessExpected || !Number.isInteger(status)
+          || DENIAL_STATUSES.has(status) || (status >= 200 && status < 300)) {
+        fail('browser-evidence-status');
+      }
+      break;
+    case 'RBAC_DENIAL_EXPECTED':
+      if (accessExpected || !DENIAL_STATUSES.has(status)) fail('browser-evidence-rbac');
+      break;
+    case 'RBAC_ACCESS_GRANTED':
+      if (accessExpected || !isSuccessStatus(status)) fail('browser-evidence-rbac');
+      break;
+    case 'RBAC_DENIAL_NOT_PROVEN':
+      if (accessExpected || !Number.isInteger(status)
+          || DENIAL_STATUSES.has(status) || isSuccessStatus(status)) {
+        fail('browser-evidence-rbac');
+      }
+      break;
+    case 'RBAC_ACCESS_DENIED':
+      if (!accessExpected || !DENIAL_STATUSES.has(status)) fail('browser-evidence-rbac');
+      break;
+    default:
+  }
+}
+
 function provenanceForSubject(subject, redact) {
   const provenance = subject.provenance;
   return {
@@ -303,7 +605,11 @@ function normalizeEvidence(observation, redact) {
     evidence.expected = redactString(observation.expected, redact, 'observation-expected');
   }
   if (observation.actual !== null) {
-    evidence.actual = redactString(observation.actual, redact, 'observation-actual');
+    const actual = redactString(observation.actual, redact, 'observation-actual');
+    evidence.actual = observation.reasonCode === 'CONTENT_TYPE_MISMATCH'
+      && actual !== observation.actual
+      ? '[REDACTED]'
+      : actual;
   }
   if (observation.evidence.status !== null) evidence.statusCode = observation.evidence.status;
   if (observation.evidence.durationMs !== null) {
@@ -345,24 +651,39 @@ function normalizeObservation(observation, context, redact) {
   if (record === undefined) fail('observation-subject');
   const { subject, decision } = record;
 
-  if (observation.role !== null && !context.roleUniverse.has(observation.role)) {
-    fail('observation-role');
-  }
-  if (subject.auth?.state === 'public' && observation.role !== null) {
+  const plannedRoles = new Set(decision.roles);
+  if (observation.role === null) {
+    if (!plannedRoles.has('unauthenticated')) fail('observation-role');
+  } else if (!context.roleUniverse.has(observation.role)
+      || !plannedRoles.has(observation.role)) {
     fail('observation-role');
   }
   if (observation.outcome === 'skip') {
     if (decision.action !== 'skip'
         || observation.role !== null
-        || observation.reasonCode !== decision.reasonCode) {
+        || observation.reasonCode !== decision.reasonCode
+        || observation.category !== 'security'
+        || observation.severity !== 'info') {
       fail('observation-decision');
     }
-  } else if (decision.action !== 'execute') {
-    fail('observation-decision');
+  } else {
+    if (decision.action !== 'execute') fail('observation-decision');
+    const contract = trustedObservationContract(observation.source, observation.reasonCode);
+    if (contract === null
+        || contract.category !== observation.category
+        || contract.severity !== observation.severity
+        || contract.outcome !== observation.outcome) {
+      fail('observation-contract');
+    }
   }
 
-  if (observation.source === 'api') validateApiEvidence(observation.evidence);
-  else validateBrowserEvidence(observation.evidence);
+  if (observation.source === 'api') {
+    validateApiEvidence(observation.evidence);
+    validateApiEvidenceSemantics(observation, subject, decision);
+  } else {
+    validateBrowserEvidence(observation.evidence);
+    validateBrowserEvidenceSemantics(observation, subject, decision);
+  }
 
   const role = observation.role === null
     ? null
@@ -372,7 +693,7 @@ function normalizeObservation(observation, context, redact) {
     : redactString(decision.originId, redact, 'observation-service');
   const category = observation.outcome === 'skip' ? 'policy' : observation.category;
   const severity = observation.outcome === 'skip' ? 'info' : observation.severity;
-  const reasonCode = redactString(observation.reasonCode, redact, 'observation-reason');
+  const reasonCode = observation.reasonCode;
   const viewport = observation.source === 'browser' ? observation.evidence.viewport : null;
   const identity = {
     subjectType,
@@ -388,6 +709,8 @@ function normalizeObservation(observation, context, redact) {
   const source = observation.outcome === 'skip' ? 'policy' : observation.source;
   const finding = {
     id: findingId(identity),
+    reasonCode,
+    outcome: observation.outcome === 'skip' ? 'skip' : 'fail',
     severity,
     category,
     message: redactString(observation.message, redact, 'observation-message'),
@@ -405,13 +728,110 @@ function normalizeObservation(observation, context, redact) {
     skipped: observation.outcome === 'skip',
     durationMs: observation.evidence.durationMs,
     omitted: observation.outcome === 'pass',
+    source: observation.source,
+    subjectId: observation.subjectId,
+    role: observation.role,
+    reasonCode: observation.reasonCode,
+    outcome: observation.outcome,
+    viewport,
+    status: observation.evidence.status,
+    path: observation.evidence.path,
   };
+}
+
+function expectedRole(role) {
+  return role === 'unauthenticated' ? null : role;
+}
+
+function matchingObservations(observations, source, subjectId) {
+  return observations.filter((entry) => (
+    entry.source === source && entry.subjectId === subjectId
+  ));
+}
+
+function validateTerminalObservations(observations, context) {
+  const activeSources = new Set(context.mode === 'sweep'
+    ? ['api', 'browser']
+    : [context.mode]);
+  if (observations.some((entry) => !activeSources.has(entry.source))) {
+    fail('observation-mode');
+  }
+  const sources = [];
+  if (activeSources.has('api')) sources.push(['api', context.operations]);
+  if (activeSources.has('browser')) sources.push(['browser', context.routes]);
+
+  for (const [source, decisions] of sources) {
+    for (const { subject, decision } of decisions.values()) {
+      const subjectObservations = matchingObservations(observations, source, subject.id);
+      if (decision.action === 'skip') {
+        if (subjectObservations.filter((entry) => entry.outcome === 'skip').length !== 1) {
+          fail('observation-terminal-coverage');
+        }
+        continue;
+      }
+
+      if (source === 'api') {
+        for (const role of decision.roles.map(expectedRole)) {
+          if (subjectObservations.filter((entry) => entry.role === role).length !== 1) {
+            fail('observation-terminal-coverage');
+          }
+        }
+        continue;
+      }
+
+      for (const entry of subjectObservations) {
+        if (entry.viewport !== null && !context.browserViewports.includes(entry.viewport)) {
+          fail('observation-terminal-coverage');
+        }
+        if (BROWSER_STATUS_REASONS.has(entry.reasonCode) && entry.viewport === null) {
+          fail('observation-terminal-coverage');
+        }
+      }
+      for (const role of decision.roles.map(expectedRole)) {
+        const roleObservations = subjectObservations.filter((entry) => entry.role === role);
+        const blockers = roleObservations.filter((entry) => (
+          entry.viewport === null
+          && (BROWSER_SUBJECT_TERMINALS.has(entry.reasonCode)
+            || BROWSER_ATTEMPT_TERMINALS.has(entry.reasonCode))
+        ));
+        if (blockers.length > 0) {
+          if (blockers.length !== 1
+              || roleObservations.some((entry) => BROWSER_STATUS_REASONS.has(entry.reasonCode))) {
+            fail('observation-terminal-coverage');
+          }
+          continue;
+        }
+        for (const viewport of context.browserViewports) {
+          const boundTargetFailures = roleObservations.filter((entry) => (
+            entry.viewport === viewport
+              && BROWSER_VIEWPORT_TERMINALS.has(entry.reasonCode)
+          ));
+          const terminals = roleObservations.filter((entry) => (
+            entry.viewport === viewport && BROWSER_STATUS_REASONS.has(entry.reasonCode)
+          ));
+          if (boundTargetFailures.length > 0) {
+            if (boundTargetFailures.length !== 1 || terminals.length !== 0) {
+              fail('observation-terminal-coverage');
+            }
+            continue;
+          }
+          if (terminals.length !== 1
+              || roleObservations.some((entry) => (
+                entry.viewport === viewport && entry.status !== terminals[0].status
+              ))) {
+            fail('observation-terminal-coverage');
+          }
+        }
+      }
+    }
+  }
 }
 
 function normalizeDiagnostic(diagnostic, redact) {
   const allowed = new Set(['code', 'message', 'sourcePath', 'pointer']);
   exactKeys(diagnostic, allowed, ['code', 'message'], 'coverage-diagnostic');
   if (!isNonBlank(diagnostic.code)
+      || !REASON_CODE.test(diagnostic.code)
       || typeof diagnostic.message !== 'string'
       || diagnostic.message.trim().length === 0) {
     fail('coverage-diagnostic');
@@ -420,8 +840,12 @@ function normalizeDiagnostic(diagnostic, redact) {
   const pointer = hasOwn(diagnostic, 'pointer') ? diagnostic.pointer : null;
   validateNullableString(sourcePath, 'coverage-diagnostic');
   validateNullableString(pointer, 'coverage-diagnostic');
+  if (redactString(diagnostic.code, redact, 'coverage-diagnostic-code') !== diagnostic.code
+      && !TRUSTED_COVERAGE_CODES.has(diagnostic.code)) {
+    fail('coverage-diagnostic-code');
+  }
   return {
-    code: redactString(diagnostic.code, redact, 'coverage-diagnostic'),
+    code: diagnostic.code,
     message: redactString(diagnostic.message, redact, 'coverage-diagnostic'),
     sourcePath: sourcePath === null
       ? null
@@ -474,6 +898,8 @@ function diagnosticCandidate(diagnostic, status) {
   return {
     finding: {
       id: findingId(identity),
+      reasonCode: diagnostic.code,
+      outcome: 'fail',
       severity,
       category: 'coverage',
       message: diagnostic.message,
@@ -572,41 +998,53 @@ function responsePercentiles(durations) {
   };
 }
 
-function validateCompleted(document) {
-  try {
-    validateAgainstSchema(document, FINDINGS_SCHEMA, { name: 'findings' });
-  } catch {
-    fail('completed-findings');
+function terminalDurations(observations) {
+  const durations = new Map();
+  for (const entry of observations) {
+    if (typeof entry.durationMs !== 'number'
+        || (entry.source === 'browser' && !BROWSER_STATUS_REASONS.has(entry.reasonCode))) {
+      continue;
+    }
+    const key = canonicalJson([
+      entry.source, entry.subjectId, entry.role, entry.viewport,
+    ]);
+    durations.set(key, Math.max(durations.get(key) ?? 0, entry.durationMs));
   }
+  return [...durations.values()];
 }
 
 /** Normalizes strict API/browser observations into the canonical v2 findings document. */
-export function buildFindings({
-  runId,
-  manifest,
-  plan,
-  observations,
-  coverage,
-  startedAt,
-  finishedAt,
-  redact = (value) => value,
-} = {}) {
-  if (typeof redact !== 'function'
+export function buildFindings(options = {}) {
+  const {
+    runId,
+    manifest,
+    plan,
+    observations,
+    coverage,
+    startedAt,
+    finishedAt,
+    redact: suppliedRedact,
+  } = snapshotBuildOptions(options);
+  if (!isTrustedRedactor(suppliedRedact)
       || !isNonBlank(runId)
       || !isNonBlank(startedAt)
       || !isNonBlank(finishedAt)
       || !Array.isArray(observations)) {
     fail('arguments');
   }
+  const redact = createRedactionSession(suppliedRedact);
   validateManifest(manifest);
   const planContext = validatePlan(plan, manifest);
   const normalizedCoverage = normalizeCoverage(coverage, redact);
+  const manifestCoverage = normalizeCoverage(manifest.coverage, redact);
+  if (canonicalJson(normalizedCoverage) !== canonicalJson(manifestCoverage)) {
+    fail('coverage-authority');
+  }
   const normalizedObservations = observations.map(
     (entry) => normalizeObservation(entry, planContext, redact),
   );
-  const durations = normalizedObservations
-    .map((entry) => entry.durationMs)
-    .filter((value) => typeof value === 'number');
+  validateTerminalObservations(normalizedObservations, planContext);
+  const durations = terminalDurations(normalizedObservations);
   const candidates = mergeCandidates([
     ...normalizedObservations.filter((entry) => !entry.omitted),
     ...normalizedCoverage.diagnostics.map(
@@ -630,7 +1068,12 @@ export function buildFindings({
   const percentiles = responsePercentiles(durations);
   if (percentiles !== null) document.responseTimePercentiles = percentiles;
 
-  const completed = redactDocument(document, redact);
-  validateCompleted(completed);
-  return deepFreeze(completed);
+  try {
+    return validateCanonicalFindings(document, {
+      code: 'FINDINGS_INPUT_INVALID',
+      message: 'Findings input does not satisfy the trusted normalization contract',
+    });
+  } catch {
+    fail('completed-findings');
+  }
 }

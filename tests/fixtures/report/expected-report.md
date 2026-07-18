@@ -26,6 +26,6 @@
 | Severity | Category | Subject | Role | Service | Message | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | critical | rbac | operation:op:get:/admin | user | api | User could access admin data | expected=401 or 403; actual=200; statusCode=200; durationMs=12 |
-| error | console | route:route:/dashboard | unauthenticated | web | The dashboard raised an uncaught exception | expected=no console errors; actual=uncaught exception; durationMs=44; viewport=375; screenshotPath=dashboard-375.png |
+| error | console | route:route:/dashboard | unauthenticated | web | The dashboard raised an uncaught exception | expected=no console errors; actual=uncaught exception; durationMs=44; viewport=375; screenshotPath=browser-0123456789abcdef01234567.png |
 | warning | coverage | run:coverage | unauthenticated | default | One dynamic route was not executed | none |
 | info | policy | operation:op:post:/items | unauthenticated | api | Policy skipped POST /items | expected=policy approval; actual=MUTATION_BLOCKED_DISABLED |

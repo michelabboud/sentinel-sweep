@@ -32,16 +32,8 @@ const SCHEMA_VIOLATION_KEYWORDS = new Set([
 ]);
 const MAX_SCHEMA_VIOLATIONS = 100;
 const MAX_SCHEMA_PATH_LENGTH = 1024;
-const SENSITIVE_REQUEST_HEADERS = new Set([
-  'api-key',
-  'authorization',
-  'cookie',
-  'proxy-authorization',
-  'set-cookie',
-  'x-access-token',
-  'x-api-key',
-  'x-auth-token',
-]);
+const REDACTED_SCHEMA_PATH = '/[SCHEMA_PATH_REDACTED]';
+const VALID_MEDIA_TYPE = 'valid';
 
 function elapsedSince(startedAt) {
   return Math.max(0, performance.now() - startedAt);
@@ -78,18 +70,7 @@ function isJsonPointer(value) {
     && /^(?:\/(?:[^~\u0000-\u001f\u007f]|~[01])*)*$/u.test(value);
 }
 
-function containsRawBody(value, rawBody) {
-  return rawBody.length > 0 && value.includes(rawBody);
-}
-
-function hasSensitiveRequestHeaders(headers) {
-  for (const name of headers.keys()) {
-    if (SENSITIVE_REQUEST_HEADERS.has(name.toLowerCase())) return true;
-  }
-  return false;
-}
-
-function normalizedSchemaViolations(value, rawBody, redactPaths) {
+function normalizedSchemaViolations(value) {
   if (!Array.isArray(value)) return [];
   const normalized = [];
   const seen = new Set();
@@ -102,12 +83,10 @@ function normalizedSchemaViolations(value, rawBody, redactPaths) {
         || typeof violation.path !== 'string'
         || typeof violation.keyword !== 'string'
         || !isJsonPointer(violation.path)
-        || !SCHEMA_VIOLATION_KEYWORDS.has(violation.keyword)
-        || containsRawBody(violation.keyword, rawBody)) {
+        || !SCHEMA_VIOLATION_KEYWORDS.has(violation.keyword)) {
       continue;
     }
-    const path = redactPaths ? '/[REDACTED]' : violation.path;
-    if (containsRawBody(path, rawBody)) continue;
+    const path = violation.path === '' ? '' : REDACTED_SCHEMA_PATH;
     const identity = `${path}\u0000${violation.keyword}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
@@ -119,7 +98,7 @@ function normalizedSchemaViolations(value, rawBody, redactPaths) {
   return normalized;
 }
 
-function normalizedInspection(value, rawBody = '', redactPaths = false) {
+function normalizedInspection(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return Object.freeze({
       reasonCode: 'BODY_INSPECTION_FAILED',
@@ -134,22 +113,31 @@ function normalizedInspection(value, rawBody = '', redactPaths = false) {
   return Object.freeze({
     reasonCode,
     schemaViolations: Object.freeze(
-      normalizedSchemaViolations(value.schemaViolations, rawBody, redactPaths),
+      normalizedSchemaViolations(value.schemaViolations),
     ),
   });
 }
 
-function responseDefinition(responses, status) {
+function ownDataValue(record, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (descriptor === undefined) return { found: false, value: undefined };
+  if (!Object.hasOwn(descriptor, 'value')) return { found: true, value: undefined };
+  return { found: true, value: descriptor.value };
+}
+
+/** Resolves only own data response definitions; inherited/accessor values are untrusted. */
+export function responseDefinition(responses, status) {
   if (responses === null || typeof responses !== 'object' || Array.isArray(responses)) {
     return null;
   }
-  const exact = responses[String(status)];
-  if (exact !== undefined) return exact;
+  const exact = ownDataValue(responses, String(status));
+  if (exact.found) return exact.value ?? null;
   const statusClass = Math.floor(status / 100);
-  return responses[`${statusClass}XX`]
-    ?? responses[`${statusClass}xx`]
-    ?? responses.default
-    ?? null;
+  for (const key of [`${statusClass}XX`, `${statusClass}xx`, 'default']) {
+    const candidate = ownDataValue(responses, key);
+    if (candidate.found) return candidate.value ?? null;
+  }
+  return null;
 }
 
 function normalizedMediaType(value) {
@@ -172,7 +160,18 @@ function bodyInspection(reasonCode = null, schemaViolations = []) {
 }
 
 function registryRecord(registry, schemaId) {
-  return registry instanceof Map ? registry.get(schemaId) : registry?.[schemaId];
+  if (registry instanceof Map) {
+    try {
+      return Map.prototype.get.call(registry, schemaId);
+    } catch {
+      return undefined;
+    }
+  }
+  if (registry === null || typeof registry !== 'object' || Array.isArray(registry)) {
+    return undefined;
+  }
+  const record = ownDataValue(registry, schemaId);
+  return record.found ? record.value : undefined;
 }
 
 function inspectResponse({ text, status, contentType, responses, schemaRegistry }) {
@@ -281,6 +280,11 @@ function redirectedRequest(status, method, body, headers) {
   return { method: 'GET', body: undefined, headers: nextHeaders };
 }
 
+function relativeTarget(value) {
+  const url = value instanceof URL ? value : new URL(value);
+  return `${url.pathname}${url.search}`;
+}
+
 /** Performs one approved, bounded HTTP request without automatic redirects. */
 export async function requestApproved({
   origin,
@@ -292,6 +296,7 @@ export async function requestApproved({
   maxBytes,
   approvedOrigins,
   allowNonLoopback = false,
+  bindPath = false,
   responses,
   schemaRegistry = {},
   inspectBody,
@@ -302,6 +307,7 @@ export async function requestApproved({
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1
       || !Number.isInteger(maxBytes) || maxBytes < 1
+      || typeof bindPath !== 'boolean'
       || inspectBody !== undefined
       || (responses !== undefined
         && (responses === null || typeof responses !== 'object' || Array.isArray(responses)))
@@ -314,6 +320,7 @@ export async function requestApproved({
 
   let normalizedOrigin;
   let currentUrl;
+  let targetPath;
   try {
     normalizedOrigin = parseApprovedOrigin(origin, { allowNonLoopback });
     const approved = normalizedApprovedOrigins(approvedOrigins, allowNonLoopback);
@@ -321,6 +328,7 @@ export async function requestApproved({
       return failure(startedAt, redirects, 'blocked', 'ORIGIN_NOT_APPROVED');
     }
     currentUrl = resolveRequestUrl(normalizedOrigin, path);
+    targetPath = relativeTarget(currentUrl);
   } catch (error) {
     return failure(startedAt, redirects, 'blocked', error?.code ?? 'REQUEST_INVALID');
   }
@@ -334,7 +342,6 @@ export async function requestApproved({
   if (currentHeaders === null) {
     return failure(startedAt, redirects, 'blocked', 'HEADERS_INVALID');
   }
-  const redactInspectionPaths = hasSensitiveRequestHeaders(currentHeaders);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref?.();
@@ -360,9 +367,9 @@ export async function requestApproved({
       }
 
       const rawContentType = response.headers.get('content-type');
-      const evidenceContentType = redactInspectionPaths
+      const evidenceContentType = normalizedMediaType(rawContentType) === null
         ? null
-        : normalizedMediaType(rawContentType);
+        : VALID_MEDIA_TYPE;
       if (REDIRECT_STATUSES.has(response.status) && response.headers.has('location')) {
         redirects += 1;
         await response.body?.cancel().catch(() => {});
@@ -392,12 +399,37 @@ export async function requestApproved({
             { status: response.status, contentType: evidenceContentType },
           );
         }
+        if (bindPath && relativeTarget(destination) !== targetPath) {
+          return failure(
+            startedAt,
+            redirects,
+            'blocked',
+            'REDIRECT_TARGET_MISMATCH',
+            { status: response.status, contentType: evidenceContentType },
+          );
+        }
+
+        const nextRequest = redirectedRequest(
+          response.status,
+          currentMethod,
+          currentBody,
+          currentHeaders,
+        );
+        if (bindPath && nextRequest.method !== currentMethod) {
+          return failure(
+            startedAt,
+            redirects,
+            'blocked',
+            'REDIRECT_METHOD_MISMATCH',
+            { status: response.status, contentType: evidenceContentType },
+          );
+        }
 
         ({
           method: currentMethod,
           body: currentBody,
           headers: currentHeaders,
-        } = redirectedRequest(response.status, currentMethod, currentBody, currentHeaders));
+        } = nextRequest);
         currentUrl = destination;
         continue;
       }
@@ -434,7 +466,7 @@ export async function requestApproved({
             contentType: rawContentType,
             responses,
             schemaRegistry,
-          }), bounded.text, redactInspectionPaths);
+          }));
         } catch {
           inspection = normalizedInspection(null);
         }

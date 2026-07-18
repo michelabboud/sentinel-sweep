@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { requestApproved } from '../../runtime/api/http.mjs';
 import { sweepApi } from '../../runtime/api/sweep.mjs';
+import { buildExecutionPlan } from '../../runtime/policy/execution.mjs';
 import { startHttpFixture } from '../fixtures/http-app.mjs';
 
 const ADMIN_TOKEN = 'sentinel-cross-origin-secret';
@@ -68,7 +69,7 @@ test('follows a same-origin redirect manually and returns a bounded response', a
   assert.equal(observation.status, 200);
   assert.equal(observation.redirects, 1);
   assert.equal(observation.bytes, 11);
-  assert.equal(observation.contentType, 'application/json');
+  assert.equal(observation.contentType, 'valid');
   assertExactTransportShape(observation);
   assert.deepEqual(Reflect.ownKeys(observation.inspection), ['reasonCode', 'schemaViolations']);
   assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
@@ -169,10 +170,10 @@ test('redacts reflected credentials from deterministic schema paths', async () =
   });
 
   assertExactTransportShape(observation);
-  assert.equal(observation.contentType, null);
+  assert.equal(observation.contentType, 'valid');
   assert.equal(observation.inspection.reasonCode, 'SCHEMA_VIOLATION');
   assert.deepEqual(observation.inspection.schemaViolations, [{
-    path: '/[REDACTED]',
+    path: '/[SCHEMA_PATH_REDACTED]',
     keyword: 'additionalProperties',
   }]);
   const serialized = JSON.stringify(observation);
@@ -183,6 +184,81 @@ test('redacts reflected credentials from deterministic schema paths', async () =
   assert.equal(serialized.includes('Bearer'), false);
 });
 
+test('makes every non-root HTTP schema path independent of response and parameter values', async () => {
+  const origin = 'http://127.0.0.1:34567';
+  const raw = 'sentinel raw/value~secret';
+  const percent = encodeURIComponent(raw);
+  const plus = new URLSearchParams({ value: raw }).toString();
+  const base64 = Buffer.from(raw).toString('base64');
+  const pointerEscapedSource = 'sentinel/slash~tilde';
+  const short = 'a';
+  const overlap = 'aaaa';
+  const unrelated = 'response-only-top-secret';
+  const reflectedKeys = [
+    raw,
+    percent,
+    plus,
+    base64,
+    pointerEscapedSource,
+    short,
+    overlap,
+    unrelated,
+  ];
+  const responseBody = Object.fromEntries(reflectedKeys.map((key) => [key, true]));
+  const observation = await requestApproved({
+    origin,
+    path: `/public?value=${encodeURIComponent(raw)}`,
+    method: 'GET',
+    headers: {},
+    timeoutMs: 1000,
+    maxBytes: 4096,
+    approvedOrigins: [origin],
+    responses: { '200': { contentType: 'application/json', schemaId: 'strict' } },
+    schemaRegistry: {
+      strict: { schema: { type: 'object', properties: {}, additionalProperties: false } },
+    },
+    fetchImpl: async () => new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  });
+
+  assert.deepEqual(observation.inspection.schemaViolations, [{
+    path: '/[SCHEMA_PATH_REDACTED]',
+    keyword: 'additionalProperties',
+  }]);
+  const serialized = JSON.stringify(observation);
+  for (const canary of reflectedKeys.filter((value) => value.length >= 4)) {
+    assert.equal(serialized.includes(canary), false, canary);
+  }
+  assert.equal(serialized.includes('"path":"/a"'), false);
+  assert.equal(serialized.includes('sentinel~1slash~0tilde'), false);
+});
+
+test('classifies a reflected valid response media type without retaining it', async () => {
+  const origin = 'http://127.0.0.1:34567';
+  const mediaTypeCanary = 'sentinel-reflected-content-type';
+  const observation = await requestApproved({
+    origin,
+    path: '/public',
+    method: 'GET',
+    headers: {},
+    timeoutMs: 1000,
+    maxBytes: 1024,
+    approvedOrigins: [origin],
+    responses: { '200': { contentType: 'application/json', schemaId: null } },
+    schemaRegistry: {},
+    fetchImpl: async () => new Response('{"ok":true}', {
+      status: 200,
+      headers: { 'content-type': `application/${mediaTypeCanary}` },
+    }),
+  });
+
+  assert.equal(observation.inspection.reasonCode, 'CONTENT_TYPE_MISMATCH');
+  assert.equal(observation.contentType, 'valid');
+  assert.equal(JSON.stringify(observation).includes(mediaTypeCanary), false);
+});
+
 test('requires trusted non-loopback approval before sweep transport executes', async () => {
   const origin = 'https://example.test';
   const operation = {
@@ -190,19 +266,18 @@ test('requires trusted non-loopback approval before sweep transport executes', a
     method: 'GET',
     path: '/public',
     parameters: [],
+    requestBody: null,
     responses: { '200': { contentType: 'application/json', schemaId: null } },
     auth: { state: 'public', allowedRoles: [] },
+    sideEffects: { state: 'known', classes: [] },
+    rollback: null,
+    mutation: false,
+    protocol: 'http',
+    sweepable: true,
+    risk: { score: 0, level: 'safe', reasons: [] },
+    provenance: { adapter: 'openapi-json', file: 'fixture.json', pointer: '/paths/~1public/get' },
   };
   const manifest = { operations: [operation], schemas: {} };
-  const plan = {
-    operations: [{
-      subjectId: operation.id,
-      action: 'execute',
-      reasonCode: 'READ_APPROVED',
-      originId: 'default',
-      parameterValues: {},
-    }],
-  };
   let requests = 0;
   const fetchImpl = async () => {
     requests += 1;
@@ -218,11 +293,23 @@ test('requires trusted non-loopback approval before sweep transport executes', a
     responseTimeoutMs: 1000,
     maxResponseBytes: 1024,
   };
+  const blockedConfig = { ...baseConfig, allowNonLoopback: false };
+  const approvedConfig = { ...baseConfig, allowNonLoopback: true };
+  const blockedPlan = buildExecutionPlan({
+    manifest,
+    config: blockedConfig,
+    mode: 'api',
+  });
+  const approvedPlan = buildExecutionPlan({
+    manifest,
+    config: approvedConfig,
+    mode: 'api',
+  });
 
   const blocked = await sweepApi({
     manifest,
-    plan,
-    config: { ...baseConfig, allowNonLoopback: false },
+    plan: blockedPlan,
+    config: blockedConfig,
     fetchImpl,
   });
   assert.equal(blocked[0].outcome, 'fail');
@@ -231,8 +318,8 @@ test('requires trusted non-loopback approval before sweep transport executes', a
 
   const approved = await sweepApi({
     manifest,
-    plan,
-    config: { ...baseConfig, allowNonLoopback: true },
+    plan: approvedPlan,
+    config: approvedConfig,
     fetchImpl,
   });
   assert.equal(approved[0].outcome, 'pass');

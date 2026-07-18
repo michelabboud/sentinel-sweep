@@ -365,6 +365,10 @@
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/schemaNode" }
         },
+        "$defs": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/schemaNode" }
+        },
         "additionalProperties": {
           "anyOf": [
             { "type": "boolean" },

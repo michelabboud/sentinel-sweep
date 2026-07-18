@@ -223,6 +223,39 @@ test('validates bundled defaults and minimal v2 artifacts', () => {
   }
 });
 
+test('rejects a bundled history document with 129 runs at the schema boundary', () => {
+  const run = {
+    startedAt: '2026-07-18T00:00:00.000Z',
+    finishedAt: '2026-07-18T00:00:01.000Z',
+    coverageStatus: 'complete',
+    summary: { critical: 0, error: 0, warning: 0, info: 0, skipped: 0 },
+    findingsDigest: '1'.repeat(64),
+    markerToken: '2'.repeat(64),
+    dev: '1',
+    ino: '1',
+    birthtimeNs: '1',
+    uid: '1000',
+    mode: '16832',
+  };
+  const history = {
+    schemaVersion: '2.0',
+    runs: Array.from({ length: 129 }, (_, index) => ({
+      ...run,
+      runId: `2026-07-18T00-00-00-000Z-${(index + 1).toString(16).padStart(8, '0')}`,
+    })),
+  };
+
+  assert.throws(
+    () => validateAgainstSchema(history, schemas['sweep-history'], { name: 'history' }),
+    (error) => {
+      assert.deepEqual(error?.details?.violations, [
+        { path: '/runs', keyword: 'maxItems' },
+      ]);
+      return true;
+    },
+  );
+});
+
 test('validates a realistic non-empty manifest using later-task interfaces', () => {
   assert.doesNotThrow(() => {
     validateAgainstSchema(

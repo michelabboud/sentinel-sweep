@@ -3,9 +3,23 @@ import test from 'node:test';
 
 import {
   createRedactor,
+  identityRedactor,
+  isTrustedRedactor,
   parseSecretRef,
   resolveSecret,
 } from '../../runtime/lib/secrets.mjs';
+
+test('brands only module-constructed deterministic redactors', () => {
+  const redact = createRedactor(['env:SENTINEL_TOKEN'], {
+    SENTINEL_TOKEN: 'stable-secret',
+  });
+  assert.equal(isTrustedRedactor(identityRedactor), true);
+  assert.equal(isTrustedRedactor(redact), true);
+  assert.equal(isTrustedRedactor((value) => value), false);
+  assert.equal(identityRedactor('unchanged'), 'unchanged');
+  assert.equal(redact('stable-secret'), '[REDACTED]');
+  assert.equal(redact('stable-secret'), '[REDACTED]');
+});
 
 test('parseSecretRef accepts only strict environment references', () => {
   assert.deepEqual(parseSecretRef('env:SENTINEL_ADMIN_TOKEN'), {
@@ -43,6 +57,46 @@ test('resolveSecret returns the referenced value and never exposes missing value
       },
     );
   }
+});
+
+test('resolveSecret rejects inherited, accessor, non-enumerable, and proxy environment data', () => {
+  const inherited = Object.create({ SENTINEL_ADMIN_TOKEN: 'inherited-secret' });
+  let getterReads = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, 'SENTINEL_ADMIN_TOKEN', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      getterReads += 1;
+      return 'accessor-secret';
+    },
+  });
+  const nonEnumerable = {};
+  Object.defineProperty(nonEnumerable, 'SENTINEL_ADMIN_TOKEN', {
+    configurable: true,
+    enumerable: false,
+    value: 'hidden-secret',
+  });
+  let proxyReads = 0;
+  const proxy = new Proxy({ SENTINEL_ADMIN_TOKEN: 'proxy-secret' }, {
+    get(target, property, receiver) {
+      proxyReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+    getOwnPropertyDescriptor(target, property) {
+      proxyReads += 1;
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+  });
+
+  for (const env of [inherited, accessor, nonEnumerable, proxy]) {
+    assert.throws(
+      () => resolveSecret('env:SENTINEL_ADMIN_TOKEN', env),
+      (error) => error?.code === 'SECRET_ENV_INVALID',
+    );
+  }
+  assert.equal(getterReads, 0);
+  assert.equal(proxyReads, 0);
 });
 
 test('createRedactor removes resolved values and common authorization encodings', () => {
