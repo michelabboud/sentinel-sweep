@@ -88,6 +88,31 @@ test('follows a same-origin redirect manually and returns a bounded response', a
   assert.equal(JSON.stringify(observation).includes('{\\"ok\\":true}'), false);
 });
 
+test('inspects exact bounded JSON when an ordinary request header value overlaps it', async (t) => {
+  const fixture = await startHttpFixture({ adminToken: ADMIN_TOKEN, userToken: 'unused-user' });
+  t.after(() => fixture.close());
+
+  let inspectedText = null;
+  const observation = await requestApproved({
+    origin: fixture.origin,
+    path: '/public',
+    method: 'GET',
+    headers: { 'x-marker': 'true' },
+    timeoutMs: 1000,
+    maxBytes: 1024,
+    approvedOrigins: [fixture.origin],
+    inspectBody({ text }) {
+      inspectedText = text;
+      JSON.parse(text);
+      return { reasonCode: null, schemaViolations: [] };
+    },
+  });
+
+  assert.equal(inspectedText, '{"ok":true}');
+  assertExactTransportShape(observation);
+  assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
+});
+
 test('requires trusted non-loopback approval before sweep transport executes', async () => {
   const origin = 'https://example.test';
   const operation = {

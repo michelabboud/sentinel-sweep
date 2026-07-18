@@ -94,20 +94,6 @@ function requestHeaders(headers) {
   }
 }
 
-function responseRedactor(headers) {
-  const secrets = [];
-  for (const value of headers.values()) {
-    if (value.length >= 4) secrets.push(value);
-    const withoutScheme = value.replace(/^(?:basic|bearer)\s+/iu, '');
-    if (withoutScheme.length >= 4 && withoutScheme !== value) secrets.push(withoutScheme);
-  }
-  const unique = [...new Set(secrets)].sort((left, right) => right.length - left.length);
-  return (text) => unique.reduce(
-    (redacted, secret) => redacted.split(secret).join('[REDACTED]'),
-    text,
-  );
-}
-
 async function readBounded(response, maxBytes) {
   if (response.body === null) return { exceeded: false, bytes: 0, text: '' };
 
@@ -204,8 +190,6 @@ export async function requestApproved({
   if (currentHeaders === null) {
     return failure(startedAt, redirects, 'blocked', 'HEADERS_INVALID');
   }
-  const redact = responseRedactor(currentHeaders);
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   timeout.unref?.();
@@ -297,7 +281,7 @@ export async function requestApproved({
       if (inspectBody !== undefined) {
         try {
           inspection = normalizedInspection(await inspectBody({
-            text: redact(bounded.text),
+            text: bounded.text,
             status: response.status,
             contentType,
           }));
