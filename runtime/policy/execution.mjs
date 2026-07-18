@@ -361,6 +361,22 @@ function planRoute(route, config) {
   });
 }
 
+function buildRoleUniverse({ manifest, config, operations, routes }) {
+  const configuredRoles = isObject(config?.roles) ? Object.keys(config.roles) : [];
+  const manifestRoles = [
+    ...(Array.isArray(manifest?.operations) ? manifest.operations : []),
+    ...(Array.isArray(manifest?.routes) ? manifest.routes : []),
+  ].flatMap((subject) => stableStrings(subject?.auth?.allowedRoles));
+  const decisionRoles = [...operations, ...routes]
+    .flatMap((entry) => stableStrings(entry?.roles));
+
+  return stableStrings([
+    ...configuredRoles,
+    ...manifestRoles,
+    ...decisionRoles,
+  ]).filter((role) => role !== 'unauthenticated');
+}
+
 /** Builds a complete, immutable policy ledger without filtering skipped work. */
 export function buildExecutionPlan({ manifest, config, mode, sandboxAcknowledged } = {}) {
   const operations = Array.isArray(manifest?.operations)
@@ -374,5 +390,7 @@ export function buildExecutionPlan({ manifest, config, mode, sandboxAcknowledged
     ? manifest.routes.map((route) => planRoute(route, config))
     : [];
 
-  return deepFreeze({ mode, operations, routes });
+  const roleUniverse = buildRoleUniverse({ manifest, config, operations, routes });
+
+  return deepFreeze({ mode, roleUniverse, operations, routes });
 }

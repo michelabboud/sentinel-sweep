@@ -273,3 +273,36 @@ test('builds an explicit immutable decision for every discovered operation and r
   assert.ok(plan.operations.every(Object.isFrozen));
   assert.ok(plan.routes.every(Object.isFrozen));
 });
+
+test('exposes the trusted role universe for lower-privilege RBAC attempts without secret references', () => {
+  const manifest = {
+    operations: [operation({
+      id: 'op:get:/api/admin',
+      path: '/api/admin',
+      auth: { state: 'required', allowedRoles: ['operator', 'admin'] },
+    })],
+    routes: [route({
+      id: 'route:/owner',
+      path: '/owner',
+      auth: { state: 'required', allowedRoles: ['owner'] },
+    })],
+  };
+  const plan = buildExecutionPlan({
+    manifest,
+    config: config({
+      roles: {
+        user: { tokenRef: 'env:SENTINEL_USER_TOKEN' },
+        admin: { tokenRef: 'env:SENTINEL_ADMIN_TOKEN' },
+        unauthenticated: { tokenRef: 'env:SENTINEL_MUST_NOT_APPEAR' },
+      },
+    }),
+    mode: 'sweep',
+    sandboxAcknowledged: false,
+  });
+
+  assert.deepEqual(plan.roleUniverse, ['admin', 'operator', 'owner', 'user']);
+  assert.ok(Object.isFrozen(plan.roleUniverse));
+  assert.equal(JSON.stringify(plan).includes('tokenRef'), false);
+  assert.equal(JSON.stringify(plan).includes('env:'), false);
+  assert.equal(JSON.stringify(plan).includes('SENTINEL_'), false);
+});
