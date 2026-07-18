@@ -3,3 +3,4 @@ sentinel-manifest.json
 node_modules/
 *.log
 .DS_Store
+.worktrees/
