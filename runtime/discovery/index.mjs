@@ -58,8 +58,146 @@ function stableUniqueStrings(values, label) {
   return [...new Set(values)].sort();
 }
 
-function mergeOverride(target, addition) {
-  return { ...(target ?? {}), ...addition };
+function overrideConflict(id, field) {
+  throw manifestError(
+    'MANIFEST_CONFLICT',
+    `Conflicting trusted override definitions for ${id} field ${field}`,
+    { id, kind: 'override', field },
+  );
+}
+
+function normalizeStringSet(value) {
+  if (!Array.isArray(value)
+      || value.some((entry) => typeof entry !== 'string' || entry.length === 0)) {
+    return structuredClone(value);
+  }
+  return [...new Set(value)].sort();
+}
+
+function normalizeParameterExamples(examples, id) {
+  if (!isObject(examples)) return structuredClone(examples);
+  const normalized = new Map();
+  const add = (key, value) => {
+    if (normalized.has(key) && !isDeepStrictEqual(normalized.get(key), value)) {
+      overrideConflict(id, 'parameterExamples');
+    }
+    normalized.set(key, structuredClone(value));
+  };
+
+  for (const key of Object.keys(examples).sort()) {
+    if (isObject(examples[key]) && ['path', 'query', 'header', 'cookie'].includes(key)) {
+      for (const name of Object.keys(examples[key]).sort()) {
+        add(`${key}:${name}`, examples[key][name]);
+      }
+    } else {
+      add(key, examples[key]);
+    }
+  }
+  return Object.fromEntries([...normalized.entries()].sort(([left], [right]) => (
+    left.localeCompare(right)
+  )));
+}
+
+function normalizeOverride(override, id) {
+  if (!isObject(override)) return structuredClone(override);
+  const normalized = {};
+  for (const key of Object.keys(override).sort()) {
+    if (key === 'sideEffects' || key === 'rollback') continue;
+    if (key === 'allowedRoles') {
+      normalized.allowedRoles = normalizeStringSet(override.allowedRoles);
+    } else if (key === 'parameterExamples') {
+      normalized.parameterExamples = normalizeParameterExamples(override.parameterExamples, id);
+    } else {
+      normalized[key] = structuredClone(override[key]);
+    }
+  }
+
+  let nestedRollback;
+  let hasNestedRollback = false;
+  if (hasOwn(override, 'sideEffects')) {
+    const source = override.sideEffects;
+    if (Array.isArray(source)) {
+      normalized.sideEffects = { classes: normalizeStringSet(source) };
+    } else if (isObject(source)) {
+      if (hasOwn(source, 'classes')) {
+        normalized.sideEffects = { classes: normalizeStringSet(source.classes) };
+      }
+      if (hasOwn(source, 'rollback')) {
+        nestedRollback = structuredClone(source.rollback);
+        hasNestedRollback = true;
+      }
+    } else {
+      normalized.sideEffects = structuredClone(source);
+    }
+  }
+
+  if (hasOwn(override, 'rollback')
+      && hasNestedRollback
+      && !isDeepStrictEqual(override.rollback, nestedRollback)) {
+    overrideConflict(id, 'rollback');
+  }
+  if (hasOwn(override, 'rollback')) {
+    normalized.rollback = structuredClone(override.rollback);
+  } else if (hasNestedRollback) {
+    normalized.rollback = nestedRollback;
+  }
+  return normalized;
+}
+
+function mergeParameterExamples(left, right, id) {
+  const merged = { ...left };
+  for (const key of Object.keys(right).sort()) {
+    if (hasOwn(merged, key) && !isDeepStrictEqual(merged[key], right[key])) {
+      overrideConflict(id, 'parameterExamples');
+    }
+    merged[key] = structuredClone(right[key]);
+  }
+  return Object.fromEntries(Object.keys(merged).sort().map((key) => [key, merged[key]]));
+}
+
+function mergeSideEffects(left, right, id) {
+  if (!isObject(left) || !isObject(right)) {
+    if (!isDeepStrictEqual(left, right)) overrideConflict(id, 'sideEffects');
+    return structuredClone(left);
+  }
+  const merged = { ...left };
+  for (const key of Object.keys(right).sort()) {
+    if (hasOwn(merged, key) && !isDeepStrictEqual(merged[key], right[key])) {
+      overrideConflict(id, 'sideEffects');
+    }
+    merged[key] = structuredClone(right[key]);
+  }
+  return merged;
+}
+
+function mergeOverride(target, addition, id) {
+  const left = target === undefined ? {} : normalizeOverride(target, id);
+  const right = normalizeOverride(addition, id);
+  if (!isObject(left) || !isObject(right)) {
+    if (!isDeepStrictEqual(left, right)) overrideConflict(id, 'definition');
+    return left;
+  }
+
+  const merged = {};
+  const fields = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+  for (const field of fields) {
+    if (!hasOwn(left, field)) {
+      merged[field] = structuredClone(right[field]);
+    } else if (!hasOwn(right, field)) {
+      merged[field] = structuredClone(left[field]);
+    } else if (field === 'parameterExamples'
+        && isObject(left[field])
+        && isObject(right[field])) {
+      merged[field] = mergeParameterExamples(left[field], right[field], id);
+    } else if (field === 'sideEffects') {
+      merged[field] = mergeSideEffects(left[field], right[field], id);
+    } else if (isDeepStrictEqual(left[field], right[field])) {
+      merged[field] = structuredClone(left[field]);
+    } else {
+      overrideConflict(id, field);
+    }
+  }
+  return merged;
 }
 
 function collectOverrideMaps(config) {
@@ -69,7 +207,7 @@ function collectOverrideMaps(config) {
   const addEntries = (target, source) => {
     if (!isObject(source)) return;
     for (const id of Object.keys(source).sort()) {
-      target.set(id, mergeOverride(target.get(id), source[id]));
+      target.set(id, mergeOverride(target.get(id), source[id], id));
     }
   };
 
@@ -80,7 +218,10 @@ function collectOverrideMaps(config) {
       addEntries(routeOverrides, trusted.routes);
       for (const key of Object.keys(trusted)) {
         if (key !== 'operations' && key !== 'routes') {
-          unknownOverrides.set(key, trusted[key]);
+          unknownOverrides.set(
+            key,
+            mergeOverride(unknownOverrides.get(key), trusted[key], key),
+          );
         }
       }
     } else {
@@ -91,17 +232,18 @@ function collectOverrideMaps(config) {
   addEntries(routeOverrides, config?.routeOverrides);
 
   for (const [id, roles] of Object.entries(config?.operationRoles ?? {}).sort()) {
-    operationOverrides.set(id, mergeOverride(operationOverrides.get(id), { allowedRoles: roles }));
+    operationOverrides.set(
+      id,
+      mergeOverride(operationOverrides.get(id), { allowedRoles: roles }, id),
+    );
   }
   for (const [id, roles] of Object.entries(config?.routeRoles ?? {}).sort()) {
-    routeOverrides.set(id, mergeOverride(routeOverrides.get(id), { allowedRoles: roles }));
+    routeOverrides.set(
+      id,
+      mergeOverride(routeOverrides.get(id), { allowedRoles: roles }, id),
+    );
   }
   return { operationOverrides, routeOverrides, unknownOverrides };
-}
-
-function resolveOverrideId(id, records, aliases) {
-  if (records.has(id)) return id;
-  return aliases.get(id);
 }
 
 function setParameterExamples(parameters, examples, id) {
@@ -199,13 +341,17 @@ function addConfiguredParameterExamples(config, operationOverrides) {
       throw manifestError('OVERRIDE_INVALID', 'Configured parameter example is invalid');
     }
     const values = grouped.get(example.operationId) ?? {};
-    values[`${example.location}:${example.name}`] = example.value;
+    const key = `${example.location}:${example.name}`;
+    if (hasOwn(values, key) && !isDeepStrictEqual(values[key], example.value)) {
+      overrideConflict(example.operationId, 'parameterExamples');
+    }
+    values[key] = structuredClone(example.value);
     grouped.set(example.operationId, values);
   }
   for (const [id, parameterExamples] of grouped) {
     operationOverrides.set(
       id,
-      mergeOverride(operationOverrides.get(id), { parameterExamples }),
+      mergeOverride(operationOverrides.get(id), { parameterExamples }, id),
     );
   }
 }
@@ -245,17 +391,13 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
   const operations = new Map();
   const routes = new Map();
   const schemas = new Map();
-  const operationAliases = new Map();
-  const routeAliases = new Map();
   for (const result of results) {
     for (const source of result.operations) {
       const id = operationId(source.method, source.path);
-      operationAliases.set(source.id, id);
       mergeRecord(operations, { ...source, id }, 'operation');
     }
     for (const source of result.routes) {
       const id = routeId(source.path);
-      routeAliases.set(source.id, id);
       mergeRecord(routes, { ...source, id }, 'route');
     }
     for (const source of result.schemas) mergeRecord(schemas, source, 'schema');
@@ -264,17 +406,15 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
   const overrideMaps = collectOverrideMaps(config);
   addConfiguredParameterExamples(config, overrideMaps.operationOverrides);
   for (const [id, override] of overrideMaps.unknownOverrides) {
-    const operationKey = resolveOverrideId(id, operations, operationAliases);
-    const routeKey = resolveOverrideId(id, routes, routeAliases);
-    if (operationKey !== undefined) {
+    if (operations.has(id)) {
       overrideMaps.operationOverrides.set(
-        operationKey,
-        mergeOverride(overrideMaps.operationOverrides.get(operationKey), override),
+        id,
+        mergeOverride(overrideMaps.operationOverrides.get(id), override, id),
       );
-    } else if (routeKey !== undefined) {
+    } else if (routes.has(id)) {
       overrideMaps.routeOverrides.set(
-        routeKey,
-        mergeOverride(overrideMaps.routeOverrides.get(routeKey), override),
+        id,
+        mergeOverride(overrideMaps.routeOverrides.get(id), override, id),
       );
     } else {
       throw manifestError('OVERRIDE_ID_UNKNOWN', `Trusted override ID ${id} was not discovered`);
@@ -282,24 +422,25 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
   }
 
   for (const [requestedId, override] of [...overrideMaps.operationOverrides.entries()]) {
-    const id = resolveOverrideId(requestedId, operations, operationAliases);
-    if (id === undefined) {
+    if (!operations.has(requestedId)) {
       throw manifestError(
         'OVERRIDE_ID_UNKNOWN',
         `Trusted operation override ID ${requestedId} was not discovered`,
       );
     }
-    operations.set(id, applyOperationOverride(operations.get(id), override));
+    operations.set(
+      requestedId,
+      applyOperationOverride(operations.get(requestedId), override),
+    );
   }
   for (const [requestedId, override] of [...overrideMaps.routeOverrides.entries()]) {
-    const id = resolveOverrideId(requestedId, routes, routeAliases);
-    if (id === undefined) {
+    if (!routes.has(requestedId)) {
       throw manifestError(
         'OVERRIDE_ID_UNKNOWN',
         `Trusted route override ID ${requestedId} was not discovered`,
       );
     }
-    routes.set(id, applyRouteOverride(routes.get(id), override));
+    routes.set(requestedId, applyRouteOverride(routes.get(requestedId), override));
   }
 
   const statuses = results.map((result) => result.coverage.status);

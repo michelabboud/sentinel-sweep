@@ -142,6 +142,7 @@
     },
     "/api/admin": {
       "get": {
+        "operationId": "getAdminStatus",
         "x-sentinel-allowed-roles": [
           "admin"
         ],
