@@ -1,133 +1,153 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "settings.schema.json",
-  "title": "Sentinel Settings",
-  "description": "Schema for settings.json that configures Sentinel sweep behavior including risk policy, browser settings, breakpoints, services, and report output.",
+  "$id": "sentinel-settings-v2",
+  "title": "Sentinel 2.0 trusted settings",
   "type": "object",
+  "required": [
+    "schemaVersion",
+    "requireConfigPath",
+    "reportDir",
+    "approvedOrigins",
+    "roles",
+    "allowMutations",
+    "mutationAllowlist",
+    "allowNonLoopback",
+    "targetEnvironment",
+    "requireCompleteCoverage",
+    "maxConcurrency",
+    "responseTimeoutMs",
+    "viewports"
+  ],
+  "additionalProperties": false,
   "properties": {
-    "riskPolicy": {
-      "type": "object",
-      "description": "Controls which actions are executed based on risk level.",
-      "properties": {
-        "maxRiskLevel": {
-          "type": "string",
-          "enum": ["safe", "medium", "high", "critical"],
-          "default": "medium",
-          "description": "Maximum risk level that will be executed without sandbox approval."
-        },
-        "alwaysSkip": {
-          "type": "array",
-          "items": { "type": "string" },
-          "default": [],
-          "description": "List of METHOD /path patterns to always skip regardless of risk level."
-        },
-        "alwaysAllow": {
-          "type": "array",
-          "items": { "type": "string" },
-          "default": [],
-          "description": "List of METHOD /path patterns to always allow regardless of risk level."
-        }
-      },
-      "additionalProperties": false
-    },
-    "breakpoints": {
+    "schemaVersion": { "const": "2.0" },
+    "requireConfigPath": { "const": true },
+    "reportDir": { "type": "string", "minLength": 1 },
+    "approvedOrigins": {
       "type": "array",
-      "description": "Viewport widths in pixels for responsive layout testing.",
       "items": {
-        "type": "integer",
-        "minimum": 1
-      },
-      "default": [375, 768, 1280]
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^https?://[^/?#]+$"
+      }
     },
-    "responseTimeout": {
+    "roles": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    },
+    "allowMutations": { "type": "boolean" },
+    "mutationAllowlist": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "allowNonLoopback": { "type": "boolean" },
+    "targetEnvironment": {
+      "type": "string",
+      "enum": ["unknown", "development", "test", "staging", "production"]
+    },
+    "requireCompleteCoverage": { "type": "boolean" },
+    "maxConcurrency": {
       "type": "integer",
       "minimum": 1,
-      "default": 5000,
-      "description": "Maximum response time in milliseconds before a request is considered slow."
+      "maximum": 32
     },
-    "screenshotOnError": {
-      "type": "boolean",
-      "default": true,
-      "description": "Whether to capture screenshots when errors are detected during browser sweeps."
+    "responseTimeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120000
     },
-    "reportDir": {
-      "type": "string",
-      "default": "sentinel-reports",
-      "description": "Base output directory for sweep reports and run directories."
+    "viewports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000
+      }
     },
-    "browser": {
-      "type": "object",
-      "description": "Browser configuration for Playwright-based sweeps.",
-      "properties": {
-        "headless": {
-          "type": "boolean",
-          "default": true,
-          "description": "Run browser in headless mode."
-        },
-        "browserType": {
-          "type": "string",
-          "enum": ["chromium", "firefox", "webkit"],
-          "default": "chromium",
-          "description": "Browser engine to use for sweeps."
-        }
-      },
-      "additionalProperties": false
-    },
-    "auth": {
-      "type": "object",
-      "description": "Authentication configuration for sweep execution.",
-      "properties": {
-        "credentialsSource": {
-          "type": "string",
-          "default": "manifest",
-          "description": "Source of test credentials. Typically 'manifest' to read from sentinel-manifest.json."
-        }
-      },
-      "additionalProperties": false
+    "chromePath": {
+      "type": ["string", "null"],
+      "minLength": 1
     },
     "emptyContainerSelectors": {
       "type": "array",
-      "description": "CSS selectors for containers that should be checked for empty content during browser sweeps.",
-      "items": {
-        "type": "string"
-      },
-      "default": ["[data-sentinel-content]", "main", ".card-body"]
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "screenshotOnError": { "type": "boolean" },
+    "maxResponseBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 104857600
+    },
+    "retentionRuns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "operationRoles": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/roleNames" }
+    },
+    "routeRoles": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/roleNames" }
+    },
+    "parameterExamples": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/parameterExample" }
     },
     "services": {
       "type": "array",
-      "description": "Multi-service configuration (v1.3.0+). Each entry defines a separate API/frontend service to sweep independently. Empty array for single-service mode.",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": ["name", "apiBaseUrl"],
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Unique service identifier (e.g. 'internal-api', 'public-portal')."
-          },
-          "apiBaseUrl": {
-            "type": "string",
-            "format": "uri",
-            "description": "API base URL for this service."
-          },
-          "baseUrl": {
-            "type": "string",
-            "format": "uri",
-            "description": "Frontend base URL for this service. Optional — omit if service has no frontend."
-          },
-          "sourcePath": {
-            "type": "string",
-            "default": ".",
-            "description": "Relative path to the service source directory for manifest generation."
-          },
-          "auth": {
-            "type": ["object", "null"],
-            "description": "Per-service auth override. Inherits from top-level auth if null."
-          }
-        },
-        "additionalProperties": false
-      }
+      "items": { "$ref": "#/$defs/service" }
     }
   },
-  "additionalProperties": false
+  "$defs": {
+    "role": {
+      "type": "object",
+      "required": ["tokenRef"],
+      "additionalProperties": false,
+      "properties": {
+        "tokenRef": {
+          "type": "string",
+          "pattern": "^env:[A-Za-z_][A-Za-z0-9_]*$"
+        }
+      }
+    },
+    "roleNames": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "parameterExample": {
+      "type": "object",
+      "required": ["operationId", "location", "name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "location": {
+          "type": "string",
+          "enum": ["path", "query", "header"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!(?:password|token)$).+"
+        },
+        "value": {
+          "type": ["string", "number", "integer", "boolean"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["name", "approvedOrigin"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "approvedOrigin": {
+          "type": "string",
+          "pattern": "^https?://[^/?#]+$"
+        },
+        "sourcePath": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
 }

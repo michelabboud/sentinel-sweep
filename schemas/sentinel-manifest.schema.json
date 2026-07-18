@@ -1,307 +1,365 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "sentinel-manifest.schema.json",
-  "title": "Sentinel Manifest",
-  "description": "Schema for sentinel-manifest.json produced by the manifest-generator agent. Describes frontend routes, backend endpoints, schemas, CRUD flows, auth config, risk policy, and cross-cutting analysis results.",
+  "$id": "sentinel-manifest-v2",
+  "title": "Sentinel 2.0 deterministic manifest",
   "type": "object",
-  "required": ["generatedAt", "app", "auth", "routes", "endpoints", "crudFlows", "schemas"],
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "target",
+    "coverage",
+    "routes",
+    "operations",
+    "schemas"
+  ],
+  "additionalProperties": false,
   "properties": {
-    "generatedAt": {
-      "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 UTC timestamp of when the manifest was generated."
-    },
-    "app": {
-      "type": "object",
-      "description": "Application metadata.",
-      "required": ["name", "framework", "baseUrl", "apiBaseUrl"],
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Application name derived from package.json, pyproject.toml, Cargo.toml, composer.json, or directory name."
-        },
-        "framework": {
-          "type": "object",
-          "required": ["frontend", "backend"],
-          "properties": {
-            "frontend": {
-              "type": "string",
-              "enum": ["vue", "nuxt", "nextjs", "react", "sveltekit", "angular", "remix", "none"],
-              "description": "Detected frontend framework."
-            },
-            "backend": {
-              "type": "string",
-              "enum": ["fastapi", "express", "django", "nestjs", "nextjs", "flask", "hono", "koa", "remix", "actix", "axum", "rocket", "gin", "echo", "chi", "laravel", "grpc", "trpc", "graphql", "none"],
-              "description": "Detected backend framework."
-            }
-          },
-          "additionalProperties": false
-        },
-        "baseUrl": {
-          "type": "string",
-          "format": "uri",
-          "description": "Frontend base URL (e.g. http://localhost:3000)."
-        },
-        "apiBaseUrl": {
-          "type": "string",
-          "format": "uri",
-          "description": "API base URL (e.g. http://localhost:8000)."
-        }
-      },
-      "additionalProperties": false
-    },
-    "auth": {
-      "type": "object",
-      "description": "Authentication configuration.",
-      "required": ["method", "loginEndpoint", "roleHierarchy", "roles"],
-      "properties": {
-        "method": {
-          "type": "string",
-          "enum": ["jwt", "nextauth", "session", "apikey", "oauth_pkce", "none"],
-          "description": "Detected authentication method."
-        },
-        "loginEndpoint": {
-          "type": ["string", "null"],
-          "description": "Full path to the login endpoint. Null if no login endpoint found."
-        },
-        "roleHierarchy": {
-          "type": "array",
-          "items": { "type": "string" },
-          "minItems": 1,
-          "description": "Ordered list of roles from most access to least."
-        },
-        "roles": {
-          "type": "object",
-          "description": "Test credentials keyed by role name.",
-          "additionalProperties": {
-            "type": "object",
-            "required": ["email", "password"],
-            "properties": {
-              "email": { "type": "string" },
-              "password": { "type": "string" }
-            },
-            "additionalProperties": false
-          }
-        },
-        "oauth": {
-          "type": ["object", "null"],
-          "description": "OAuth PKCE configuration (v1.5.0+). Null if not using OAuth.",
-          "properties": {
-            "authorizeUrl": { "type": "string" },
-            "tokenUrl": { "type": "string" },
-            "clientId": { "type": "string" },
-            "redirectUri": { "type": "string" },
-            "scopes": { "type": "string" }
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "services": {
-      "type": "array",
-      "description": "Multi-service definitions (v1.3.0+). Empty array for single-service mode.",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": ["name", "apiBaseUrl"],
-        "properties": {
-          "name": { "type": "string" },
-          "apiBaseUrl": { "type": "string", "format": "uri" },
-          "baseUrl": { "type": "string", "format": "uri" },
-          "sourcePath": { "type": "string" },
-          "auth": { "type": ["object", "null"] }
-        }
-      }
-    },
+    "schemaVersion": { "const": "2.0" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "target": { "$ref": "#/$defs/target" },
+    "coverage": { "$ref": "#/$defs/coverage" },
     "routes": {
       "type": "array",
-      "description": "Frontend routes.",
       "items": { "$ref": "#/$defs/route" }
     },
-    "endpoints": {
+    "operations": {
       "type": "array",
-      "description": "Backend API endpoints.",
-      "items": { "$ref": "#/$defs/endpoint" }
-    },
-    "crudFlows": {
-      "type": "array",
-      "description": "Detected CRUD lifecycle flows.",
-      "items": { "$ref": "#/$defs/crudFlow" }
+      "items": { "$ref": "#/$defs/operation" }
     },
     "schemas": {
       "type": "object",
-      "description": "Schema definitions from Pydantic, Zod, TypeScript, Django serializers, Rust serde, Go structs, GraphQL types, or Laravel FormRequest.",
-      "additionalProperties": { "$ref": "#/$defs/schemaDefinition" }
+      "additionalProperties": { "$ref": "#/$defs/schemaRecord" }
     },
-    "breakpoints": {
+    "auth": { "$ref": "#/$defs/auth" },
+    "services": {
       "type": "array",
-      "items": { "type": "integer", "minimum": 1 }
+      "items": { "$ref": "#/$defs/service" }
     },
-    "riskPolicy": { "$ref": "#/$defs/riskPolicy" },
-    "i18n": {
-      "type": ["object", "null"],
-      "description": "i18n analysis results (v1.5.0+). Null if no i18n system detected."
-    },
-    "a11y": {
-      "type": ["object", "null"],
-      "description": "Accessibility analysis results (v1.6.0+). Null if no frontend detected."
-    },
-    "deadCode": {
-      "type": ["object", "null"],
-      "description": "Dead endpoint/route detection results (v1.6.0+). Null if no dead code found."
-    },
-    "deadCss": {
-      "type": ["object", "null"],
-      "description": "CSS/Tailwind dead class analysis results (v1.7.1+). Null if no CSS system detected."
-    },
-    "n1Queries": {
-      "type": ["object", "null"],
-      "description": "N+1 query detection results (v1.8.0+). Null if no N+1 patterns found."
-    },
-    "vulnerabilities": {
-      "type": ["object", "null"],
-      "description": "Dependency vulnerability scanning results (v1.8.0+). Null if no package managers found."
-    },
-    "apiVersioning": {
-      "type": ["object", "null"],
-      "description": "API versioning analysis results (v1.7.0+). Null if single version."
-    },
-    "migrationDrift": {
-      "type": ["object", "null"],
-      "description": "Database migration drift detection results (v1.7.0+). Null if no drift found."
-    },
-    "rateLimiting": {
-      "type": ["object", "null"],
-      "description": "Rate limiting detection results (v1.7.0+). Null if no rate limiting detected."
-    }
+    "i18n": { "$ref": "#/$defs/analysis" },
+    "a11y": { "$ref": "#/$defs/analysis" },
+    "deadCode": { "$ref": "#/$defs/analysis" },
+    "deadCss": { "$ref": "#/$defs/analysis" },
+    "n1Queries": { "$ref": "#/$defs/analysis" },
+    "vulnerabilities": { "$ref": "#/$defs/analysis" },
+    "apiVersioning": { "$ref": "#/$defs/analysis" },
+    "migrationDrift": { "$ref": "#/$defs/analysis" },
+    "rateLimiting": { "$ref": "#/$defs/analysis" }
   },
-  "additionalProperties": true,
   "$defs": {
-    "riskLevel": {
-      "type": "string",
-      "enum": ["safe", "medium", "high", "critical"]
-    },
-    "riskScore": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 100
-    },
-    "paramValue": {
-      "type": "string",
-      "pattern": "^(lookup:|static:|env:).+"
-    },
-    "route": {
+    "target": {
       "type": "object",
-      "required": ["path", "view", "requiredRole", "riskLevel", "riskScore", "params"],
+      "required": ["name", "root"],
+      "additionalProperties": false,
       "properties": {
-        "path": { "type": "string" },
-        "view": { "type": "string" },
-        "requiredRole": { "type": ["string", "null"] },
-        "riskLevel": { "$ref": "#/$defs/riskLevel" },
-        "riskScore": { "$ref": "#/$defs/riskScore" },
-        "params": {
-          "type": ["object", "null"],
-          "additionalProperties": { "$ref": "#/$defs/paramValue" }
-        },
-        "description": { "type": ["string", "null"] },
-        "service": { "type": ["string", "null"] },
-        "manual": { "type": "boolean", "default": false }
-      },
-      "additionalProperties": false
+        "name": { "type": "string", "minLength": 1 },
+        "root": { "type": "string", "minLength": 1 },
+        "framework": { "$ref": "#/$defs/framework" }
+      }
     },
-    "endpoint": {
+    "framework": {
       "type": "object",
-      "required": ["method", "path", "requiredRole", "riskLevel", "riskScore", "responseSchema", "description", "sideEffects", "requiresConfirm", "params"],
+      "required": ["frontend", "backend"],
+      "additionalProperties": false,
+      "properties": {
+        "frontend": {
+          "type": "string",
+          "enum": ["vue", "nuxt", "nextjs", "react", "sveltekit", "angular", "remix", "none", "unknown"]
+        },
+        "backend": {
+          "type": "string",
+          "enum": ["fastapi", "express", "django", "nestjs", "nextjs", "flask", "hono", "koa", "remix", "actix", "axum", "rocket", "gin", "echo", "chi", "laravel", "graphql", "grpc", "trpc", "none", "unknown"]
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["method"],
+      "additionalProperties": false,
       "properties": {
         "method": {
           "type": "string",
-          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+          "enum": ["bearer", "jwt", "nextauth", "session", "apikey", "oauth_pkce", "none", "unknown"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": ["string", "null"] }
+      }
+    },
+    "analysis": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["status", "diagnostics"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["complete", "partial", "unsupported"]
+            },
+            "diagnostics": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/diagnostic" }
+            }
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["status", "diagnostics"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "partial", "unsupported"]
         },
-        "path": { "type": "string" },
-        "requiredRole": { "type": ["string", "null"] },
-        "riskLevel": { "$ref": "#/$defs/riskLevel" },
-        "riskScore": { "$ref": "#/$defs/riskScore" },
-        "responseSchema": { "type": ["string", "null"] },
-        "description": { "type": ["string", "null"] },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": ["string", "null"] },
+        "pointer": { "type": ["string", "null"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["adapter", "sourcePath"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": ["openapi", "vue-router"]
+        },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "pointer": { "type": ["string", "null"] }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "required": ["state", "roles"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["public", "authenticated", "roles", "unknown"]
+        },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["name", "location", "required", "schema"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "location": {
+          "type": "string",
+          "enum": ["path", "query", "header", "cookie"]
+        },
+        "required": { "type": "boolean" },
+        "schema": { "$ref": "#/$defs/schemaNode" },
+        "example": {}
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["id", "path", "authorization", "parameters", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "pattern": "^/" },
+        "name": { "type": ["string", "null"] },
+        "component": { "type": ["string", "null"] },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^/" }
+        },
+        "authorization": { "$ref": "#/$defs/authorization" },
+        "parameters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameter" }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "required": [
+        "id",
+        "method",
+        "path",
+        "parameters",
+        "authorization",
+        "sideEffects",
+        "mutation",
+        "risk",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
+        },
+        "path": { "type": "string", "pattern": "^/" },
+        "summary": { "type": ["string", "null"] },
+        "parameters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameter" }
+        },
+        "requestBody": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/requestBody" }
+          ]
+        },
+        "responses": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/response" }
+        },
+        "authorization": { "$ref": "#/$defs/authorization" },
+        "targetModel": { "type": ["string", "null"] },
+        "deleteMode": {
+          "type": ["string", "null"],
+          "enum": ["soft", "hard", "unknown", null]
+        },
         "sideEffects": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string", "minLength": 1 }
         },
-        "requiresConfirm": { "type": "boolean" },
-        "params": {
-          "type": ["object", "null"],
-          "additionalProperties": { "$ref": "#/$defs/paramValue" }
-        },
-        "service": { "type": ["string", "null"] },
+        "rollback": { "type": ["string", "null"] },
+        "mutation": { "type": "boolean" },
         "protocol": {
           "type": "string",
-          "enum": ["http", "websocket"],
-          "default": "http"
+          "enum": ["http", "websocket"]
         },
-        "sweepable": {
-          "type": "boolean",
-          "default": true
-        },
-        "manual": { "type": "boolean", "default": false }
-      },
-      "additionalProperties": false
+        "sweepable": { "type": "boolean" },
+        "risk": { "$ref": "#/$defs/risk" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
     },
-    "crudFlow": {
+    "requestBody": {
       "type": "object",
-      "required": ["name", "steps", "riskLevel", "manual"],
+      "required": ["required", "contentType", "schema"],
+      "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "steps": {
-          "type": "array",
-          "items": { "type": "string" },
-          "minItems": 2
-        },
-        "riskLevel": { "$ref": "#/$defs/riskLevel" },
-        "manual": { "type": "boolean" }
-      },
-      "additionalProperties": false
+        "required": { "type": "boolean" },
+        "contentType": { "type": "string", "minLength": 1 },
+        "schema": { "$ref": "#/$defs/schemaNode" }
+      }
     },
-    "schemaDefinition": {
+    "response": {
       "type": "object",
-      "required": ["source", "fields"],
+      "required": ["contentType", "schema"],
+      "additionalProperties": false,
       "properties": {
-        "source": { "type": "string" },
-        "fields": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "required": ["type", "required", "nullable"],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["string", "number", "boolean", "array", "object"]
-              },
-              "required": { "type": "boolean" },
-              "nullable": { "type": "boolean" }
-            },
-            "additionalProperties": true
-          }
-        },
-        "note": { "type": "string" },
-        "schemaOverride": { "type": "object" }
-      },
-      "additionalProperties": false
-    },
-    "riskPolicy": {
-      "type": "object",
-      "required": ["maxRiskLevel", "alwaysSkip", "alwaysAllow"],
-      "properties": {
-        "maxRiskLevel": { "$ref": "#/$defs/riskLevel" },
-        "alwaysSkip": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "alwaysAllow": {
-          "type": "array",
-          "items": { "type": "string" }
+        "contentType": { "type": ["string", "null"] },
+        "schema": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/schemaNode" }
+          ]
         }
-      },
-      "additionalProperties": false
+      }
+    },
+    "risk": {
+      "type": "object",
+      "required": ["score", "level", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "level": {
+          "type": "string",
+          "enum": ["safe", "medium", "high", "critical"]
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "schemaRecord": {
+      "type": "object",
+      "required": ["schema", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/schemaNode" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "schemaNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "$ref": { "type": "string", "minLength": 1 },
+        "type": {
+          "anyOf": [
+            { "type": "string" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          ]
+        },
+        "const": {},
+        "enum": { "type": "array", "items": {} },
+        "required": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/schemaNode" }
+        },
+        "additionalProperties": {
+          "anyOf": [
+            { "type": "boolean" },
+            { "$ref": "#/$defs/schemaNode" }
+          ]
+        },
+        "items": { "$ref": "#/$defs/schemaNode" },
+        "minItems": { "type": "integer", "minimum": 0 },
+        "minLength": { "type": "integer", "minimum": 0 },
+        "pattern": { "type": "string" },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "anyOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/schemaNode" }
+        },
+        "oneOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/schemaNode" }
+        },
+        "allOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/schemaNode" }
+        }
+      }
     }
   }
 }

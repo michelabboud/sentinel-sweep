@@ -1,112 +1,52 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "sweep-history.schema.json",
-  "title": "Sentinel Sweep History",
-  "description": "Schema for sweep-history.json that accumulates summary data from each sweep run, enabling cross-run trend analysis.",
+  "$id": "sentinel-history-v2",
+  "title": "Sentinel 2.0 sweep history",
   "type": "object",
-  "required": ["runs"],
+  "required": ["schemaVersion", "runs"],
+  "additionalProperties": false,
   "properties": {
+    "schemaVersion": { "const": "2.0" },
     "runs": {
       "type": "array",
-      "description": "Chronological list of sweep run summaries.",
-      "items": {
-        "$ref": "#/$defs/run"
-      }
+      "items": { "$ref": "#/$defs/run" }
     }
   },
-  "additionalProperties": false,
   "$defs": {
     "run": {
       "type": "object",
-      "description": "Summary of a single sweep run.",
       "required": [
         "runId",
-        "mode",
-        "duration",
-        "rolesTested",
-        "routesTested",
-        "endpointsTested",
-        "findings",
-        "passed",
-        "passRate",
-        "sandboxMode",
-        "timestamp"
+        "startedAt",
+        "finishedAt",
+        "coverageStatus",
+        "summary"
       ],
+      "additionalProperties": false,
       "properties": {
-        "runId": {
+        "runId": { "type": "string", "minLength": 1 },
+        "startedAt": { "type": "string", "minLength": 1 },
+        "finishedAt": { "type": "string", "minLength": 1 },
+        "coverageStatus": {
           "type": "string",
-          "description": "Filesystem-safe ISO timestamp (e.g. 2026-03-15T14-30-00Z)."
+          "enum": ["complete", "partial", "unsupported"]
         },
-        "mode": {
-          "type": "string",
-          "enum": ["browser + api", "api-only"],
-          "description": "Sweep mode."
-        },
-        "duration": {
-          "type": "string",
-          "description": "Human-readable elapsed time (e.g. '2m 34s')."
-        },
-        "rolesTested": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "routesTested": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "endpointsTested": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "findings": {
-          "type": "object",
-          "required": ["critical", "error", "warning", "info"],
-          "properties": {
-            "critical": { "type": "integer", "minimum": 0 },
-            "error": { "type": "integer", "minimum": 0 },
-            "warning": { "type": "integer", "minimum": 0 },
-            "info": { "type": "integer", "minimum": 0 }
-          },
-          "additionalProperties": false
-        },
-        "passed": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "passRate": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "sandboxMode": {
-          "type": "boolean"
-        },
-        "timestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "healthScore": {
-          "type": ["integer", "null"],
-          "minimum": 0,
-          "maximum": 100,
-          "description": "Composite project health score (v1.7.0+). Null for older runs."
-        },
-        "commitSha": {
-          "type": ["string", "null"],
-          "description": "Git commit SHA at time of sweep (v1.7.0+). Used by --changed-only for incremental sweeps."
-        },
-        "responseTimePercentiles": {
-          "type": ["object", "null"],
-          "description": "Global response time percentiles for this run (v1.8.0+).",
-          "properties": {
-            "p50": { "type": "number" },
-            "p95": { "type": "number" },
-            "p99": { "type": "number" },
-            "avg": { "type": "number" }
-          }
-        }
-      },
-      "additionalProperties": true
+        "summary": { "$ref": "#/$defs/summary" },
+        "healthScore": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+        "commitSha": { "type": ["string", "null"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["critical", "error", "warning", "info", "skipped"],
+      "additionalProperties": false,
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
     }
   }
 }

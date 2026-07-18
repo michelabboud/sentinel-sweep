@@ -1,152 +1,165 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "findings.schema.json",
-  "title": "Sentinel Findings",
-  "description": "Schema for api-findings.json and browser-findings.json produced by the api-sweeper and browser-sweeper agents. Contains sweep metadata and an array of findings.",
+  "$id": "sentinel-findings-v2",
+  "title": "Sentinel 2.0 canonical findings",
   "type": "object",
-  "required": ["metadata", "findings"],
-  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "startedAt",
+    "finishedAt",
+    "coverage",
+    "summary",
+    "findings"
+  ],
+  "additionalProperties": false,
   "properties": {
-    "metadata": {
-      "type": "object",
-      "description": "Sweep execution metadata.",
-      "required": ["mode", "rolesTested"],
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": ["api", "browser"],
-          "description": "Sweep mode: api for API-only sweeps, browser for browser sweeps."
-        },
-        "rolesTested": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "List of roles exercised during the sweep."
-        },
-        "endpointsTested": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Total number of API endpoints tested."
-        },
-        "routesTested": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Total number of browser routes tested."
-        },
-        "startedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "ISO 8601 timestamp when the sweep started."
-        },
-        "finishedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "ISO 8601 timestamp when the sweep finished."
-        },
-        "responseTimePercentiles": {
-          "type": ["object", "null"],
-          "description": "Response time percentile data (v1.8.0+). Contains global and per-endpoint p50/p95/p99/avg.",
-          "properties": {
-            "global": {
-              "type": "object",
-              "properties": {
-                "p50": { "type": "number" },
-                "p95": { "type": "number" },
-                "p99": { "type": "number" },
-                "avg": { "type": "number" }
-              }
-            },
-            "byEndpoint": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "object",
-                "properties": {
-                  "p50": { "type": "number" },
-                  "p95": { "type": "number" },
-                  "p99": { "type": "number" },
-                  "avg": { "type": "number" },
-                  "samples": { "type": "integer" }
-                }
-              }
-            },
-            "slowest": {
-              "type": "array",
-              "items": { "type": "string" }
-            }
-          }
-        }
-      },
-      "additionalProperties": true
-    },
+    "schemaVersion": { "const": "2.0" },
+    "runId": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "minLength": 1 },
+    "finishedAt": { "type": "string", "minLength": 1 },
+    "manifestGeneratedAt": { "type": ["string", "null"] },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "responseTimePercentiles": { "$ref": "#/$defs/percentiles" },
     "findings": {
       "type": "array",
-      "description": "Array of individual findings discovered during the sweep.",
-      "items": {
-        "$ref": "#/$defs/finding"
-      }
+      "items": { "$ref": "#/$defs/finding" }
     }
   },
   "$defs": {
+    "coverage": {
+      "type": "object",
+      "required": ["status", "diagnostics"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "partial", "unsupported"]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": ["string", "null"] },
+        "pointer": { "type": ["string", "null"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["critical", "error", "warning", "info", "skipped"],
+      "additionalProperties": false,
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
     "finding": {
       "type": "object",
-      "description": "A single finding from the sweep.",
-      "required": ["severity", "category", "message"],
-      "additionalProperties": true,
+      "required": [
+        "id",
+        "severity",
+        "category",
+        "message",
+        "subject",
+        "role",
+        "evidence",
+        "provenance"
+      ],
+      "additionalProperties": false,
       "properties": {
+        "id": { "type": "string", "minLength": 1 },
         "severity": {
           "type": "string",
-          "enum": ["critical", "error", "warning", "info"],
-          "description": "Finding severity level."
+          "enum": ["critical", "error", "warning", "info"]
         },
         "category": {
           "type": "string",
-          "enum": ["health", "rbac", "crud", "schema", "security", "console", "layout", "i18n", "network", "visual"],
-          "description": "Finding category indicating the type of check that produced it."
+          "enum": [
+            "health",
+            "rbac",
+            "schema",
+            "security",
+            "policy",
+            "coverage",
+            "configuration",
+            "console",
+            "network",
+            "layout",
+            "content",
+            "visual",
+            "runtime"
+          ]
         },
-        "endpoint": {
-          "type": ["string", "null"],
-          "description": "API endpoint in METHOD /path format (e.g. GET /api/v1/users). Null for non-endpoint findings."
-        },
-        "route": {
-          "type": ["string", "null"],
-          "description": "Frontend route path (e.g. /admin/users). Null for non-route findings."
-        },
-        "role": {
-          "type": ["string", "null"],
-          "description": "Role that triggered the finding (e.g. admin, manager, user, unauthenticated)."
-        },
-        "message": {
-          "type": "string",
-          "description": "Human-readable description of the finding."
-        },
-        "expected": {
-          "type": ["string", "null"],
-          "description": "What was expected. Null if not applicable."
-        },
-        "actual": {
-          "type": ["string", "null"],
-          "description": "What was actually observed. Null if not applicable."
-        },
-        "fileRef": {
-          "type": ["string", "null"],
-          "description": "Source file and line reference (e.g. endpoints/users.py:45). Null if unknown."
-        },
-        "fixSuggestion": {
-          "type": ["string", "null"],
-          "description": "Suggested fix for the finding. Null if none."
-        },
-        "breakpoint": {
-          "type": ["integer", "null"],
-          "description": "Viewport width in pixels that triggered the finding. Null for non-layout findings.",
-          "minimum": 1
-        },
-        "screenshot": {
-          "type": ["string", "null"],
-          "description": "Relative path to a screenshot file. Null if no screenshot was captured."
-        },
-        "service": {
-          "type": ["string", "null"],
-          "description": "Service name in multi-service mode (v1.3.0+). Null in single-service mode."
+        "message": { "type": "string", "minLength": 1 },
+        "service": { "type": ["string", "null"] },
+        "subject": { "$ref": "#/$defs/subject" },
+        "role": { "type": ["string", "null"] },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "provenance": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/provenance" }
         }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["operation", "route", "run", "configuration"]
+        },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expected": { "type": ["string", "null"] },
+        "actual": { "type": ["string", "null"] },
+        "statusCode": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
+        "durationMs": { "type": ["number", "null"], "minimum": 0 },
+        "viewport": { "type": ["integer", "null"], "minimum": 1 },
+        "screenshotPath": { "type": ["string", "null"] }
+      }
+    },
+    "percentiles": {
+      "type": "object",
+      "required": ["p50", "p95", "p99", "average"],
+      "additionalProperties": false,
+      "properties": {
+        "p50": { "type": "number", "minimum": 0 },
+        "p95": { "type": "number", "minimum": 0 },
+        "p99": { "type": "number", "minimum": 0 },
+        "average": { "type": "number", "minimum": 0 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["manifest", "policy", "api", "browser", "runtime"]
+        },
+        "sourcePath": { "type": ["string", "null"] },
+        "pointer": { "type": ["string", "null"] }
       }
     }
   }

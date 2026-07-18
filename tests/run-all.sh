@@ -16,6 +16,7 @@ FAILED_SUITES=0
 FAILED_NAMES=()
 
 TESTS=(
+  "run-node-tests.sh"
   "test-structure.sh"
   "test-frontmatter.sh"
   "test-manifest-schema.sh"

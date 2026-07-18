@@ -1,20 +1,16 @@
 {
-  "riskPolicy": {
-    "maxRiskLevel": "medium",
-    "alwaysSkip": [],
-    "alwaysAllow": []
-  },
-  "breakpoints": [375, 768, 1280],
-  "responseTimeout": 5000,
-  "screenshotOnError": true,
+  "schemaVersion": "2.0",
+  "requireConfigPath": true,
   "reportDir": "sentinel-reports",
-  "browser": {
-    "headless": true,
-    "browserType": "chromium"
-  },
-  "auth": {
-    "credentialsSource": "manifest"
-  },
-  "emptyContainerSelectors": ["[data-sentinel-content]", "main", ".card-body"],
-  "services": []
+  "approvedOrigins": [],
+  "roles": {},
+  "allowMutations": false,
+  "mutationAllowlist": [],
+  "allowNonLoopback": false,
+  "targetEnvironment": "unknown",
+  "requireCompleteCoverage": true,
+  "maxConcurrency": 4,
+  "responseTimeoutMs": 5000,
+  "viewports": [375, 768, 1280],
+  "screenshotOnError": true
 }

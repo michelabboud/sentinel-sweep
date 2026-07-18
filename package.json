@@ -1,0 +1,17 @@
+{
+  "name": "sentinel-sweep",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test:node": "bash tests/run-node-tests.sh",
+    "test": "bash tests/run-all.sh",
+    "lint": "find runtime tests -type f -name '*.mjs' -exec node --check {} \\;",
+    "audit": "node -e \"const p=require('./package.json'); if (Object.keys(p.dependencies || {}).length || Object.keys(p.devDependencies || {}).length) process.exit(1)\""
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
