@@ -83,6 +83,41 @@ export async function startHttpFixture({ adminToken, userToken, slowDelayMs = 15
       return;
     }
 
+    if (request.method === 'GET' && url.pathname === '/json-text') {
+      const body = '{"ok":true}';
+      response.writeHead(200, {
+        'content-length': Buffer.byteLength(body),
+        'content-type': 'text/plain; charset=utf-8',
+      });
+      response.end(body);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/json-malformed') {
+      const body = '{"ok":';
+      response.writeHead(200, {
+        'content-length': Buffer.byteLength(body),
+        'content-type': 'application/json',
+      });
+      response.end(body);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/json-valid') {
+      json(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/json-problem') {
+      const body = '{"problem":false}';
+      response.writeHead(200, {
+        'content-length': Buffer.byteLength(body),
+        'content-type': 'application/problem+json; charset=utf-8',
+      });
+      response.end(body);
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/redirect/same') {
       response.writeHead(302, { location: '/public' });
       response.end();

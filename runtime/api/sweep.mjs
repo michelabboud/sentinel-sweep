@@ -230,59 +230,104 @@ function statusObservation(operation, role, result) {
   });
 }
 
-function schemaObservation(operation, role, result, definition, registry) {
-  const declaredJson = typeof definition?.contentType === 'string'
-    && /^(?:application|text)\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/iu.test(definition.contentType);
-  if (!declaredJson || definition.schemaId === null || definition.schemaId === undefined) {
-    return null;
-  }
+function normalizedMediaType(value) {
+  if (typeof value !== 'string') return null;
+  const mediaType = value.split(';', 1)[0].trim().toLowerCase();
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(mediaType)
+    ? mediaType
+    : null;
+}
 
-  let value;
-  try {
-    value = JSON.parse(result.bodyText);
-  } catch {
-    return observation(operation, {
-      category: 'schema',
-      severity: 'error',
-      outcome: 'fail',
-      role,
-      reasonCode: 'JSON_RESPONSE_INVALID',
-      message: `${operation.method} ${operation.path} returned invalid declared JSON`,
-      expected: definition.schemaId,
-      actual: 'invalid JSON',
-      evidence: { ...result, schemaViolations: [{ path: '', keyword: 'parse' }] },
-    });
-  }
+function isJsonMediaType(mediaType) {
+  return mediaType === 'application/json'
+    || (typeof mediaType === 'string'
+      && mediaType.startsWith('application/')
+      && mediaType.endsWith('+json'));
+}
 
-  const record = registry?.[definition.schemaId];
-  if (record === null || typeof record !== 'object' || Array.isArray(record)
-      || record.schema === null || typeof record.schema !== 'object') {
-    return observation(operation, {
-      category: 'schema',
-      severity: 'error',
-      outcome: 'fail',
-      role,
-      reasonCode: 'SCHEMA_NOT_FOUND',
-      message: `${operation.method} ${operation.path} references an unavailable response schema`,
-      expected: definition.schemaId,
-      actual: 'schema unavailable',
-      evidence: { ...result, schemaViolations: [{ path: '', keyword: '$ref' }] },
-    });
-  }
+function bodyInspection(reasonCode = null, schemaViolations = []) {
+  return { reasonCode, schemaViolations };
+}
 
-  const violations = checkJsonSchema(value, record.schema, registry);
-  if (violations.length === 0) return null;
-  return observation(operation, {
+function responseBodyInspector(operation, registry) {
+  return ({ text, status, contentType }) => {
+    const definition = responseDefinition(operation, status);
+    if (definition === null) return bodyInspection();
+
+    const expectedMediaType = normalizedMediaType(definition.contentType);
+    if (!isJsonMediaType(expectedMediaType)) return bodyInspection();
+    if (normalizedMediaType(contentType) !== expectedMediaType) {
+      return bodyInspection('CONTENT_TYPE_MISMATCH');
+    }
+
+    let value;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return bodyInspection(
+        'JSON_RESPONSE_INVALID',
+        [{ path: '', keyword: 'parse' }],
+      );
+    }
+
+    if (definition.schemaId === null || definition.schemaId === undefined) {
+      return bodyInspection();
+    }
+
+    const record = registry?.[definition.schemaId];
+    if (record === null || typeof record !== 'object' || Array.isArray(record)
+        || record.schema === null || typeof record.schema !== 'object') {
+      return bodyInspection('SCHEMA_NOT_FOUND', [{ path: '', keyword: '$ref' }]);
+    }
+
+    const violations = checkJsonSchema(value, record.schema, registry);
+    return violations.length === 0
+      ? bodyInspection()
+      : bodyInspection('SCHEMA_VIOLATION', violations);
+  };
+}
+
+function inspectionObservation(operation, role, result, definition) {
+  const reasonCode = result.inspection === null
+    ? 'BODY_INSPECTION_FAILED'
+    : result.inspection.reasonCode;
+  if (reasonCode === null) return null;
+
+  const expectedMediaType = normalizedMediaType(definition?.contentType);
+  const violations = result.inspection?.schemaViolations ?? [];
+  const fields = {
     category: 'schema',
     severity: 'error',
     outcome: 'fail',
     role,
-    reasonCode: 'SCHEMA_VIOLATION',
-    message: `${operation.method} ${operation.path} response drifted from its schema`,
-    expected: definition.schemaId,
-    actual: `${violations.length} schema violation${violations.length === 1 ? '' : 's'}`,
-    evidence: { ...result, schemaViolations: violations },
-  });
+    reasonCode,
+    message: `${operation.method} ${operation.path} response inspection failed`,
+    expected: definition?.schemaId ?? expectedMediaType,
+    actual: reasonCode,
+    evidence: violations.length > 0
+      ? { ...result, schemaViolations: violations }
+      : result,
+  };
+
+  if (reasonCode === 'CONTENT_TYPE_MISMATCH') {
+    fields.message = `${operation.method} ${operation.path} returned an unexpected media type`;
+    fields.expected = expectedMediaType;
+    fields.actual = normalizedMediaType(result.contentType) ?? 'missing or invalid content type';
+  } else if (reasonCode === 'JSON_RESPONSE_INVALID') {
+    fields.message = `${operation.method} ${operation.path} returned invalid declared JSON`;
+    fields.expected = expectedMediaType;
+    fields.actual = 'invalid JSON';
+  } else if (reasonCode === 'SCHEMA_NOT_FOUND') {
+    fields.message = `${operation.method} ${operation.path} references an unavailable response schema`;
+    fields.expected = definition?.schemaId ?? null;
+    fields.actual = 'schema unavailable';
+  } else if (reasonCode === 'SCHEMA_VIOLATION') {
+    fields.message = `${operation.method} ${operation.path} response drifted from its schema`;
+    fields.expected = definition?.schemaId ?? null;
+    fields.actual = `${violations.length} schema violation${violations.length === 1 ? '' : 's'}`;
+  }
+
+  return observation(operation, fields);
 }
 
 function accessPassObservation(operation, role, result) {
@@ -366,6 +411,7 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
       maxBytes: config?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
       approvedOrigins: config?.approvedOrigins,
       allowNonLoopback: config?.allowNonLoopback === true,
+      inspectBody: responseBodyInspector(operation, config.__manifestSchemas),
       fetchImpl,
     });
   } catch {
@@ -387,7 +433,7 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
 
   const definition = responseDefinition(operation, result.status);
   if (definition === null) return statusObservation(operation, role, result);
-  return schemaObservation(operation, role, result, definition, config.__manifestSchemas)
+  return inspectionObservation(operation, role, result, definition)
     ?? accessPassObservation(operation, role, result);
 }
 

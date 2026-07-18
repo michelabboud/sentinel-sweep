@@ -6,6 +6,23 @@ import { sweepApi } from '../../runtime/api/sweep.mjs';
 import { startHttpFixture } from '../fixtures/http-app.mjs';
 
 const ADMIN_TOKEN = 'sentinel-cross-origin-secret';
+const TRANSPORT_KEYS = [
+  'outcome',
+  'reasonCode',
+  'status',
+  'durationMs',
+  'bytes',
+  'redirects',
+  'contentType',
+  'inspection',
+];
+
+function assertExactTransportShape(observation) {
+  assert.deepEqual(Reflect.ownKeys(observation), TRANSPORT_KEYS);
+  assert.deepEqual(Object.getOwnPropertySymbols(observation), []);
+  assert.equal(Reflect.ownKeys(observation).some((key) => /body/iu.test(String(key))), false);
+  assert.deepEqual(Object.keys(Object.getOwnPropertyDescriptors(observation)), TRANSPORT_KEYS);
+}
 
 test('manual redirects block a cross-origin receiver without forwarding authorization', async (t) => {
   const fixture = await startHttpFixture({ adminToken: ADMIN_TOKEN, userToken: 'unused-user' });
@@ -25,6 +42,8 @@ test('manual redirects block a cross-origin receiver without forwarding authoriz
   assert.equal(observation.reasonCode, 'REDIRECT_ORIGIN_BLOCKED');
   assert.equal(observation.redirects, 1);
   assert.equal(fixture.receiverRequests.length, 0);
+  assertExactTransportShape(observation);
+  assert.equal(observation.inspection, null);
   assert.equal(JSON.stringify(observation).includes(ADMIN_TOKEN), false);
   assert.equal(JSON.stringify(observation).includes('authorization'), false);
 });
@@ -33,6 +52,8 @@ test('follows a same-origin redirect manually and returns a bounded response', a
   const fixture = await startHttpFixture({ adminToken: ADMIN_TOKEN, userToken: 'unused-user' });
   t.after(() => fixture.close());
 
+  let inspected = false;
+  const rawSymbol = Symbol('raw-body');
   const observation = await requestApproved({
     origin: fixture.origin,
     path: '/redirect/same',
@@ -41,12 +62,30 @@ test('follows a same-origin redirect manually and returns a bounded response', a
     timeoutMs: 1000,
     maxBytes: 1024,
     approvedOrigins: [fixture.origin],
+    inspectBody({ text, status, contentType }) {
+      inspected = true;
+      assert.equal(text, '{"ok":true}');
+      assert.equal(status, 200);
+      assert.match(contentType, /^application\/json/iu);
+      return {
+        reasonCode: null,
+        schemaViolations: [],
+        body: text,
+        bodyText: text,
+        [rawSymbol]: text,
+      };
+    },
   });
 
   assert.equal(observation.outcome, 'response');
   assert.equal(observation.status, 200);
   assert.equal(observation.redirects, 1);
   assert.equal(observation.bytes, 11);
+  assertExactTransportShape(observation);
+  assert.equal(inspected, true);
+  assert.deepEqual(Reflect.ownKeys(observation.inspection), ['reasonCode', 'schemaViolations']);
+  assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
+  assert.equal(JSON.stringify(observation).includes('{\\"ok\\":true}'), false);
 });
 
 test('requires trusted non-loopback approval before sweep transport executes', async () => {

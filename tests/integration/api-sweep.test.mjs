@@ -67,6 +67,18 @@ function manifest() {
         responses: adminResponse,
       }),
       operation('drift', '/drift', { responses: adminResponse }),
+      operation('json-content-type', '/json-text', {
+        responses: { '200': { contentType: 'application/json', schemaId: null } },
+      }),
+      operation('json-malformed', '/json-malformed', {
+        responses: { '200': { contentType: 'application/json', schemaId: null } },
+      }),
+      operation('json-valid', '/json-valid', {
+        responses: { '200': { contentType: 'application/json', schemaId: null } },
+      }),
+      operation('json-problem', '/json-problem', {
+        responses: { '200': { contentType: 'application/problem+json', schemaId: null } },
+      }),
       operation('same-redirect', '/redirect/same', { responses: publicResponse }),
       operation('cross-redirect', '/redirect/cross', { responses: publicResponse }),
       operation('slow', '/slow', { responses: publicResponse }),
@@ -176,6 +188,16 @@ test('runs live API and RBAC checks while recording denials, drift, limits, and 
   assert.deepEqual(find(observations, 'drift').evidence.schemaViolations, [
     { path: '/healthy', keyword: 'type' },
   ]);
+  assert.equal(find(observations, 'json-content-type').outcome, 'fail');
+  assert.equal(find(observations, 'json-content-type').reasonCode, 'CONTENT_TYPE_MISMATCH');
+  assert.equal(find(observations, 'json-content-type').expected, 'application/json');
+  assert.equal(find(observations, 'json-content-type').actual, 'text/plain');
+  assert.equal(find(observations, 'json-malformed').outcome, 'fail');
+  assert.equal(find(observations, 'json-malformed').reasonCode, 'JSON_RESPONSE_INVALID');
+  assert.equal(find(observations, 'json-valid').outcome, 'pass');
+  assert.equal(find(observations, 'json-valid').reasonCode, 'HTTP_STATUS_EXPECTED');
+  assert.equal(find(observations, 'json-problem').outcome, 'pass');
+  assert.equal(find(observations, 'json-problem').reasonCode, 'HTTP_STATUS_EXPECTED');
   assert.equal(find(observations, 'same-redirect').evidence.status, 200);
   assert.equal(find(observations, 'same-redirect').evidence.redirects, 1);
   assert.equal(find(observations, 'cross-redirect').reasonCode, 'REDIRECT_ORIGIN_BLOCKED');

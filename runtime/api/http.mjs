@@ -6,13 +6,20 @@ import {
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
+const INSPECTION_REASON_CODES = new Set([
+  'BODY_INSPECTION_FAILED',
+  'CONTENT_TYPE_MISMATCH',
+  'JSON_RESPONSE_INVALID',
+  'SCHEMA_NOT_FOUND',
+  'SCHEMA_VIOLATION',
+]);
 
 function elapsedSince(startedAt) {
   return Math.max(0, performance.now() - startedAt);
 }
 
-function httpObservation(fields, bodyText) {
-  const observation = {
+function httpObservation(fields) {
+  return Object.freeze({
     outcome: fields.outcome,
     reasonCode: fields.reasonCode,
     status: fields.status ?? null,
@@ -20,16 +27,8 @@ function httpObservation(fields, bodyText) {
     bytes: fields.bytes ?? null,
     redirects: fields.redirects,
     contentType: fields.contentType ?? null,
-  };
-  if (bodyText !== undefined) {
-    Object.defineProperty(observation, 'bodyText', {
-      value: bodyText,
-      enumerable: false,
-      configurable: false,
-      writable: false,
-    });
-  }
-  return Object.freeze(observation);
+    inspection: fields.inspection ?? null,
+  });
 }
 
 function failure(startedAt, redirects, outcome, reasonCode, fields = {}) {
@@ -41,6 +40,37 @@ function failure(startedAt, redirects, outcome, reasonCode, fields = {}) {
     bytes: fields.bytes ?? null,
     redirects,
     contentType: fields.contentType ?? null,
+    inspection: null,
+  });
+}
+
+function normalizedSchemaViolations(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((violation) => (
+      violation !== null
+      && typeof violation === 'object'
+      && typeof violation.path === 'string'
+      && typeof violation.keyword === 'string'
+    ))
+    .map(({ path, keyword }) => Object.freeze({ path, keyword }));
+}
+
+function normalizedInspection(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return Object.freeze({
+      reasonCode: 'BODY_INSPECTION_FAILED',
+      schemaViolations: Object.freeze([]),
+    });
+  }
+  const reasonCode = value.reasonCode === null
+    ? null
+    : (INSPECTION_REASON_CODES.has(value.reasonCode)
+      ? value.reasonCode
+      : 'BODY_INSPECTION_FAILED');
+  return Object.freeze({
+    reasonCode,
+    schemaViolations: Object.freeze(normalizedSchemaViolations(value.schemaViolations)),
   });
 }
 
@@ -79,7 +109,7 @@ function responseRedactor(headers) {
 }
 
 async function readBounded(response, maxBytes) {
-  if (response.body === null) return { exceeded: false, bytes: 0, bodyText: '' };
+  if (response.body === null) return { exceeded: false, bytes: 0, text: '' };
 
   const declaredLength = Number(response.headers.get('content-length'));
   if (Number.isSafeInteger(declaredLength) && declaredLength > maxBytes) {
@@ -114,7 +144,7 @@ async function readBounded(response, maxBytes) {
   return {
     exceeded: false,
     bytes,
-    bodyText: Buffer.concat(chunks, bytes).toString('utf8'),
+    text: Buffer.concat(chunks, bytes).toString('utf8'),
   };
 }
 
@@ -139,6 +169,7 @@ export async function requestApproved({
   maxBytes,
   approvedOrigins,
   allowNonLoopback = false,
+  inspectBody,
   fetchImpl = globalThis.fetch,
 } = {}) {
   const startedAt = performance.now();
@@ -146,6 +177,7 @@ export async function requestApproved({
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1
       || !Number.isInteger(maxBytes) || maxBytes < 1
+      || (inspectBody !== undefined && typeof inspectBody !== 'function')
       || typeof fetchImpl !== 'function') {
     return failure(startedAt, redirects, 'blocked', 'REQUEST_INVALID');
   }
@@ -261,6 +293,26 @@ export async function requestApproved({
         );
       }
 
+      let inspection = null;
+      if (inspectBody !== undefined) {
+        try {
+          inspection = normalizedInspection(await inspectBody({
+            text: redact(bounded.text),
+            status: response.status,
+            contentType,
+          }));
+        } catch {
+          inspection = normalizedInspection(null);
+        }
+        if (controller.signal.aborted) {
+          return failure(startedAt, redirects, 'timeout', 'HTTP_TIMEOUT', {
+            status: response.status,
+            bytes: bounded.bytes,
+            contentType,
+          });
+        }
+      }
+
       return httpObservation({
         outcome: 'response',
         reasonCode: 'HTTP_RESPONSE',
@@ -269,7 +321,8 @@ export async function requestApproved({
         bytes: bounded.bytes,
         redirects,
         contentType,
-      }, redact(bounded.bodyText));
+        inspection,
+      });
     }
   } finally {
     clearTimeout(timeout);
