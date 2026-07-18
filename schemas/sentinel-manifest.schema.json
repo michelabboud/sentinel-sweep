@@ -203,6 +203,22 @@
     },
     "operation": {
       "type": "object",
+      "oneOf": [
+        {
+          "required": ["method", "mutation"],
+          "properties": {
+            "method": { "enum": ["GET", "HEAD", "OPTIONS"] },
+            "mutation": { "const": false }
+          }
+        },
+        {
+          "required": ["method", "mutation"],
+          "properties": {
+            "method": { "enum": ["POST", "PUT", "PATCH", "DELETE", "TRACE"] },
+            "mutation": { "const": true }
+          }
+        }
+      ],
       "required": [
         "id",
         "method",

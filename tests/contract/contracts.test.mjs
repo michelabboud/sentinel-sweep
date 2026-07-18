@@ -154,12 +154,12 @@ const realisticManifest = {
       auth: { state: 'public', allowedRoles: [] },
       targetModel: null,
       deleteMode: null,
-      sideEffects: { state: 'known', classes: [] },
+      sideEffects: { state: 'unknown', classes: [] },
       rollback: null,
-      mutation: false,
+      mutation: true,
       protocol: 'http',
       sweepable: true,
-      risk: { score: 0, level: 'safe', reasons: [] },
+      risk: { score: 100, level: 'critical', reasons: ['unknown-side-effects'] },
       provenance: {
         adapter: 'openapi-json',
         file: 'openapi.json',
@@ -232,6 +232,37 @@ test('validates a realistic non-empty manifest using later-task interfaces', () 
     );
   });
 });
+
+for (const invalidCase of [
+  { operationIndex: 2, method: 'DELETE', mutation: false },
+  { operationIndex: 2, method: 'TRACE', mutation: false },
+  { operationIndex: 0, method: 'GET', mutation: true },
+]) {
+  test(`rejects ${invalidCase.method} with mutation=${invalidCase.mutation} at the operation consistency combinator`, () => {
+    const manifest = JSON.parse(JSON.stringify(realisticManifest));
+    const operation = manifest.operations[invalidCase.operationIndex];
+    operation.method = invalidCase.method;
+    operation.mutation = invalidCase.mutation;
+
+    assert.throws(
+      () => validateAgainstSchema(
+        manifest,
+        schemas['sentinel-manifest'],
+        { name: 'method mutation consistency' },
+      ),
+      (error) => {
+        assert.deepEqual(error.details.violations, [
+          {
+            path: `/operations/${invalidCase.operationIndex}`,
+            keyword: 'oneOf',
+          },
+        ]);
+        return true;
+      },
+      `${invalidCase.method} with mutation=${invalidCase.mutation}`,
+    );
+  });
+}
 
 test('bundled defaults are explicit and fail closed', () => {
   assert.deepEqual(defaults, {
