@@ -10,6 +10,11 @@ function regularStat({
   nlink = 1,
   dev = 10,
   ino = 20,
+  birthtimeNs = 30n,
+  ctimeNs = 40n,
+  size = 50n,
+  mtimeNs = 60n,
+  atimeNs = 70n,
 } = {}) {
   return {
     mode: fsConstants.S_IFREG | mode,
@@ -17,6 +22,11 @@ function regularStat({
     nlink,
     dev,
     ino,
+    birthtimeNs,
+    ctimeNs,
+    size,
+    mtimeNs,
+    atimeNs,
     isFile: () => true,
   };
 }
@@ -144,4 +154,26 @@ test('Windows descriptor identity uses available file IDs and otherwise fails cl
     ),
     { code: 'CONFIG_FILE_CHANGED' },
   );
+});
+
+test('opened descriptor identity binds reuse-resistant metadata but ignores atime', () => {
+  const validate = configModule.validateOpenedFileIdentity;
+  const expected = regularStat();
+
+  assert.doesNotThrow(() => validate(
+    expected,
+    regularStat({ atimeNs: 999n }),
+    { label: 'CONFIG', platform: 'linux' },
+  ));
+  for (const field of ['birthtimeNs', 'ctimeNs', 'size', 'mtimeNs']) {
+    assert.throws(
+      () => validate(
+        expected,
+        regularStat({ [field]: expected[field] + 1n }),
+        { label: 'CONFIG', platform: 'linux' },
+      ),
+      { code: 'CONFIG_FILE_CHANGED' },
+      field,
+    );
+  }
 });

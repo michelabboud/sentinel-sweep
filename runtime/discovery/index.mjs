@@ -2,7 +2,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { SentinelError } from '../lib/errors.mjs';
-import { canonicalizeTrustedConfig } from '../lib/config.mjs';
+import { validateTrustedConfig } from '../lib/config.mjs';
 import { operationId, routeId } from '../lib/identity.mjs';
 import { loadBundledSchema, validateAgainstSchema } from '../lib/schema.mjs';
 import { discoverOpenApi } from './openapi.mjs';
@@ -238,10 +238,7 @@ export async function buildManifest({ targetBoundary, config, generatedAt } = {}
       || typeof targetBoundary.readText !== 'function') {
     throw manifestError('TARGET_BOUNDARY_INVALID', 'A TargetBoundary is required');
   }
-  const trustedConfig = canonicalizeTrustedConfig(config);
-
-  const configSchema = await loadBundledSchema('settings');
-  validateAgainstSchema(trustedConfig, configSchema, { name: 'trusted config' });
+  const trustedConfig = await validateTrustedConfig(config);
   const paths = discoveryPaths(trustedConfig);
   const results = [];
   for (const relativePath of paths.openapi) {

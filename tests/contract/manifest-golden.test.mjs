@@ -422,6 +422,22 @@ test('direct buildManifest rejects nested objects with inherited config data', a
   );
 });
 
+test('direct buildManifest enforces the browser settle timeout invariant', async () => {
+  const targetBoundary = await fixtureBoundary();
+
+  await assert.rejects(
+    buildManifest({
+      targetBoundary,
+      config: configWith({
+        discovery: { openapi: ['openapi-complete.json'] },
+        responseTimeoutMs: 500,
+        browserSettleMs: 500,
+      }),
+    }),
+    { code: 'CONFIG_BROWSER_SETTLE_INVALID' },
+  );
+});
+
 test('missing canonical discovery remains the semantic DISCOVERY_REQUIRED error', async () => {
   const targetBoundary = await fixtureBoundary();
   await assert.rejects(

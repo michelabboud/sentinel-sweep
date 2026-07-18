@@ -115,17 +115,50 @@ export function validateTrustedFileStat(stat, {
   }
 }
 
-function fileIdentity(stat) {
-  // Node exposes the platform file ID through dev/ino; a missing or zero ID fails closed.
-  const integer = (value) => {
-    if (typeof value === 'bigint' && value >= 0n) return value;
-    if (Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+const FILE_IDENTITY_FIELDS = [
+  'dev',
+  'ino',
+  'birthtimeNs',
+  'ctimeNs',
+  'size',
+  'mtimeNs',
+];
+const PATH_IDENTITY_FIELDS = ['dev', 'ino', 'birthtimeNs', 'ctimeNs'];
+
+function statInteger(value) {
+  if (typeof value === 'bigint') return value;
+  if (Number.isSafeInteger(value)) return BigInt(value);
+  return null;
+}
+
+function statIdentity(stat, fields) {
+  const identity = Object.create(null);
+  for (const field of fields) {
+    const value = statInteger(stat?.[field]);
+    if (value === null) return null;
+    identity[field] = value;
+  }
+  if (identity.dev < 0n
+      || identity.ino <= 0n
+      || (Object.prototype.hasOwnProperty.call(identity, 'size') && identity.size < 0n)) {
     return null;
-  };
-  const dev = integer(stat?.dev);
-  const ino = integer(stat?.ino);
-  if (dev === null || ino === null || ino === 0n) return null;
-  return { dev, ino };
+  }
+  return identity;
+}
+
+function fileIdentity(stat) {
+  // Reading may update atime, so bind all stable file metadata except atime.
+  return statIdentity(stat, FILE_IDENTITY_FIELDS);
+}
+
+function pathIdentity(stat) {
+  return statIdentity(stat, PATH_IDENTITY_FIELDS);
+}
+
+function identitiesMatch(left, right, fields) {
+  return left !== null
+    && right !== null
+    && fields.every((field) => left[field] === right[field]);
 }
 
 export function validateOpenedFileIdentity(expectedStat, descriptorStat, {
@@ -137,23 +170,151 @@ export function validateOpenedFileIdentity(expectedStat, descriptorStat, {
   }
   const expected = fileIdentity(expectedStat);
   const opened = fileIdentity(descriptorStat);
-  if (expected === null
-      || opened === null
-      || expected.dev !== opened.dev
-      || expected.ino !== opened.ino) {
+  if (!identitiesMatch(expected, opened, FILE_IDENTITY_FIELDS)) {
     const platformMessage = platform === 'win32'
       ? 'available Windows file identity changed or is unavailable'
-      : 'device and inode identity changed';
+      : 'trusted file identity metadata changed';
     throw configError(
       `${label}_FILE_CHANGED`,
-      `${label} ${platformMessage} between path validation and descriptor open`,
+      `${label} ${platformMessage} during verified read`,
     );
+  }
+}
+
+function trustedLocationCode(label) {
+  return label === 'CONFIG' ? 'CONFIG_UNTRUSTED_LOCATION' : 'DEFAULTS_UNTRUSTED_LOCATION';
+}
+
+function validateTrustedLocationBoundary(targetRoot) {
+  if (targetRoot === null
+      || typeof targetRoot !== 'object'
+      || typeof targetRoot.lexical !== 'string'
+      || typeof targetRoot.canonical !== 'string') {
+    throw configError('CONFIG_INVALID', 'Trusted file target boundary is invalid');
+  }
+  return {
+    lexical: path.resolve(targetRoot.lexical),
+    canonical: path.resolve(targetRoot.canonical),
+  };
+}
+
+async function inspectCurrentTrustedPath({ filePath, targetRoot, label }) {
+  const boundary = validateTrustedLocationBoundary(targetRoot);
+  const resolved = path.resolve(filePath);
+  if (isWithin(boundary.lexical, resolved)) {
+    throw configError(
+      trustedLocationCode(label),
+      `${label} must be outside the target root`,
+    );
+  }
+
+  let stat;
+  try {
+    stat = await lstat(resolved, { bigint: true });
+  } catch {
+    throw configError(`${label}_FILE_CHANGED`, `${label} path changed during verified read`);
+  }
+  if (stat.isSymbolicLink()) {
+    throw configError(`${label}_SYMLINK`, `${label} file must not be a symbolic link`);
+  }
+  validateRegularFileStat(stat, label);
+
+  let canonical;
+  try {
+    canonical = await realpath(resolved);
+  } catch {
+    throw configError(`${label}_FILE_CHANGED`, `${label} path changed during verified read`);
+  }
+  if (isWithin(boundary.canonical, canonical)) {
+    throw configError(
+      trustedLocationCode(label),
+      `${label} must be outside the target root`,
+    );
+  }
+  return { resolved, canonical, stat };
+}
+
+async function captureParentBindings(resolved, canonical, label) {
+  const parentPaths = [...new Set([path.dirname(resolved), path.dirname(canonical)])];
+  const bindings = [];
+  for (const parentPath of parentPaths) {
+    let stat;
+    try {
+      stat = await lstat(parentPath, { bigint: true });
+    } catch {
+      throw configError(`${label}_FILE_CHANGED`, `${label} parent path changed during verified read`);
+    }
+    const identity = pathIdentity(stat);
+    if (identity === null) {
+      throw configError(`${label}_FILE_CHANGED`, `${label} parent identity is unavailable`);
+    }
+    bindings.push(Object.freeze({
+      path: parentPath,
+      identity: Object.freeze(identity),
+    }));
+  }
+  return Object.freeze(bindings);
+}
+
+function parentBindingsMatch(expected, current) {
+  return Array.isArray(expected)
+    && expected.length === current.length
+    && expected.every((entry, index) => (
+      entry !== null
+      && typeof entry === 'object'
+      && entry.path === current[index].path
+      && identitiesMatch(entry.identity, current[index].identity, PATH_IDENTITY_FIELDS)
+    ));
+}
+
+// Same-UID in-place mutation cannot be excluded outside this transaction. The
+// initial, post-open, and post-read bindings fail closed on observable relocation.
+export async function captureTrustedPathBinding({
+  filePath,
+  targetRoot,
+  label,
+  expectedStat,
+  expectedCanonicalPath,
+}) {
+  const current = await inspectCurrentTrustedPath({ filePath, targetRoot, label });
+  if (expectedCanonicalPath !== undefined && current.canonical !== expectedCanonicalPath) {
+    throw configError(`${label}_FILE_CHANGED`, `${label} canonical path changed before open`);
+  }
+  validateOpenedFileIdentity(expectedStat, current.stat, { label });
+  return Object.freeze({
+    canonicalPath: current.canonical,
+    parentBindings: await captureParentBindings(current.resolved, current.canonical, label),
+  });
+}
+
+async function validateCurrentTrustedPathBinding({
+  filePath,
+  targetRoot,
+  label,
+  descriptorStat,
+  expectedPathBinding,
+}) {
+  if (expectedPathBinding === null
+      || typeof expectedPathBinding !== 'object'
+      || typeof expectedPathBinding.canonicalPath !== 'string') {
+    throw configError('CONFIG_INVALID', 'Trusted file path binding is invalid');
+  }
+  const current = await inspectCurrentTrustedPath({ filePath, targetRoot, label });
+  if (current.canonical !== expectedPathBinding.canonicalPath) {
+    throw configError(`${label}_FILE_CHANGED`, `${label} canonical path changed during verified read`);
+  }
+  validateOpenedFileIdentity(descriptorStat, current.stat, { label });
+  const currentParents = await captureParentBindings(current.resolved, current.canonical, label);
+  if (!parentBindingsMatch(expectedPathBinding.parentBindings, currentParents)) {
+    throw configError(`${label}_FILE_CHANGED`, `${label} parent path changed during verified read`);
   }
 }
 
 export async function readVerifiedJsonFile({
   filePath,
   expectedStat,
+  expectedPathBinding,
+  targetRoot,
   label,
   requirePrivateMode,
 }) {
@@ -164,7 +325,25 @@ export async function readVerifiedJsonFile({
     validateRegularFileStat(descriptorStat, label);
     validateOpenedFileIdentity(expectedStat, descriptorStat, { label });
     validateTrustedFileStat(descriptorStat, { label, requirePrivateMode });
+    await validateCurrentTrustedPathBinding({
+      filePath,
+      targetRoot,
+      label,
+      descriptorStat,
+      expectedPathBinding,
+    });
     const text = await handle.readFile('utf8');
+    const finalDescriptorStat = await handle.stat({ bigint: true });
+    validateRegularFileStat(finalDescriptorStat, label);
+    validateOpenedFileIdentity(descriptorStat, finalDescriptorStat, { label });
+    validateTrustedFileStat(finalDescriptorStat, { label, requirePrivateMode });
+    await validateCurrentTrustedPathBinding({
+      filePath,
+      targetRoot,
+      label,
+      descriptorStat: finalDescriptorStat,
+      expectedPathBinding,
+    });
     return JSON.parse(text);
   } catch (error) {
     if (error instanceof SentinelError) throw error;
@@ -216,9 +395,19 @@ async function readTrustedJson(filePath, targetRoot, label, { requirePrivateMode
     );
   }
 
+  const expectedPathBinding = await captureTrustedPathBinding({
+    filePath: resolved,
+    targetRoot,
+    label,
+    expectedStat: stat,
+    expectedCanonicalPath: canonical,
+  });
+
   return readVerifiedJsonFile({
     filePath: resolved,
     expectedStat: stat,
+    expectedPathBinding,
+    targetRoot,
     label,
     requirePrivateMode,
   });
@@ -295,6 +484,19 @@ export function canonicalizeTrustedConfig(value) {
   return canonical;
 }
 
+export async function validateTrustedConfig(value) {
+  const canonical = canonicalizeTrustedConfig(value);
+  const schema = await loadBundledSchema('settings');
+  validateAgainstSchema(canonical, schema, { name: 'trusted config' });
+  if (canonical.browserSettleMs >= canonical.responseTimeoutMs) {
+    throw configError(
+      'CONFIG_BROWSER_SETTLE_INVALID',
+      'Browser settle time must be shorter than the response timeout',
+    );
+  }
+  return canonical;
+}
+
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -337,14 +539,5 @@ export async function loadTrustedConfig({ configPath, targetRoot, defaultsPath }
   const defaults = await readTrustedJson(BUNDLED_DEFAULTS_PATH, target, 'DEFAULTS', {
     requirePrivateMode: false,
   });
-  const merged = canonicalizeTrustedConfig(mergeSettings(defaults, settings));
-  const schema = await loadBundledSchema('settings');
-  validateAgainstSchema(merged, schema, { name: 'trusted config' });
-  if (merged.browserSettleMs >= merged.responseTimeoutMs) {
-    throw configError(
-      'CONFIG_BROWSER_SETTLE_INVALID',
-      'Browser settle time must be shorter than the response timeout',
-    );
-  }
-  return merged;
+  return validateTrustedConfig(mergeSettings(defaults, settings));
 }
