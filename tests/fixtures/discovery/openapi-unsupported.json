@@ -1,0 +1,80 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Sentinel unsupported-pattern fixture",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/events": {
+      "post": {
+        "callbacks": {
+          "eventDelivered": {
+            "{$request.body#/callbackUrl}": {
+              "post": {
+                "responses": {
+                  "200": {
+                    "description": "Callback accepted"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "https://example.invalid/schemas/EventReceipt.json"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Divergent public response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "newEvent": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Webhook accepted"
+          }
+        }
+      }
+    }
+  }
+}
