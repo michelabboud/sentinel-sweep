@@ -83,7 +83,6 @@ async function fixture(t, configOverrides = {}) {
     allowNonLoopback: false,
     targetEnvironment: 'test',
     requireCompleteCoverage: true,
-    maxConcurrency: 1,
     responseTimeoutMs: 1000,
     browserSettleMs: 10,
     viewports: [375],

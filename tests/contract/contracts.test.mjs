@@ -344,7 +344,6 @@ test('bundled defaults are explicit and fail closed', () => {
     allowNonLoopback: false,
     targetEnvironment: 'unknown',
     requireCompleteCoverage: true,
-    maxConcurrency: 4,
     responseTimeoutMs: 5000,
     browserSettleMs: 500,
     viewports: [375, 768, 1280],

@@ -18,7 +18,6 @@
   "allowNonLoopback": false,
   "targetEnvironment": "development",
   "requireCompleteCoverage": true,
-  "maxConcurrency": 4,
   "responseTimeoutMs": 5000,
   "browserSettleMs": 500,
   "viewports": [

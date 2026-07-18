@@ -29,21 +29,7 @@
     "schemas": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/schemaRecord" }
-    },
-    "auth": { "$ref": "#/$defs/auth" },
-    "services": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/service" }
-    },
-    "i18n": { "$ref": "#/$defs/analysis" },
-    "a11y": { "$ref": "#/$defs/analysis" },
-    "deadCode": { "$ref": "#/$defs/analysis" },
-    "deadCss": { "$ref": "#/$defs/analysis" },
-    "n1Queries": { "$ref": "#/$defs/analysis" },
-    "vulnerabilities": { "$ref": "#/$defs/analysis" },
-    "apiVersioning": { "$ref": "#/$defs/analysis" },
-    "migrationDrift": { "$ref": "#/$defs/analysis" },
-    "rateLimiting": { "$ref": "#/$defs/analysis" }
+    }
   },
   "$defs": {
     "target": {
@@ -52,64 +38,8 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },
-        "root": { "type": "string", "minLength": 1 },
-        "framework": { "$ref": "#/$defs/framework" }
+        "root": { "type": "string", "minLength": 1 }
       }
-    },
-    "framework": {
-      "type": "object",
-      "required": ["frontend", "backend"],
-      "additionalProperties": false,
-      "properties": {
-        "frontend": {
-          "type": "string",
-          "enum": ["vue", "nuxt", "nextjs", "react", "sveltekit", "angular", "remix", "none", "unknown"]
-        },
-        "backend": {
-          "type": "string",
-          "enum": ["fastapi", "express", "django", "nestjs", "nextjs", "flask", "hono", "koa", "remix", "actix", "axum", "rocket", "gin", "echo", "chi", "laravel", "graphql", "grpc", "trpc", "none", "unknown"]
-        }
-      }
-    },
-    "auth": {
-      "type": "object",
-      "required": ["method"],
-      "additionalProperties": false,
-      "properties": {
-        "method": {
-          "type": "string",
-          "enum": ["bearer", "jwt", "nextauth", "session", "apikey", "oauth_pkce", "none", "unknown"]
-        }
-      }
-    },
-    "service": {
-      "type": "object",
-      "required": ["name"],
-      "additionalProperties": false,
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "sourcePath": { "type": ["string", "null"] }
-      }
-    },
-    "analysis": {
-      "anyOf": [
-        { "type": "null" },
-        {
-          "type": "object",
-          "required": ["status", "diagnostics"],
-          "additionalProperties": false,
-          "properties": {
-            "status": {
-              "type": "string",
-              "enum": ["complete", "partial", "unsupported"]
-            },
-            "diagnostics": {
-              "type": "array",
-              "items": { "$ref": "#/$defs/diagnostic" }
-            }
-          }
-        }
-      ]
     },
     "coverage": {
       "type": "object",

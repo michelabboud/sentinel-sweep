@@ -358,7 +358,6 @@ function browserConfig(origin, chromePath, overrides = {}) {
     emptyContainerSelectors: ['#empty'],
     screenshotOnError: true,
     chromePath,
-    maxConcurrency: 1,
     ...overrides,
   };
 }

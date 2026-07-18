@@ -38,7 +38,6 @@ function approvedConfig(operationId, overrides = {}) {
     allowNonLoopback: false,
     targetEnvironment: 'test',
     requireCompleteCoverage: true,
-    maxConcurrency: 4,
     responseTimeoutMs: 5000,
     viewports: [375],
     services: [{
