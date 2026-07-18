@@ -244,9 +244,13 @@ function validateNode(value, schema, context, violations) {
 }
 
 function normalizeViolations(violations) {
-  violations.sort((left, right) => (
-    left.path.localeCompare(right.path) || left.keyword.localeCompare(right.keyword)
-  ));
+  violations.sort((left, right) => {
+    if (left.path < right.path) return -1;
+    if (left.path > right.path) return 1;
+    if (left.keyword < right.keyword) return -1;
+    if (left.keyword > right.keyword) return 1;
+    return 0;
+  });
 
   return violations.filter((violation, index) => (
     index === 0

@@ -122,7 +122,15 @@ else
   fail "mirror skills/run/SKILL.md: file not found"
 fi
 
-# 6. CHANGELOG.md latest header
+# 6. package.json
+f="$PROJECT_ROOT/package.json"
+if [[ -f "$f" ]]; then
+  check_version "root package.json" "$(json_version "$f")"
+else
+  fail "root package.json: file not found"
+fi
+
+# 7. CHANGELOG.md latest header
 f="$PROJECT_ROOT/CHANGELOG.md"
 if [[ -f "$f" ]]; then
   v=$(changelog_version "$f")

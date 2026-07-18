@@ -139,27 +139,27 @@
     },
     "provenance": {
       "type": "object",
-      "required": ["adapter", "sourcePath"],
+      "required": ["adapter", "file", "pointer"],
       "additionalProperties": false,
       "properties": {
         "adapter": {
           "type": "string",
-          "enum": ["openapi", "vue-router"]
+          "enum": ["openapi-json", "vue-router-static"]
         },
-        "sourcePath": { "type": "string", "minLength": 1 },
-        "pointer": { "type": ["string", "null"] }
+        "file": { "type": "string", "minLength": 1 },
+        "pointer": { "type": "string" }
       }
     },
-    "authorization": {
+    "operationAuth": {
       "type": "object",
-      "required": ["state", "roles"],
+      "required": ["state", "allowedRoles"],
       "additionalProperties": false,
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["public", "authenticated", "roles", "unknown"]
+          "enum": ["public", "required", "unknown"]
         },
-        "roles": {
+        "allowedRoles": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
         }
@@ -182,7 +182,7 @@
     },
     "route": {
       "type": "object",
-      "required": ["id", "path", "authorization", "parameters", "provenance"],
+      "required": ["id", "path", "auth", "parameters", "provenance"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "minLength": 1 },
@@ -193,7 +193,7 @@
           "type": "array",
           "items": { "type": "string", "pattern": "^/" }
         },
-        "authorization": { "$ref": "#/$defs/authorization" },
+        "auth": { "$ref": "#/$defs/operationAuth" },
         "parameters": {
           "type": "array",
           "items": { "$ref": "#/$defs/parameter" }
@@ -208,9 +208,16 @@
         "method",
         "path",
         "parameters",
-        "authorization",
+        "requestBody",
+        "responses",
+        "auth",
+        "targetModel",
+        "deleteMode",
         "sideEffects",
+        "rollback",
         "mutation",
+        "protocol",
+        "sweepable",
         "risk",
         "provenance"
       ],
@@ -219,7 +226,7 @@
         "id": { "type": "string", "minLength": 1 },
         "method": {
           "type": "string",
-          "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
+          "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "TRACE"]
         },
         "path": { "type": "string", "pattern": "^/" },
         "summary": { "type": ["string", "null"] },
@@ -237,16 +244,13 @@
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/response" }
         },
-        "authorization": { "$ref": "#/$defs/authorization" },
+        "auth": { "$ref": "#/$defs/operationAuth" },
         "targetModel": { "type": ["string", "null"] },
         "deleteMode": {
           "type": ["string", "null"],
           "enum": ["soft", "hard", "unknown", null]
         },
-        "sideEffects": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
+        "sideEffects": { "$ref": "#/$defs/sideEffects" },
         "rollback": { "type": ["string", "null"] },
         "mutation": { "type": "boolean" },
         "protocol": {
@@ -260,25 +264,35 @@
     },
     "requestBody": {
       "type": "object",
-      "required": ["required", "contentType", "schema"],
+      "required": ["required", "contentType", "schemaId"],
       "additionalProperties": false,
       "properties": {
         "required": { "type": "boolean" },
         "contentType": { "type": "string", "minLength": 1 },
-        "schema": { "$ref": "#/$defs/schemaNode" }
+        "schemaId": { "type": ["string", "null"], "minLength": 1 }
       }
     },
     "response": {
       "type": "object",
-      "required": ["contentType", "schema"],
+      "required": ["contentType", "schemaId"],
       "additionalProperties": false,
       "properties": {
         "contentType": { "type": ["string", "null"] },
-        "schema": {
-          "anyOf": [
-            { "type": "null" },
-            { "$ref": "#/$defs/schemaNode" }
-          ]
+        "schemaId": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "required": ["state", "classes"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["known", "unknown"]
+        },
+        "classes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },

@@ -43,6 +43,160 @@ const documents = {
   },
 };
 
+const realisticManifest = {
+  schemaVersion: '2.0',
+  generatedAt: '2026-07-18T00:00:00.000Z',
+  target: { name: 'fixture', root: '.' },
+  coverage: { status: 'complete', diagnostics: [] },
+  routes: [
+    {
+      id: 'route:/items/{itemId}',
+      path: '/items/{itemId}',
+      name: 'item-detail',
+      component: 'ItemDetail',
+      aliases: ['/inventory/{itemId}'],
+      auth: { state: 'required', allowedRoles: ['user', 'admin'] },
+      parameters: [
+        {
+          name: 'itemId',
+          location: 'path',
+          required: true,
+          schema: { type: 'string' },
+          example: 'known-item',
+        },
+      ],
+      provenance: {
+        adapter: 'vue-router-static',
+        file: 'src/router.js',
+        pointer: '/routes/0',
+      },
+    },
+  ],
+  operations: [
+    {
+      id: 'op:get:/api/items/{itemId}',
+      method: 'GET',
+      path: '/api/items/{itemId}',
+      summary: 'Read one item',
+      parameters: [
+        {
+          name: 'itemId',
+          location: 'path',
+          required: true,
+          schema: { type: 'string' },
+          example: 'known-item',
+        },
+      ],
+      requestBody: null,
+      responses: {
+        200: {
+          contentType: 'application/json',
+          schemaId: 'schema:openapi:Item',
+        },
+      },
+      auth: { state: 'required', allowedRoles: ['user', 'admin'] },
+      targetModel: 'schema:openapi:Item',
+      deleteMode: null,
+      sideEffects: { state: 'known', classes: [] },
+      rollback: null,
+      mutation: false,
+      protocol: 'http',
+      sweepable: true,
+      risk: { score: 0, level: 'safe', reasons: [] },
+      provenance: {
+        adapter: 'openapi-json',
+        file: 'openapi.json',
+        pointer: '/paths/~1api~1items~1{itemId}/get',
+      },
+    },
+    {
+      id: 'op:post:/api/items',
+      method: 'POST',
+      path: '/api/items',
+      summary: 'Create an item',
+      parameters: [],
+      requestBody: {
+        required: true,
+        contentType: 'application/json',
+        schemaId: 'schema:openapi:ItemCreate',
+      },
+      responses: {
+        201: {
+          contentType: 'application/json',
+          schemaId: 'schema:openapi:Item',
+        },
+      },
+      auth: { state: 'unknown', allowedRoles: [] },
+      targetModel: 'schema:openapi:Item',
+      deleteMode: null,
+      sideEffects: { state: 'unknown', classes: [] },
+      rollback: null,
+      mutation: true,
+      protocol: 'http',
+      sweepable: true,
+      risk: { score: 100, level: 'critical', reasons: ['unknown-side-effects'] },
+      provenance: {
+        adapter: 'openapi-json',
+        file: 'openapi.json',
+        pointer: '/paths/~1api~1items/post',
+      },
+    },
+    {
+      id: 'op:trace:/api/items',
+      method: 'TRACE',
+      path: '/api/items',
+      summary: null,
+      parameters: [],
+      requestBody: null,
+      responses: {
+        default: { contentType: null, schemaId: null },
+      },
+      auth: { state: 'public', allowedRoles: [] },
+      targetModel: null,
+      deleteMode: null,
+      sideEffects: { state: 'known', classes: [] },
+      rollback: null,
+      mutation: false,
+      protocol: 'http',
+      sweepable: true,
+      risk: { score: 0, level: 'safe', reasons: [] },
+      provenance: {
+        adapter: 'openapi-json',
+        file: 'openapi.json',
+        pointer: '/paths/~1api~1items/trace',
+      },
+    },
+  ],
+  schemas: {
+    'schema:openapi:Item': {
+      schema: {
+        type: 'object',
+        required: ['id'],
+        additionalProperties: false,
+        properties: { id: { type: 'string' } },
+      },
+      provenance: {
+        adapter: 'openapi-json',
+        file: 'openapi.json',
+        pointer: '/components/schemas/Item',
+      },
+    },
+    'schema:openapi:ItemCreate': {
+      schema: {
+        type: 'object',
+        required: ['name'],
+        additionalProperties: false,
+        properties: { name: { type: 'string', minLength: 1 } },
+      },
+      provenance: {
+        adapter: 'openapi-json',
+        file: 'openapi.json',
+        pointer: '/components/schemas/ItemCreate',
+      },
+    },
+  },
+};
+
 const schemas = Object.fromEntries(
   await Promise.all(
     Object.keys(documents).map(async (name) => [name, await loadBundledSchema(name)]),
@@ -67,6 +221,16 @@ test('validates bundled defaults and minimal v2 artifacts', () => {
       validateAgainstSchema(document, schemas[name], { name });
     });
   }
+});
+
+test('validates a realistic non-empty manifest using later-task interfaces', () => {
+  assert.doesNotThrow(() => {
+    validateAgainstSchema(
+      realisticManifest,
+      schemas['sentinel-manifest'],
+      { name: 'realistic manifest' },
+    );
+  });
 });
 
 test('bundled defaults are explicit and fail closed', () => {
@@ -117,6 +281,51 @@ test('rejects plaintext password and token role fields', () => {
       ),
       (error) => error.code === 'SCHEMA_INVALID'
         && !JSON.stringify(error.toJSON()).includes('plaintext-secret'),
+    );
+  }
+});
+
+test('requires exact uppercase bounded environment secret references', () => {
+  const tokenRefPattern = schemas.settings.$defs.role.properties.tokenRef.pattern;
+  assert.equal(tokenRefPattern, '^env:[A-Z][A-Z0-9_]{1,127}$');
+
+  const validRefs = [
+    'env:A_',
+    'env:ADMIN_TOKEN',
+    `env:A${'_'.repeat(127)}`,
+  ];
+  for (const tokenRef of validRefs) {
+    assert.doesNotThrow(() => {
+      validateAgainstSchema(
+        { ...defaults, roles: { admin: { tokenRef } } },
+        schemas.settings,
+        { name: 'settings' },
+      );
+    }, tokenRef);
+  }
+
+  const invalidRefs = [
+    'env:A',
+    'env:admin_token',
+    'env:_ADMIN_TOKEN',
+    'env:ADMIN-TOKEN',
+    'env:ADMIN_TOKEN ',
+    `env:A${'_'.repeat(128)}`,
+    'plaintext-secret',
+  ];
+  for (const tokenRef of invalidRefs) {
+    assert.throws(
+      () => validateAgainstSchema(
+        { ...defaults, roles: { admin: { tokenRef } } },
+        schemas.settings,
+        { name: 'settings' },
+      ),
+      (error) => error.code === 'SCHEMA_INVALID'
+        && error.details.violations.some((violation) => (
+          violation.path === '/roles/admin/tokenRef'
+          && violation.keyword === 'pattern'
+        )),
+      tokenRef,
     );
   }
 });
