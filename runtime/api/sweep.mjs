@@ -1,5 +1,4 @@
 import { requestApproved } from './http.mjs';
-import { checkJsonSchema } from './schema-check.mjs';
 import { resolveSecret } from '../lib/secrets.mjs';
 
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -238,55 +237,6 @@ function normalizedMediaType(value) {
     : null;
 }
 
-function isJsonMediaType(mediaType) {
-  return mediaType === 'application/json'
-    || (typeof mediaType === 'string'
-      && mediaType.startsWith('application/')
-      && mediaType.endsWith('+json'));
-}
-
-function bodyInspection(reasonCode = null, schemaViolations = []) {
-  return { reasonCode, schemaViolations };
-}
-
-function responseBodyInspector(operation, registry) {
-  return ({ text, status, contentType }) => {
-    const definition = responseDefinition(operation, status);
-    if (definition === null) return bodyInspection();
-
-    const expectedMediaType = normalizedMediaType(definition.contentType);
-    if (!isJsonMediaType(expectedMediaType)) return bodyInspection();
-    if (normalizedMediaType(contentType) !== expectedMediaType) {
-      return bodyInspection('CONTENT_TYPE_MISMATCH');
-    }
-
-    let value;
-    try {
-      value = JSON.parse(text);
-    } catch {
-      return bodyInspection(
-        'JSON_RESPONSE_INVALID',
-        [{ path: '', keyword: 'parse' }],
-      );
-    }
-
-    if (definition.schemaId === null || definition.schemaId === undefined) {
-      return bodyInspection();
-    }
-
-    const record = registry?.[definition.schemaId];
-    if (record === null || typeof record !== 'object' || Array.isArray(record)
-        || record.schema === null || typeof record.schema !== 'object') {
-      return bodyInspection('SCHEMA_NOT_FOUND', [{ path: '', keyword: '$ref' }]);
-    }
-
-    const violations = checkJsonSchema(value, record.schema, registry);
-    return violations.length === 0
-      ? bodyInspection()
-      : bodyInspection('SCHEMA_VIOLATION', violations);
-  };
-}
-
 function inspectionObservation(operation, role, result, definition) {
   const reasonCode = result.inspection === null
     ? 'BODY_INSPECTION_FAILED'
@@ -411,7 +361,8 @@ async function executeAttempt({ operation, decision, config, env, fetchImpl, rol
       maxBytes: config?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
       approvedOrigins: config?.approvedOrigins,
       allowNonLoopback: config?.allowNonLoopback === true,
-      inspectBody: responseBodyInspector(operation, config.__manifestSchemas),
+      responses: operation.responses,
+      schemaRegistry: config.__manifestSchemas,
       fetchImpl,
     });
   } catch {

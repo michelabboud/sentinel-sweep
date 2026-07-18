@@ -52,8 +52,6 @@ test('follows a same-origin redirect manually and returns a bounded response', a
   const fixture = await startHttpFixture({ adminToken: ADMIN_TOKEN, userToken: 'unused-user' });
   t.after(() => fixture.close());
 
-  let inspected = false;
-  const rawSymbol = Symbol('raw-body');
   const observation = await requestApproved({
     origin: fixture.origin,
     path: '/redirect/same',
@@ -62,19 +60,8 @@ test('follows a same-origin redirect manually and returns a bounded response', a
     timeoutMs: 1000,
     maxBytes: 1024,
     approvedOrigins: [fixture.origin],
-    inspectBody({ text, status, contentType }) {
-      inspected = true;
-      assert.equal(text, '{"ok":true}');
-      assert.equal(status, 200);
-      assert.match(contentType, /^application\/json/iu);
-      return {
-        reasonCode: null,
-        schemaViolations: [],
-        body: text,
-        bodyText: text,
-        [rawSymbol]: text,
-      };
-    },
+    responses: { '200': { contentType: 'application/json', schemaId: null } },
+    schemaRegistry: {},
   });
 
   assert.equal(observation.outcome, 'response');
@@ -82,7 +69,6 @@ test('follows a same-origin redirect manually and returns a bounded response', a
   assert.equal(observation.redirects, 1);
   assert.equal(observation.bytes, 11);
   assertExactTransportShape(observation);
-  assert.equal(inspected, true);
   assert.deepEqual(Reflect.ownKeys(observation.inspection), ['reasonCode', 'schemaViolations']);
   assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
   assert.equal(JSON.stringify(observation).includes('{\\"ok\\":true}'), false);
@@ -92,7 +78,6 @@ test('inspects exact bounded JSON when an ordinary request header value overlaps
   const fixture = await startHttpFixture({ adminToken: ADMIN_TOKEN, userToken: 'unused-user' });
   t.after(() => fixture.close());
 
-  let inspectedText = null;
   const observation = await requestApproved({
     origin: fixture.origin,
     path: '/public',
@@ -101,31 +86,19 @@ test('inspects exact bounded JSON when an ordinary request header value overlaps
     timeoutMs: 1000,
     maxBytes: 1024,
     approvedOrigins: [fixture.origin],
-    inspectBody({ text }) {
-      inspectedText = text;
-      JSON.parse(text);
-      return { reasonCode: null, schemaViolations: [] };
-    },
+    responses: { '200': { contentType: 'application/json', schemaId: null } },
+    schemaRegistry: {},
   });
 
-  assert.equal(inspectedText, '{"ok":true}');
   assertExactTransportShape(observation);
   assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
 });
 
-test('does not allow raw response text to escape through inspection metadata', async () => {
+test('rejects response inspector callbacks before they can receive raw text', async () => {
   const rawBody = '{"secret":"body-value"}';
   const origin = 'http://127.0.0.1:34567';
-  const abusiveViolations = Array.from({ length: 105 }, (_, index) => ({
-    path: `/valid/${index}`,
-    keyword: 'type',
-  }));
-  abusiveViolations.unshift(
-    { path: rawBody, keyword: 'type' },
-    { path: '/valid', keyword: rawBody },
-    { path: '/bad~2escape', keyword: 'unknown' },
-    { path: `/${'x'.repeat(1025)}`, keyword: 'type' },
-  );
+  let callbackCalled = false;
+  let fetchCalled = false;
 
   const observation = await requestApproved({
     origin,
@@ -135,26 +108,26 @@ test('does not allow raw response text to escape through inspection metadata', a
     timeoutMs: 1000,
     maxBytes: 1024,
     approvedOrigins: [origin],
-    fetchImpl: async () => new Response(rawBody, {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }),
+    fetchImpl: async () => {
+      fetchCalled = true;
+      return new Response(rawBody, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
     inspectBody() {
-      return {
-        reasonCode: 'SCHEMA_VIOLATION',
-        schemaViolations: abusiveViolations,
-        body: rawBody,
-      };
+      callbackCalled = true;
+      return { reasonCode: null, schemaViolations: [] };
     },
   });
 
   assertExactTransportShape(observation);
+  assert.equal(observation.outcome, 'blocked');
+  assert.equal(observation.reasonCode, 'REQUEST_INVALID');
+  assert.equal(callbackCalled, false);
+  assert.equal(fetchCalled, false);
   assert.equal(JSON.stringify(observation).includes(rawBody), false);
-  assert.equal(observation.inspection.schemaViolations.length <= 100, true);
-  assert.deepEqual(observation.inspection.schemaViolations[0], {
-    path: '/valid/0',
-    keyword: 'type',
-  });
+  assert.equal(observation.inspection, null);
 });
 
 test('requires trusted non-loopback approval before sweep transport executes', async () => {

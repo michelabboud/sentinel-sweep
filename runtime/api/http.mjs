@@ -3,6 +3,7 @@ import {
   resolveRequestUrl,
   validateRedirect,
 } from '../lib/origin.mjs';
+import { checkJsonSchema } from './schema-check.mjs';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
@@ -73,19 +74,25 @@ function containsRawBody(value, rawBody) {
 
 function normalizedSchemaViolations(value, rawBody) {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter((violation) => (
-      violation !== null
-      && typeof violation === 'object'
-      && typeof violation.path === 'string'
-      && typeof violation.keyword === 'string'
-      && isJsonPointer(violation.path)
-      && SCHEMA_VIOLATION_KEYWORDS.has(violation.keyword)
-      && !containsRawBody(violation.path, rawBody)
-      && !containsRawBody(violation.keyword, rawBody)
-    ))
-    .slice(0, MAX_SCHEMA_VIOLATIONS)
-    .map(({ path, keyword }) => Object.freeze({ path, keyword }));
+  const normalized = [];
+  for (const violation of value) {
+    if (normalized.length >= MAX_SCHEMA_VIOLATIONS) break;
+    if (violation === null
+        || typeof violation !== 'object'
+        || typeof violation.path !== 'string'
+        || typeof violation.keyword !== 'string'
+        || !isJsonPointer(violation.path)
+        || !SCHEMA_VIOLATION_KEYWORDS.has(violation.keyword)
+        || containsRawBody(violation.path, rawBody)
+        || containsRawBody(violation.keyword, rawBody)) {
+      continue;
+    }
+    normalized.push(Object.freeze({
+      path: violation.path,
+      keyword: violation.keyword,
+    }));
+  }
+  return normalized;
 }
 
 function normalizedInspection(value, rawBody = '') {
@@ -104,6 +111,78 @@ function normalizedInspection(value, rawBody = '') {
     reasonCode,
     schemaViolations: Object.freeze(normalizedSchemaViolations(value.schemaViolations, rawBody)),
   });
+}
+
+function responseDefinition(responses, status) {
+  if (responses === null || typeof responses !== 'object' || Array.isArray(responses)) {
+    return null;
+  }
+  const exact = responses[String(status)];
+  if (exact !== undefined) return exact;
+  const statusClass = Math.floor(status / 100);
+  return responses[`${statusClass}XX`]
+    ?? responses[`${statusClass}xx`]
+    ?? responses.default
+    ?? null;
+}
+
+function normalizedMediaType(value) {
+  if (typeof value !== 'string') return null;
+  const mediaType = value.split(';', 1)[0].trim().toLowerCase();
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(mediaType)
+    ? mediaType
+    : null;
+}
+
+function isJsonMediaType(mediaType) {
+  return mediaType === 'application/json'
+    || (typeof mediaType === 'string'
+      && mediaType.startsWith('application/')
+      && mediaType.endsWith('+json'));
+}
+
+function bodyInspection(reasonCode = null, schemaViolations = []) {
+  return { reasonCode, schemaViolations };
+}
+
+function registryRecord(registry, schemaId) {
+  return registry instanceof Map ? registry.get(schemaId) : registry?.[schemaId];
+}
+
+function inspectResponse({ text, status, contentType, responses, schemaRegistry }) {
+  const definition = responseDefinition(responses, status);
+  if (definition === null || typeof definition !== 'object' || Array.isArray(definition)) {
+    return bodyInspection();
+  }
+
+  const expectedMediaType = normalizedMediaType(definition.contentType);
+  if (!isJsonMediaType(expectedMediaType)) return bodyInspection();
+  if (normalizedMediaType(contentType) !== expectedMediaType) {
+    return bodyInspection('CONTENT_TYPE_MISMATCH');
+  }
+
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return bodyInspection('JSON_RESPONSE_INVALID', [{ path: '', keyword: 'parse' }]);
+  }
+
+  if (definition.schemaId === null || definition.schemaId === undefined) {
+    return bodyInspection();
+  }
+
+  const record = registryRecord(schemaRegistry, definition.schemaId);
+  if (record === null || typeof record !== 'object' || Array.isArray(record)
+      || record.schema === null || typeof record.schema !== 'object'
+      || Array.isArray(record.schema)) {
+    return bodyInspection('SCHEMA_NOT_FOUND', [{ path: '', keyword: '$ref' }]);
+  }
+
+  const violations = checkJsonSchema(value, record.schema, schemaRegistry);
+  return violations.length === 0
+    ? bodyInspection()
+    : bodyInspection('SCHEMA_VIOLATION', violations);
 }
 
 function normalizedApprovedOrigins(approvedOrigins, allowNonLoopback) {
@@ -187,6 +266,8 @@ export async function requestApproved({
   maxBytes,
   approvedOrigins,
   allowNonLoopback = false,
+  responses,
+  schemaRegistry = {},
   inspectBody,
   fetchImpl = globalThis.fetch,
 } = {}) {
@@ -195,7 +276,12 @@ export async function requestApproved({
 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1
       || !Number.isInteger(maxBytes) || maxBytes < 1
-      || (inspectBody !== undefined && typeof inspectBody !== 'function')
+      || inspectBody !== undefined
+      || (responses !== undefined
+        && (responses === null || typeof responses !== 'object' || Array.isArray(responses)))
+      || (schemaRegistry === null
+        || (typeof schemaRegistry !== 'object')
+        || Array.isArray(schemaRegistry))
       || typeof fetchImpl !== 'function') {
     return failure(startedAt, redirects, 'blocked', 'REQUEST_INVALID');
   }
@@ -310,12 +396,14 @@ export async function requestApproved({
       }
 
       let inspection = null;
-      if (inspectBody !== undefined) {
+      if (responses !== undefined) {
         try {
-          inspection = normalizedInspection(await inspectBody({
+          inspection = normalizedInspection(inspectResponse({
             text: bounded.text,
             status: response.status,
             contentType,
+            responses,
+            schemaRegistry,
           }), bounded.text);
         } catch {
           inspection = normalizedInspection(null);
