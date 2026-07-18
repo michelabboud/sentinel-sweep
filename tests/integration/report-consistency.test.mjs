@@ -14,6 +14,7 @@ import fsPromises, {
   rm,
   stat,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
@@ -573,7 +574,11 @@ test('preflights tracked and kept paths before changing retention state', async 
   const historyBefore = await readFile(path.join(reportRoot, 'sweep-history.json'), 'utf8');
   await assert.rejects(
     cleanRuns({ reportRoot, keep: 1 }),
-    (error) => ['CLEAN_RUN_SYMLINK', 'CLEAN_HISTORY_MISMATCH'].includes(error?.code),
+    (error) => [
+      'CLEAN_RUN_SYMLINK',
+      'CLEAN_HISTORY_MISMATCH',
+      'HISTORY_RUN_IDENTITY_INVALID',
+    ].includes(error?.code),
   );
   assert.ok((await stat(path.join(reportRoot, oldest))).isDirectory());
   assert.ok((await lstat(path.join(reportRoot, newest))).isSymbolicLink());
@@ -584,7 +589,11 @@ test('preflights tracked and kept paths before changing retention state', async 
   await publishTestRun(reportRoot, untracked, { 'canary.txt': 'survive\n' });
   await assert.rejects(
     cleanRuns({ reportRoot, keep: 1 }),
-    (error) => error?.code === 'CLEAN_HISTORY_MISMATCH',
+    (error) => [
+      'CLEAN_HISTORY_MISMATCH',
+      'HISTORY_RUN_MISSING',
+      'RUN_ORPHAN_INVALID',
+    ].includes(error?.code),
   );
   assert.equal(await readFile(path.join(reportRoot, untracked, 'canary.txt'), 'utf8'), 'survive\n');
 });
@@ -700,7 +709,7 @@ test('bounds cleanup tree depth and child work before committing intent', async 
   );
 });
 
-test('ignores dead v2 bakery records and times out behind an exact live owner', async (t) => {
+test('ignores dead v2 bakery records and waits for an exact live owner to release', async (t) => {
   const deadRoot = await temporaryRoot(t, 'sentinel-history-dead-lock-');
   const deadId = '1'.repeat(32);
   const deadPath = path.join(deadRoot, `.sweep-history-lock-ticket-${deadId}`);
@@ -715,11 +724,11 @@ test('ignores dead v2 bakery records and times out behind an exact live owner', 
   const livePath = path.join(liveRoot, `.sweep-history-lock-ticket-${liveId}`);
   const liveContents = `L ${process.pid} ${await processStartMarker()} ${liveId} 1\n`;
   await writeFile(livePath, liveContents, { mode: 0o600 });
-  await assert.rejects(
-    appendHistoryRuntime({ reportRoot: liveRoot, findings: canonical }),
-    (error) => error?.code === 'HISTORY_LOCK_TIMEOUT',
-  );
-  assert.equal(await readFile(livePath, 'utf8'), liveContents);
+  const release = setTimeout(() => unlink(livePath).catch(() => {}), 50);
+  t.after(() => clearTimeout(release));
+  const appended = await appendHistoryRuntime({ reportRoot: liveRoot, findings: canonical });
+  assert.deepEqual(appended.runs.map((entry) => entry.runId), [canonical.runId]);
+  await assert.rejects(access(livePath, fsConstants.F_OK));
 });
 
 test('streams beyond the active-marker cap while reaping dead and released lock debris', {

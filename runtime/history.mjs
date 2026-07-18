@@ -5,21 +5,28 @@ import {
   open,
   opendir,
   readFile,
+  readlink,
   readdir,
   realpath,
   rename,
   rmdir,
+  symlink,
   unlink,
 } from 'node:fs/promises';
 import path from 'node:path';
 
 import { SentinelError } from './lib/errors.mjs';
+import { RunBoundary } from './lib/fs-boundary.mjs';
 import { validateCanonicalFindings } from './lib/findings-contract.mjs';
 import { snapshotJson } from './lib/json-snapshot.mjs';
 import { validateAgainstSchema } from './lib/schema.mjs';
+import { renderDashboard, renderMarkdown, renderPrComment } from './report.mjs';
 
 const HISTORY_SCHEMA = JSON.parse(
   readFileSync(new URL('../schemas/sweep-history.schema.json', import.meta.url), 'utf8'),
+);
+const MANIFEST_SCHEMA = JSON.parse(
+  readFileSync(new URL('../schemas/sentinel-manifest.schema.json', import.meta.url), 'utf8'),
 );
 const RUN_ID = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3})?Z(?:-[a-f0-9]{8})?$/u;
 const TRANSACTION_ID = /^[a-f0-9]{24}$/u;
@@ -40,7 +47,17 @@ const TICKET_RECORD = /^([LR]) ([1-9]\d{0,9}) ([1-9]\d*) ([a-f0-9]{32}) ([1-9]\d
 const HISTORY_NAME = 'sweep-history.json';
 const REPORT_ROOT_BASENAME = 'sentinel-v2';
 const RUN_MARKER_NAME = '.sentinel-run-identity-v2';
-const LOCK_TIMEOUT_MS = 5000;
+const RUN_STAGING_NAME = /^\.sentinel-run-staging-([a-f0-9]{64})$/u;
+const LATEST_TEMP = /^\.latest\.([1-9]\d{0,9})\.([1-9]\d*)\.([a-f0-9]{32})\.tmp$/u;
+const LATEST_NAME = 'latest';
+const REQUIRED_ARTIFACTS = Object.freeze({
+  manifest: 'sentinel-manifest.json',
+  findings: 'sentinel-findings.json',
+  markdown: 'sweep.md',
+  dashboard: 'dashboard.html',
+  prComment: 'pr-comment.md',
+});
+const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 const MAX_HISTORY_BYTES = 16 * 1024 * 1024;
 const MAX_HISTORY_RUNS = 128;
 const MAX_CLEAN_ENTRIES = MAX_HISTORY_RUNS;
@@ -720,7 +737,6 @@ function ticketOrder(left, right) {
 }
 
 async function acquireLock(anchor) {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
   const startMarker = await processStartMarker(process.pid);
   const id = randomBytes(16).toString('hex');
   if (!LOCK_ID.test(id)) throw historyError('HISTORY_LOCK_FAILED', 'Lock nonce is invalid');
@@ -759,9 +775,6 @@ async function acquireLock(anchor) {
         (record) => record.id !== id && ticketOrder(record, own) < 0,
       );
       if (!otherChoosing && !lowerTicket) return { ticket };
-      if (Date.now() >= deadline) {
-        throw historyError('HISTORY_LOCK_TIMEOUT', 'Timed out waiting for sweep history lock');
-      }
       await pause(10);
     }
   } catch (error) {
@@ -940,6 +953,778 @@ async function openPublishedRun(anchor, runId) {
     await run.handle.close().catch(() => {});
     if (error instanceof SentinelError) throw error;
     throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Published v2 run identity is invalid');
+  }
+}
+
+function publishInput(options) {
+  if (options === null || typeof options !== 'object') {
+    throw historyError(
+      'RUN_PUBLISH_INPUT_INVALID',
+      'Run publication options must be a plain own-data object',
+    );
+  }
+  let descriptors;
+  let prototype;
+  try {
+    prototype = Object.getPrototypeOf(options);
+    descriptors = Object.getOwnPropertyDescriptors(options);
+  } catch {
+    throw historyError(
+      'RUN_PUBLISH_INPUT_INVALID',
+      'Run publication options could not be inspected safely',
+    );
+  }
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw historyError(
+      'RUN_PUBLISH_INPUT_INVALID',
+      'Run publication options must be a plain own-data object',
+    );
+  }
+  const expected = descriptors.findings === undefined
+    ? ['reportRoot', 'runId', 'writeArtifacts']
+    : ['findings', 'reportRoot', 'runId', 'writeArtifacts'];
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.some((key) => typeof key !== 'string')) {
+    throw historyError(
+      'RUN_PUBLISH_INPUT_INVALID',
+      'Run publication options contain unknown or missing fields',
+    );
+  }
+  const names = keys.sort(compareCodeUnits);
+  if (names.length !== expected.length
+      || names.some((name, index) => name !== expected[index])) {
+    throw historyError(
+      'RUN_PUBLISH_INPUT_INVALID',
+      'Run publication options contain unknown or missing fields',
+    );
+  }
+  for (const name of names) {
+    const descriptor = descriptors[name];
+    if (!descriptor.enumerable
+        || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+      throw historyError(
+        'RUN_PUBLISH_INPUT_INVALID',
+        'Run publication options must contain enumerable data properties only',
+      );
+    }
+  }
+  if (typeof descriptors.reportRoot.value !== 'string'
+      || typeof descriptors.runId.value !== 'string'
+      || typeof descriptors.writeArtifacts.value !== 'function') {
+    throw historyError('RUN_PUBLISH_INPUT_INVALID', 'Run publication options are invalid');
+  }
+  const runId = descriptors.runId.value;
+  const reportRoot = descriptors.reportRoot.value;
+  if (!path.isAbsolute(reportRoot)
+      || reportRoot.includes('\0')
+      || path.basename(path.resolve(reportRoot)) !== REPORT_ROOT_BASENAME) {
+    throw historyError(
+      'REPORT_ROOT_VERSION_INVALID',
+      'Run publication requires an absolute sentinel-v2 report root',
+    );
+  }
+  if (!RUN_ID.test(runId) || path.basename(runId) !== runId) {
+    throw historyError(
+      'RUN_ID_INVALID',
+      'Run identifier must be a canonical single path segment',
+    );
+  }
+  const findings = descriptors.findings === undefined
+    ? null
+    : validateFindings(descriptors.findings.value, 'RUN_FINDINGS_INVALID');
+  if (findings !== null && findings.runId !== runId) {
+    throw historyError(
+      'RUN_ID_INVALID',
+      'Run identifier must exactly match the canonical findings document',
+    );
+  }
+  return {
+    reportRoot,
+    runId,
+    findings,
+    writeArtifacts: descriptors.writeArtifacts.value,
+  };
+}
+
+function callbackFindings(value, runId) {
+  const result = snapshotOptions(
+    value,
+    'RUN_FINDINGS_INVALID',
+    'Artifact callback must return a plain canonical findings result',
+  );
+  if (Object.keys(result).length !== 1
+      || !Object.prototype.hasOwnProperty.call(result, 'findings')) {
+    throw historyError(
+      'RUN_FINDINGS_INVALID',
+      'Artifact callback must return exactly one findings field',
+    );
+  }
+  const findings = validateFindings(result.findings, 'RUN_FINDINGS_INVALID');
+  if (findings.runId !== runId) {
+    throw historyError('RUN_ID_INVALID', 'Returned findings do not match the run identifier');
+  }
+  return findings;
+}
+
+async function readArtifact(run, name, code, message) {
+  const result = await readRegularFile(path.join(run.pinnedPath, name), {
+    corruptCode: code,
+    corruptMessage: message,
+    symlinkCode: code,
+    symlinkMessage: message,
+    readCode: code,
+    readMessage: message,
+    maxBytes: MAX_ARTIFACT_BYTES,
+  });
+  if (result === null) throw historyError('RUN_ARTIFACT_MISSING', 'Required run artifact is missing');
+  return result.contents;
+}
+
+async function readOptionalArtifact(run, name, code, message) {
+  const result = await readRegularFile(path.join(run.pinnedPath, name), {
+    corruptCode: code,
+    corruptMessage: message,
+    symlinkCode: code,
+    symlinkMessage: message,
+    readCode: code,
+    readMessage: message,
+    maxBytes: MAX_ARTIFACT_BYTES,
+  });
+  return result?.contents ?? null;
+}
+
+function parseArtifactJson(contents, code, message) {
+  try {
+    return JSON.parse(contents);
+  } catch {
+    throw historyError(code, message);
+  }
+}
+
+function canonicalValue(value) {
+  try {
+    return JSON.parse(canonicalJson(value));
+  } catch {
+    throw historyError('RUN_FINDINGS_INVALID', 'Canonical findings could not be serialized');
+  }
+}
+
+async function writeCanonicalFindingArtifacts(boundary, findings) {
+  const run = { pinnedPath: boundary.root, runId: findings.runId };
+  const existingFindings = await readOptionalArtifact(
+    run,
+    REQUIRED_ARTIFACTS.findings,
+    'RUN_FINDINGS_INVALID',
+    'Staged findings artifact is invalid',
+  );
+  if (existingFindings !== null) {
+    const parsed = validateFindings(
+      parseArtifactJson(
+        existingFindings,
+        'RUN_FINDINGS_INVALID',
+        'Staged findings artifact is not valid JSON',
+      ),
+      'RUN_FINDINGS_INVALID',
+    );
+    if (canonicalJson(parsed) !== canonicalJson(findings)) {
+      throw historyError(
+        'RUN_FINDINGS_MISMATCH',
+        'Staged findings differ from the callback result',
+      );
+    }
+  }
+  const expected = {
+    markdown: renderMarkdown(findings),
+    dashboard: renderDashboard(findings),
+    prComment: renderPrComment(findings),
+  };
+  for (const [field, name] of Object.entries({
+    markdown: REQUIRED_ARTIFACTS.markdown,
+    dashboard: REQUIRED_ARTIFACTS.dashboard,
+    prComment: REQUIRED_ARTIFACTS.prComment,
+  })) {
+    const existing = await readOptionalArtifact(
+      run,
+      name,
+      'RUN_REPORT_INVALID',
+      'Staged report artifact is invalid',
+    );
+    if (existing !== null && existing !== expected[field]) {
+      throw historyError(
+        'RUN_REPORT_MISMATCH',
+        'Staged reports do not match the canonical findings document',
+      );
+    }
+  }
+  await boundary.writeJson(REQUIRED_ARTIFACTS.findings, findings);
+  await boundary.writeText(REQUIRED_ARTIFACTS.markdown, expected.markdown);
+  await boundary.writeText(REQUIRED_ARTIFACTS.dashboard, expected.dashboard);
+  await boundary.writeText(REQUIRED_ARTIFACTS.prComment, expected.prComment);
+}
+
+async function validateRequiredArtifacts(run, expectedFindings = null) {
+  const markerToken = await readRunMarker(run);
+  const manifestContents = await readArtifact(
+    run,
+    REQUIRED_ARTIFACTS.manifest,
+    'RUN_MANIFEST_INVALID',
+    'Published manifest artifact is invalid',
+  );
+  const manifest = parseArtifactJson(
+    manifestContents,
+    'RUN_MANIFEST_INVALID',
+    'Published manifest artifact is not valid JSON',
+  );
+  try {
+    validateAgainstSchema(manifest, MANIFEST_SCHEMA, { name: 'manifest' });
+  } catch {
+    throw historyError('RUN_MANIFEST_INVALID', 'Published manifest artifact is invalid');
+  }
+  const findingsContents = await readArtifact(
+    run,
+    REQUIRED_ARTIFACTS.findings,
+    'RUN_FINDINGS_INVALID',
+    'Published findings artifact is invalid',
+  );
+  const findings = validateFindings(
+    parseArtifactJson(
+      findingsContents,
+      'RUN_FINDINGS_INVALID',
+      'Published findings artifact is not valid JSON',
+    ),
+    'RUN_FINDINGS_INVALID',
+  );
+  if (findings.runId !== run.runId
+      || (expectedFindings !== null
+        && canonicalJson(findings) !== canonicalJson(expectedFindings))) {
+    throw historyError(
+      'RUN_FINDINGS_MISMATCH',
+      'Published findings do not match the immutable run identity',
+    );
+  }
+  if (manifest.generatedAt !== findings.manifestGeneratedAt) {
+    throw historyError(
+      'RUN_MANIFEST_MISMATCH',
+      'Published manifest does not match the canonical findings generation time',
+    );
+  }
+  const markdown = await readArtifact(
+    run,
+    REQUIRED_ARTIFACTS.markdown,
+    'RUN_REPORT_INVALID',
+    'Published Markdown report is invalid',
+  );
+  const dashboard = await readArtifact(
+    run,
+    REQUIRED_ARTIFACTS.dashboard,
+    'RUN_REPORT_INVALID',
+    'Published dashboard is invalid',
+  );
+  const prComment = await readArtifact(
+    run,
+    REQUIRED_ARTIFACTS.prComment,
+    'RUN_REPORT_INVALID',
+    'Published PR report is invalid',
+  );
+  const reportMatches = {
+    markdown: markdown === renderMarkdown(findings),
+    dashboard: dashboard === renderDashboard(findings),
+    prComment: prComment === renderPrComment(findings),
+  };
+  if (!reportMatches.markdown || !reportMatches.dashboard || !reportMatches.prComment) {
+    throw historyError(
+      'RUN_REPORT_MISMATCH',
+      'Published reports do not match the canonical findings document',
+      reportMatches,
+    );
+  }
+  return { dashboard, findings, manifest, markdown, markerToken, prComment };
+}
+
+async function readTrackedArtifacts(anchor, entry) {
+  const run = await openPinnedRun(anchor, entry.runId, entry);
+  if (run === null) {
+    throw historyError('HISTORY_RUN_MISSING', 'Tracked v2 run directory is unavailable');
+  }
+  try {
+    const artifacts = await validateRequiredArtifacts(run);
+    const expected = historyEntry(artifacts.findings, {
+      markerToken: artifacts.markerToken,
+      stat: run.identity,
+    });
+    if (!sameHistoryEntry(entry, expected)) {
+      throw historyError(
+        'HISTORY_RUN_METADATA_INVALID',
+        'Tracked run metadata does not match its canonical findings',
+      );
+    }
+    if (!await revalidatePinnedRun(run, entry, artifacts.markerToken)) {
+      throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Tracked v2 run identity changed');
+    }
+    return artifacts;
+  } finally {
+    await run.handle.close().catch(() => {});
+  }
+}
+
+function artifactWriter(boundary) {
+  return Object.freeze({
+    root: boundary.root,
+    writeBytes: boundary.writeBytes.bind(boundary),
+    writeJson: boundary.writeJson.bind(boundary),
+    writeText: boundary.writeText.bind(boundary),
+  });
+}
+
+async function readLatest(anchor) {
+  const candidate = path.join(anchor, LATEST_NAME);
+  let initial;
+  try {
+    initial = await lstat(candidate, { bigint: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw historyError('LATEST_READ_FAILED', 'Latest run pointer could not be inspected');
+  }
+  if (!initial.isSymbolicLink()) {
+    throw historyError('LATEST_INVALID', 'Latest run pointer must be a symbolic link');
+  }
+  let target;
+  let current;
+  try {
+    target = await readlink(candidate);
+    current = await lstat(candidate, { bigint: true });
+  } catch {
+    throw historyError('LATEST_READ_FAILED', 'Latest run pointer could not be read safely');
+  }
+  if (!current.isSymbolicLink()
+      || !sameIdentity(initial, current)
+      || !RUN_ID.test(target)
+      || path.basename(target) !== target) {
+    throw historyError('LATEST_INVALID', 'Latest run pointer is invalid');
+  }
+  return { identity: current, runId: target };
+}
+
+async function unlinkExactSymlink(candidate, identity) {
+  const current = await pathStat(candidate);
+  if (current === null) return true;
+  if (!current.isSymbolicLink() || !sameIdentity(current, identity)) return false;
+  try {
+    await unlink(candidate);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return true;
+    return false;
+  }
+}
+
+async function replaceLatest(anchor, runId) {
+  if (runId !== null
+      && (!RUN_ID.test(runId) || path.basename(runId) !== runId)) {
+    throw historyError('LATEST_REPLACE_FAILED', 'Latest run identifier is invalid');
+  }
+  const previous = await readLatest(anchor);
+  if (previous?.runId === runId) return;
+  const destination = path.join(anchor, LATEST_NAME);
+  if (runId === null) {
+    if (previous !== null && !await unlinkExactSymlink(destination, previous.identity)) {
+      throw historyError('LATEST_REPLACE_FAILED', 'Latest run pointer changed during removal');
+    }
+    if (previous !== null) await syncDirectory(
+      anchor,
+      'LATEST_REPLACE_FAILED',
+      'Latest run pointer removal is not durable',
+    );
+    return;
+  }
+  const run = await openPinnedRun(anchor, runId);
+  if (run === null) throw historyError('LATEST_REPLACE_FAILED', 'Latest run does not exist');
+  try {
+    await readRunMarker(run);
+    if (!await revalidatePinnedRun(run)) {
+      throw historyError('LATEST_REPLACE_FAILED', 'Latest run identity changed');
+    }
+  } finally {
+    await run.handle.close().catch(() => {});
+  }
+  const startMarker = await processStartMarker(process.pid);
+  const temporary = path.join(
+    anchor,
+    `.latest.${process.pid}.${startMarker}.${randomBytes(16).toString('hex')}.tmp`,
+  );
+  let temporaryIdentity;
+  try {
+    await symlink(runId, temporary, 'dir');
+    temporaryIdentity = await lstat(temporary, { bigint: true });
+    if (!temporaryIdentity.isSymbolicLink()) {
+      throw historyError('LATEST_REPLACE_FAILED', 'Latest staging pointer is invalid');
+    }
+    await rename(temporary, destination);
+    const committed = await readLatest(anchor);
+    if (committed?.runId !== runId) {
+      throw historyError('LATEST_REPLACE_FAILED', 'Latest run pointer did not commit exactly');
+    }
+    await syncDirectory(
+      anchor,
+      'LATEST_REPLACE_FAILED',
+      'Latest run pointer replacement is not durable',
+    );
+    const durable = await readLatest(anchor);
+    if (durable?.runId !== runId) {
+      throw historyError('LATEST_REPLACE_FAILED', 'Latest run pointer changed after commit');
+    }
+  } catch (error) {
+    if (temporaryIdentity !== undefined) {
+      await unlinkExactSymlink(temporary, temporaryIdentity).catch(() => {});
+    }
+    if (error instanceof SentinelError && error.code === 'LATEST_REPLACE_FAILED') throw error;
+    throw historyError('LATEST_REPLACE_FAILED', 'Latest run pointer could not be replaced');
+  }
+}
+
+async function historyFileExists(anchor) {
+  const identity = await pathStat(path.join(anchor, HISTORY_NAME));
+  return identity !== null;
+}
+
+async function removeHistoryFile(anchor) {
+  const result = await readRegularFile(path.join(anchor, HISTORY_NAME), {
+    corruptCode: 'METADATA_ROLLBACK_FAILED',
+    corruptMessage: 'Sweep history could not be rolled back safely',
+    symlinkCode: 'METADATA_ROLLBACK_FAILED',
+    symlinkMessage: 'Sweep history could not be rolled back safely',
+    readCode: 'METADATA_ROLLBACK_FAILED',
+    readMessage: 'Sweep history could not be rolled back safely',
+    maxBytes: MAX_HISTORY_BYTES,
+  });
+  if (result !== null
+      && !await unlinkExactFile(path.join(anchor, HISTORY_NAME), result.identity)) {
+    throw historyError('METADATA_ROLLBACK_FAILED', 'Sweep history changed during rollback');
+  }
+  if (result !== null) await syncDirectory(anchor, 'METADATA_ROLLBACK_FAILED');
+}
+
+function latestRunId(history) {
+  return history.runs.length === 0 ? null : history.runs[history.runs.length - 1].runId;
+}
+
+async function commitMetadata(anchor, previous, updated) {
+  await atomicWriteHistory(anchor, updated);
+  try {
+    await replaceLatest(anchor, latestRunId(updated));
+  } catch (error) {
+    let rollbackFailure = null;
+    try {
+      if (previous.historyExisted) await atomicWriteHistory(anchor, previous.history);
+      else await removeHistoryFile(anchor);
+      await replaceLatest(anchor, previous.latestRunId);
+    } catch (rollbackError) {
+      rollbackFailure = rollbackError;
+    }
+    if (rollbackFailure !== null) {
+      throw historyError(
+        'METADATA_ROLLBACK_FAILED',
+        'Run metadata rollback could not be proven durable',
+      );
+    }
+    if (error instanceof SentinelError) throw error;
+    throw historyError('LATEST_REPLACE_FAILED', 'Latest run pointer could not be replaced');
+  }
+}
+
+async function reapLatestDebris(root) {
+  const names = [];
+  await scanRootEntries(root.anchor, async (name) => {
+    if (LATEST_TEMP.test(name)) names.push(name);
+  });
+  let dirty = false;
+  for (const name of names.sort(compareCodeUnits)) {
+    const match = LATEST_TEMP.exec(name);
+    const candidate = path.join(root.anchor, name);
+    const identity = await pathStat(candidate);
+    if (identity === null) continue;
+    if (match === null || !identity.isSymbolicLink()) {
+      throw historyError('LATEST_INVALID', 'Latest transaction debris is invalid');
+    }
+    if (await ownerIsLive(Number(match[1]), match[2])) continue;
+    if (!await unlinkExactSymlink(candidate, identity)) {
+      throw historyError('LATEST_INVALID', 'Latest transaction debris changed during recovery');
+    }
+    dirty = true;
+  }
+  if (dirty) await syncDirectory(root.anchor, 'LATEST_REPLACE_FAILED');
+}
+
+async function recoverStaging(root) {
+  const names = [];
+  await scanRootEntries(root.anchor, async (name) => {
+    if (RUN_STAGING_NAME.test(name)) names.push(name);
+  });
+  for (const name of names.sort(compareCodeUnits)) {
+    try {
+      await RunBoundary.recoverStaging(root.publicPath, name);
+    } catch {
+      throw historyError(
+        'RUN_STAGE_RECOVERY_FAILED',
+        'An incomplete run staging directory could not be recovered safely',
+      );
+    }
+  }
+}
+
+async function directRunIds(anchor) {
+  const names = [];
+  await scanRootEntries(anchor, async (name) => {
+    if (RUN_ID.test(name)) names.push(name);
+  });
+  return names.sort(compareCodeUnits);
+}
+
+async function reconcilePublishedRuns(root, history) {
+  const runIds = await directRunIds(root.anchor);
+  const direct = new Set(runIds);
+  for (const entry of history.runs) {
+    if (!direct.has(entry.runId)) {
+      throw historyError('HISTORY_RUN_MISSING', 'Tracked v2 run directory is missing');
+    }
+    const run = await openPinnedRun(root.anchor, entry.runId, entry);
+    if (run === null) {
+      throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Tracked v2 run identity changed');
+    }
+    try {
+      await readRunMarker(run, entry.markerToken);
+      if (!await revalidatePinnedRun(run, entry, entry.markerToken)) {
+        throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Tracked v2 run identity changed');
+      }
+    } finally {
+      await run.handle.close().catch(() => {});
+    }
+  }
+  const tracked = new Set(history.runs.map((entry) => entry.runId));
+  const recoveredRunIds = [];
+  const recoveredEntries = [];
+  for (const runId of runIds) {
+    if (tracked.has(runId)) continue;
+    const published = await openPublishedRun(root.anchor, runId);
+    try {
+      let artifacts;
+      try {
+        artifacts = await validateRequiredArtifacts(published.run);
+      } catch {
+        throw historyError(
+          'RUN_ORPHAN_INVALID',
+          'Untracked public run is not a complete canonical publication',
+        );
+      }
+      recoveredEntries.push(historyEntry(artifacts.findings, published));
+      recoveredRunIds.push(runId);
+    } finally {
+      await published.run.handle.close().catch(() => {});
+    }
+  }
+  if (history.runs.length + recoveredEntries.length > MAX_HISTORY_RUNS) {
+    throw historyError('HISTORY_LIMIT_EXCEEDED', 'Sweep history run limit is exhausted');
+  }
+  if (recoveredEntries.length === 0) {
+    return { history, recoveredRunIds };
+  }
+  const updated = {
+    schemaVersion: '2.0',
+    runs: [...history.runs.map(clone), ...recoveredEntries]
+      .sort((left, right) => compareCodeUnits(left.runId, right.runId)),
+  };
+  const previousLatest = await readLatest(root.anchor);
+  await commitMetadata(root.anchor, {
+    history,
+    historyExisted: await historyFileExists(root.anchor),
+    latestRunId: previousLatest?.runId ?? null,
+  }, updated);
+  return { history: deepFreeze(updated), recoveredRunIds };
+}
+
+async function reconcileMetadata(root) {
+  let history = await readHistory(root.anchor);
+  const cleanup = await recoverPendingCleanup(root.anchor, history);
+  if (!cleanup.complete) {
+    throw historyError(
+      'HISTORY_CLEANUP_PENDING',
+      'Run metadata cannot advance while cleanup recovery is pending',
+      { runIds: cleanup.pendingRunIds },
+    );
+  }
+  history = await readHistory(root.anchor);
+  if (history.pendingCleanup !== undefined) {
+    throw historyError('HISTORY_CLEANUP_PENDING', 'Cleanup intent remains pending');
+  }
+  await recoverStaging(root);
+  await reapLatestDebris(root);
+  const reconciled = await reconcilePublishedRuns(root, history);
+  history = reconciled.history;
+  await replaceLatest(root.anchor, latestRunId(history));
+  await verifyReportRoot(root);
+  return { history, recoveredRunIds: reconciled.recoveredRunIds };
+}
+
+/** Publishes one complete run while one metadata lock owns its entire lifecycle. */
+export async function publishRun(options = {}) {
+  const input = publishInput(options);
+  await RunBoundary.ensureReportRoot(input.reportRoot);
+  const root = await openReportRoot(input.reportRoot);
+  let lock;
+  let boundary = null;
+  let publishedRun = null;
+  try {
+    lock = await acquireLock(root.anchor);
+    const metadata = await reconcileMetadata(root);
+    const existing = metadata.history.runs.find((entry) => entry.runId === input.runId);
+    if (existing !== undefined) {
+      if (!metadata.recoveredRunIds.includes(input.runId)
+          || (input.findings !== null
+            && existing.findingsDigest !== createHash('sha256')
+              .update(canonicalJson(input.findings)).digest('hex'))) {
+        throw historyError('RUN_ALREADY_EXISTS', 'Run identifier is already published');
+      }
+      const artifacts = await readTrackedArtifacts(root.anchor, existing);
+      return deepFreeze({
+        runId: input.runId,
+        latestRunId: latestRunId(metadata.history),
+        findings: clone(artifacts.findings),
+        history: clone(metadata.history),
+      });
+    }
+    if (metadata.history.runs.length >= MAX_HISTORY_RUNS) {
+      throw historyError('HISTORY_LIMIT_EXCEEDED', 'Sweep history run limit is exhausted');
+    }
+    if (await pathStat(path.join(root.anchor, input.runId)) !== null) {
+      throw historyError('RUN_ALREADY_EXISTS', 'Run identifier is already present');
+    }
+    await verifyReportRoot(root);
+    const markerToken = randomBytes(32).toString('hex');
+    boundary = await RunBoundary.createStaging(root.publicPath, markerToken);
+    let artifactResult;
+    try {
+      artifactResult = await input.writeArtifacts(artifactWriter(boundary));
+    } catch {
+      throw historyError('RUN_ARTIFACT_WRITE_FAILED', 'Run artifacts could not be generated');
+    }
+    const returnedFindings = artifactResult === undefined
+      ? null
+      : callbackFindings(artifactResult, input.runId);
+    const findingsInput = input.findings ?? returnedFindings;
+    if (findingsInput === null) {
+      throw historyError(
+        'RUN_FINDINGS_INVALID',
+        'Artifact callback did not return canonical findings',
+      );
+    }
+    if (returnedFindings !== null
+        && input.findings !== null
+        && canonicalJson(returnedFindings) !== canonicalJson(input.findings)) {
+      throw historyError(
+        'RUN_FINDINGS_MISMATCH',
+        'Returned findings differ from the supplied canonical findings',
+      );
+    }
+    const findings = validateFindings(canonicalValue(findingsInput), 'RUN_FINDINGS_INVALID');
+    await writeCanonicalFindingArtifacts(boundary, findings);
+    const stagingRun = { pinnedPath: boundary.root, runId: input.runId };
+    await validateRequiredArtifacts(stagingRun, findings);
+    await boundary.commit(input.runId);
+    publishedRun = await openPublishedRun(root.anchor, input.runId);
+    try {
+      const publishedArtifacts = await validateRequiredArtifacts(publishedRun.run, findings);
+      const updated = {
+        schemaVersion: '2.0',
+        runs: [
+          ...metadata.history.runs.map(clone),
+          historyEntry(publishedArtifacts.findings, publishedRun),
+        ].sort((left, right) => compareCodeUnits(left.runId, right.runId)),
+      };
+      const previousLatest = await readLatest(root.anchor);
+      await commitMetadata(root.anchor, {
+        history: metadata.history,
+        historyExisted: await historyFileExists(root.anchor),
+        latestRunId: previousLatest?.runId ?? null,
+      }, updated);
+      if (!await revalidatePinnedRun(
+        publishedRun.run,
+        null,
+        publishedRun.markerToken,
+      )) {
+        throw historyError('HISTORY_RUN_IDENTITY_INVALID', 'Published run identity changed');
+      }
+      await verifyReportRoot(root);
+      return deepFreeze({
+        runId: input.runId,
+        latestRunId: latestRunId(updated),
+        findings: clone(findings),
+        history: clone(updated),
+      });
+    } finally {
+      await publishedRun.run.handle.close().catch(() => {});
+      publishedRun = null;
+    }
+  } finally {
+    let abortError = null;
+    await publishedRun?.run.handle.close().catch(() => {});
+    try {
+      await boundary?.abort();
+    } catch (error) {
+      abortError = error;
+    }
+    await releaseLock(root.anchor, lock);
+    await root.handle.close().catch(() => {});
+    if (abortError !== null) throw abortError;
+  }
+}
+
+/** Reads and repairs canonical history/latest under the lifecycle metadata lock. */
+export async function readSweepHistory(options = {}) {
+  const input = snapshotOptions(
+    options,
+    'HISTORY_INPUT_INVALID',
+    'History reader options must be recursively plain own-data JSON',
+  );
+  const root = await openReportRoot(input.reportRoot);
+  let lock;
+  try {
+    lock = await acquireLock(root.anchor);
+    return deepFreeze(clone((await reconcileMetadata(root)).history));
+  } finally {
+    await releaseLock(root.anchor, lock);
+    await root.handle.close().catch(() => {});
+  }
+}
+
+/** Reads one exact tracked run through pinned no-follow descriptors. */
+export async function readPublishedRun(options = {}) {
+  const input = snapshotOptions(
+    options,
+    'RUN_READ_INPUT_INVALID',
+    'Run reader options must be recursively plain own-data JSON',
+  );
+  if (!RUN_ID.test(input.runId ?? '') || path.basename(input.runId) !== input.runId) {
+    throw historyError('RUN_ID_INVALID', 'Run identifier is invalid');
+  }
+  const root = await openReportRoot(input.reportRoot);
+  let lock;
+  try {
+    lock = await acquireLock(root.anchor);
+    const metadata = await reconcileMetadata(root);
+    const entry = metadata.history.runs.find((candidate) => candidate.runId === input.runId);
+    if (entry === undefined) throw historyError('HISTORY_RUN_MISSING', 'Requested run is not tracked');
+    const artifacts = await readTrackedArtifacts(root.anchor, entry);
+    return deepFreeze({
+      runId: input.runId,
+      findings: clone(artifacts.findings),
+      manifest: clone(artifacts.manifest),
+      markdown: artifacts.markdown,
+      dashboard: artifacts.dashboard,
+      prComment: artifacts.prComment,
+    });
+  } finally {
+    await releaseLock(root.anchor, lock);
+    await root.handle.close().catch(() => {});
   }
 }
 
@@ -1483,16 +2268,19 @@ export async function cleanRuns(options = {}) {
   const pinnedRuns = new Map();
   try {
     lock = await acquireLock(root.anchor);
-    let history = await readHistory(root.anchor);
-    const recovery = await recoverPendingCleanup(root.anchor, history);
-    if (!recovery.complete) {
-      throw historyError(
-        'CLEAN_PURGE_PENDING',
-        'Cleanup recovery remains pending and requires operator intervention',
-        { runIds: recovery.pendingRunIds },
-      );
+    let history;
+    try {
+      history = (await reconcileMetadata(root)).history;
+    } catch (error) {
+      if (error?.code === 'HISTORY_CLEANUP_PENDING') {
+        throw historyError(
+          'CLEAN_PURGE_PENDING',
+          'Cleanup recovery remains pending and requires operator intervention',
+          error.details,
+        );
+      }
+      throw error;
     }
-    history = await readHistory(root.anchor);
     if (history.pendingCleanup !== undefined) {
       throw historyError('CLEAN_PURGE_PENDING', 'Cleanup intent remains pending');
     }

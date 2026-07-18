@@ -36,6 +36,19 @@ test('TargetBoundary rejects a symlink target root', async (t) => {
   });
 });
 
+test('TargetBoundary rejects a target reached through a symlinked ancestor', async (t) => {
+  const root = await fixture(t);
+  const actualParent = path.join(root, 'actual');
+  const target = path.join(actualParent, 'target');
+  const aliasParent = path.join(root, 'alias');
+  await mkdir(target, { recursive: true });
+  await symlink(actualParent, aliasParent, 'dir');
+
+  await assert.rejects(() => TargetBoundary.create(path.join(aliasParent, 'target')), {
+    code: 'TARGET_ROOT_SYMLINK',
+  });
+});
+
 test('TargetBoundary reads regular files but rejects symlinks and escapes', async (t) => {
   const root = await fixture(t);
   const targetRoot = path.join(root, 'target');
@@ -149,6 +162,19 @@ test('RunBoundary atomically replaces output symlinks and writes mode 0600', asy
   assert.equal(await readFile(victim, 'utf8'), 'untouched\n');
 });
 
+test('RunBoundary rejects a symlinked ancestor without creating through it', async (t) => {
+  const root = await fixture(t);
+  const actual = path.join(root, 'actual');
+  const alias = path.join(root, 'alias');
+  await mkdir(actual, { mode: 0o700 });
+  await symlink(actual, alias, 'dir');
+
+  await assert.rejects(() => RunBoundary.create(path.join(alias, 'run')), {
+    code: 'RUN_ROOT_SYMLINK',
+  });
+  await assert.rejects(() => lstat(path.join(actual, 'run')), { code: 'ENOENT' });
+});
+
 test('RunBoundary writes canonical JSON with a final newline', async (t) => {
   const root = await fixture(t);
   const runRoot = path.join(root, 'run');
@@ -198,6 +224,30 @@ test('RunBoundary refuses output path escapes', async (t) => {
   await assert.rejects(() => boundary.writeText('../outside.txt', 'blocked'), {
     code: 'PATH_ESCAPE',
   });
+});
+
+test('RunBoundary creates safe nested directories and synchronizes a binary artifact tree', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  await mkdir(runRoot, { mode: 0o700 });
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.writeText('collections/bruno/request.bru', 'meta {\n  name: demo\n}\n');
+  await boundary.writeBytes('screenshots/failure.png', Uint8Array.from([137, 80, 78, 71]));
+  await boundary.syncTree();
+
+  assert.equal(
+    (await lstat(path.join(runRoot, 'collections'))).mode & 0o777,
+    0o700,
+  );
+  assert.equal(
+    (await lstat(path.join(runRoot, 'collections/bruno/request.bru'))).mode & 0o777,
+    0o600,
+  );
+  assert.deepEqual(
+    await readFile(path.join(runRoot, 'screenshots/failure.png')),
+    Buffer.from([137, 80, 78, 71]),
+  );
 });
 
 test('RunBoundary atomically replaces the latest symlink without following it', async (t) => {
