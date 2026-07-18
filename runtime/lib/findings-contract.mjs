@@ -499,6 +499,7 @@ function validateSemantics(document, failure) {
   const ids = new Set();
   const summary = { critical: 0, error: 0, warning: 0, info: 0, skipped: 0 };
   const matchedCoverage = new Set();
+  let nonPolicyCoverageDiagnostics = 0;
   for (let findingIndex = 0; findingIndex < document.findings.length; findingIndex += 1) {
     const finding = document.findings[findingIndex];
     if (ids.has(finding.id)) throw failure;
@@ -535,6 +536,7 @@ function validateSemantics(document, failure) {
     let diagnostic = null;
     if (finding.category === 'coverage') {
       diagnostic = matchingCoverageDiagnostic(document, finding);
+      const requiredByPolicy = finding.reasonCode === 'COVERAGE_REQUIRED_INCOMPLETE';
       if (diagnostic === null
           || finding.subject.type !== 'run'
           || finding.subject.id !== 'coverage'
@@ -542,11 +544,26 @@ function validateSemantics(document, failure) {
           || finding.role !== null
           || finding.outcome !== 'fail'
           || Object.keys(finding.evidence).length !== 0
-          || finding.provenance.length !== 1
-          || finding.provenance[0].source !== 'manifest') {
+          || finding.provenance.length !== 1) {
         throw failure;
       }
-      const expectedSeverity = document.coverage.status === 'unsupported'
+      if (requiredByPolicy) {
+        if (document.coverage.status === 'complete'
+            || diagnostic.message !== 'Trusted configuration requires complete coverage'
+            || diagnostic.sourcePath !== null
+            || diagnostic.pointer !== null
+            || finding.provenance[0].source !== 'policy'
+            || finding.severity !== 'error') {
+          throw failure;
+        }
+      } else if (finding.provenance[0].source !== 'manifest') {
+        throw failure;
+      } else {
+        nonPolicyCoverageDiagnostics += 1;
+      }
+      const expectedSeverity = requiredByPolicy
+        ? 'error'
+        : document.coverage.status === 'unsupported'
         ? 'error'
         : document.coverage.status === 'partial' ? 'warning' : 'info';
       if (finding.severity !== expectedSeverity) throw failure;
@@ -573,6 +590,7 @@ function validateSemantics(document, failure) {
   }
 
   if (matchedCoverage.size !== document.coverage.diagnostics.length) throw failure;
+  if (document.coverage.status !== 'complete' && nonPolicyCoverageDiagnostics === 0) throw failure;
   for (let keyIndex = 0; keyIndex < SUMMARY_KEYS.length; keyIndex += 1) {
     const key = SUMMARY_KEYS[keyIndex];
     if (document.summary[key] !== summary[key]) throw failure;

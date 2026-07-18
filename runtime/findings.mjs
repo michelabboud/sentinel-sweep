@@ -80,6 +80,8 @@ const TRUSTED_COVERAGE_CODES = new Set([
   'VUE_UNTERMINATED_EXPRESSION',
   'VUE_UNTERMINATED_OBJECT',
 ]);
+const REQUIRED_COVERAGE_CODE = 'COVERAGE_REQUIRED_INCOMPLETE';
+const REQUIRED_COVERAGE_MESSAGE = 'Trusted configuration requires complete coverage';
 const BROWSER_STATUS_REASONS = new Set([
   'DOCUMENT_STATUS_EXPECTED',
   'DOCUMENT_STATUS_UNAVAILABLE',
@@ -156,6 +158,7 @@ const BUILD_KEYS = new Set([
   'plan',
   'observations',
   'coverage',
+  'requireCompleteCoverage',
   'startedAt',
   'finishedAt',
   'redact',
@@ -832,6 +835,7 @@ function normalizeDiagnostic(diagnostic, redact) {
   exactKeys(diagnostic, allowed, ['code', 'message'], 'coverage-diagnostic');
   if (!isNonBlank(diagnostic.code)
       || !REASON_CODE.test(diagnostic.code)
+      || diagnostic.code === REQUIRED_COVERAGE_CODE
       || typeof diagnostic.message !== 'string'
       || diagnostic.message.trim().length === 0) {
     fail('coverage-diagnostic');
@@ -879,7 +883,10 @@ function normalizeCoverage(coverage, redact) {
 }
 
 function diagnosticCandidate(diagnostic, status) {
-  const severity = status === 'unsupported'
+  const requiredByPolicy = diagnostic.code === REQUIRED_COVERAGE_CODE;
+  const severity = requiredByPolicy
+    ? 'error'
+    : status === 'unsupported'
     ? 'error'
     : status === 'partial'
       ? 'warning'
@@ -908,7 +915,7 @@ function diagnosticCandidate(diagnostic, status) {
       role: null,
       evidence: {},
       provenance: [{
-        source: 'manifest',
+        source: requiredByPolicy ? 'policy' : 'manifest',
         sourcePath: diagnostic.sourcePath,
         pointer: diagnostic.pointer,
       }],
@@ -1021,6 +1028,7 @@ export function buildFindings(options = {}) {
     plan,
     observations,
     coverage,
+    requireCompleteCoverage = false,
     startedAt,
     finishedAt,
     redact: suppliedRedact,
@@ -1029,6 +1037,7 @@ export function buildFindings(options = {}) {
       || !isNonBlank(runId)
       || !isNonBlank(startedAt)
       || !isNonBlank(finishedAt)
+      || typeof requireCompleteCoverage !== 'boolean'
       || !Array.isArray(observations)) {
     fail('arguments');
   }
@@ -1040,6 +1049,19 @@ export function buildFindings(options = {}) {
   if (canonicalJson(normalizedCoverage) !== canonicalJson(manifestCoverage)) {
     fail('coverage-authority');
   }
+  const effectiveCoverage = requireCompleteCoverage && normalizedCoverage.status !== 'complete'
+    ? {
+      status: normalizedCoverage.status,
+      diagnostics: [{
+        code: REQUIRED_COVERAGE_CODE,
+        message: REQUIRED_COVERAGE_MESSAGE,
+        sourcePath: null,
+        pointer: null,
+      }, ...normalizedCoverage.diagnostics].sort(
+        (left, right) => compareCodeUnits(canonicalJson(left), canonicalJson(right)),
+      ),
+    }
+    : normalizedCoverage;
   const normalizedObservations = observations.map(
     (entry) => normalizeObservation(entry, planContext, redact),
   );
@@ -1047,8 +1069,8 @@ export function buildFindings(options = {}) {
   const durations = terminalDurations(normalizedObservations);
   const candidates = mergeCandidates([
     ...normalizedObservations.filter((entry) => !entry.omitted),
-    ...normalizedCoverage.diagnostics.map(
-      (diagnostic) => diagnosticCandidate(diagnostic, normalizedCoverage.status),
+    ...effectiveCoverage.diagnostics.map(
+      (diagnostic) => diagnosticCandidate(diagnostic, effectiveCoverage.status),
     ),
   ]);
   candidates.sort((left, right) => sortFindings(left.finding, right.finding));
@@ -1061,7 +1083,7 @@ export function buildFindings(options = {}) {
     manifestGeneratedAt: manifest.generatedAt === null || manifest.generatedAt === undefined
       ? null
       : redactString(manifest.generatedAt, redact, 'manifest-generated-at'),
-    coverage: normalizedCoverage,
+    coverage: effectiveCoverage,
     summary: summarize(candidates),
     findings: candidates.map((entry) => entry.finding),
   };

@@ -134,26 +134,85 @@ export function isTrustedRedactor(value) {
   return typeof value === 'function' && TRUSTED_REDACTORS.has(value);
 }
 
-export function createRedactor(refs, env = process.env) {
-  if (!Array.isArray(refs)) {
+function snapshotSecretRefs(refs) {
+  if (!Array.isArray(refs)
+      || utilTypes.isProxy(refs)
+      || Object.getPrototypeOf(refs) !== Array.prototype) {
     throw secretError('SECRET_REFS_INVALID', 'Secret references must be an array');
   }
+  const keys = Reflect.ownKeys(refs);
+  if (keys.length !== refs.length + 1
+      || !keys.includes('length')) {
+    throw secretError('SECRET_REFS_INVALID', 'Secret references must be an own-data array');
+  }
+  const snapshot = [];
+  for (let index = 0; index < refs.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(refs, String(index));
+    if (descriptor === undefined
+        || !Object.hasOwn(descriptor, 'value')
+        || descriptor.enumerable !== true) {
+      throw secretError('SECRET_REFS_INVALID', 'Secret references must be an own-data array');
+    }
+    snapshot.push(descriptor.value);
+  }
+  return snapshot;
+}
 
-  const values = [...new Set(refs.map((ref) => resolveSecret(ref, env)))]
+function validateSecretInputs(refs, env) {
+  const snapshot = snapshotSecretRefs(refs);
+  if (env === null
+      || typeof env !== 'object'
+      || Array.isArray(env)
+      || utilTypes.isProxy(env)) {
+    throw secretError('SECRET_ENV_INVALID', 'Secret environment must be an own-data record');
+  }
+  return snapshot;
+}
+
+function percentLower(value) {
+  return value.replace(/%[0-9A-F]{2}/gu, (match) => match.toLowerCase());
+}
+
+function encodedSecretValues(value) {
+  const transport = [
+    value,
+    Buffer.from(value).toString('base64'),
+    Buffer.from(value).toString('base64url'),
+    Buffer.from(`:${value}`).toString('base64'),
+    Buffer.from(`:${value}`).toString('base64url'),
+  ];
+  const variants = new Set(transport);
+  for (const candidate of transport) {
+    try {
+      const encoded = encodeURIComponent(candidate);
+      variants.add(encoded);
+      variants.add(percentLower(encoded));
+      variants.add(encoded.replace(/%20/gu, '+'));
+      variants.add(percentLower(encoded).replace(/%20/gu, '+'));
+    } catch {
+      // Raw and binary transport forms remain available for malformed Unicode.
+    }
+  }
+  return [...variants];
+}
+
+function redactorForValues(resolvedValues) {
+  const values = [...new Set(resolvedValues)]
+    .filter((value) => value.length >= 4);
+  const encodedValues = [...new Set(values.flatMap(encodedSecretValues))]
     .filter((value) => value.length >= 4)
     .sort((left, right) => right.length - left.length);
-  const encodedValues = [...new Set(values.flatMap((value) => [
-    Buffer.from(value).toString('base64'),
-    Buffer.from(`:${value}`).toString('base64'),
-  ]))].filter((value) => value.length >= 4);
 
   return trustedRedactor((input) => {
     if (typeof input !== 'string') {
       throw secretError('REDACTION_INPUT_INVALID', 'Redaction input must be a string');
     }
 
-    let redacted = input
-      .replace(
+    let redacted = input;
+    for (const value of encodedValues) {
+      redacted = replaceAllLiteral(redacted, value, '[REDACTED]');
+    }
+    redacted = redacted.replace(
         /((?:proxy-)?authorization["']?\s*:\s*["']?\s*bearer\s+)[^\s,;"'}]+/giu,
         '$1[REDACTED]',
       )
@@ -161,9 +220,25 @@ export function createRedactor(refs, env = process.env) {
         /((?:proxy-)?authorization["']?\s*:\s*["']?\s*basic\s+)[^\s,;"'}]+/giu,
         '$1[REDACTED]',
       );
-    for (const value of [...values, ...encodedValues]) {
-      redacted = replaceAllLiteral(redacted, value, '[REDACTED]');
-    }
     return redacted;
   });
+}
+
+export function createRedactor(refs, env = process.env) {
+  const snapshot = validateSecretInputs(refs, env);
+  return redactorForValues(snapshot.map((ref) => resolveSecret(ref, env)));
+}
+
+/** Builds a trusted redactor from the configured secrets that are currently available. */
+export function createAvailableRedactor(refs, env = process.env) {
+  const snapshot = validateSecretInputs(refs, env);
+  const values = [];
+  for (const ref of snapshot) {
+    try {
+      values.push(resolveSecret(ref, env));
+    } catch (error) {
+      if (error?.code !== 'SECRET_UNAVAILABLE') throw error;
+    }
+  }
+  return redactorForValues(values);
 }

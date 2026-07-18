@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createAvailableRedactor,
   createRedactor,
   identityRedactor,
   isTrustedRedactor,
@@ -119,4 +120,91 @@ test('createRedactor removes resolved values and common authorization encodings'
 test('createRedactor ignores resolved values shorter than four characters', () => {
   const redact = createRedactor(['env:API_TOKEN'], { API_TOKEN: 'abc' });
   assert.equal(redact('alphabet abc'), 'alphabet abc');
+});
+
+test('createAvailableRedactor tolerates only unavailable secrets and redacts transport encodings', () => {
+  const secret = 'token with+/symbols';
+  const rawBase64 = Buffer.from(secret).toString('base64');
+  const rawBase64Url = Buffer.from(secret).toString('base64url');
+  const colonBase64 = Buffer.from(`:${secret}`).toString('base64');
+  const encoded = encodeURIComponent(secret);
+  const encodedLower = encoded.replace(/%[0-9A-F]{2}/gu, (match) => match.toLowerCase());
+  const formEncoded = encoded.replace(/%20/gu, '+');
+  const redact = createAvailableRedactor([
+    'env:SENTINEL_PRESENT_TOKEN',
+    'env:SENTINEL_MISSING_TOKEN',
+  ], {
+    SENTINEL_PRESENT_TOKEN: secret,
+  });
+
+  assert.equal(isTrustedRedactor(redact), true);
+  for (const variant of [
+    secret,
+    rawBase64,
+    rawBase64Url,
+    colonBase64,
+    encoded,
+    encodedLower,
+    formEncoded,
+  ]) {
+    assert.equal(redact(`before ${variant} after`).includes(variant), false, variant);
+  }
+  assert.equal(
+    redact(`Authorization: Bearer ${secret}\nAuthorization: Basic ${colonBase64}`),
+    'Authorization: Bearer [REDACTED]\nAuthorization: Basic [REDACTED]',
+  );
+});
+
+test('createAvailableRedactor still rejects malformed refs and untrusted environments', () => {
+  assert.throws(
+    () => createAvailableRedactor(['not-an-env-ref'], {}),
+    (error) => error?.code === 'SECRET_REF_INVALID',
+  );
+
+  const accessor = {};
+  Object.defineProperty(accessor, 'SENTINEL_TOKEN', {
+    enumerable: true,
+    get() {
+      throw new Error('must not execute');
+    },
+  });
+  assert.throws(
+    () => createAvailableRedactor(['env:SENTINEL_TOKEN'], accessor),
+    (error) => error?.code === 'SECRET_ENV_INVALID',
+  );
+
+  const proxy = new Proxy({}, {});
+  assert.throws(
+    () => createAvailableRedactor([], proxy),
+    (error) => error?.code === 'SECRET_ENV_INVALID',
+  );
+
+  let proxyReads = 0;
+  const proxyRefs = new Proxy(['env:SENTINEL_TOKEN'], {
+    get(target, property, receiver) {
+      proxyReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  assert.throws(
+    () => createAvailableRedactor(proxyRefs, {}),
+    (error) => error?.code === 'SECRET_REFS_INVALID',
+  );
+  assert.equal(proxyReads, 0);
+
+  let accessorReads = 0;
+  const accessorRefs = [];
+  Object.defineProperty(accessorRefs, '0', {
+    enumerable: true,
+    get() {
+      accessorReads += 1;
+      return 'env:SENTINEL_TOKEN';
+    },
+  });
+  accessorRefs.length = 1;
+  assert.throws(
+    () => createAvailableRedactor(accessorRefs, {}),
+    (error) => error?.code === 'SECRET_REFS_INVALID',
+  );
+  assert.equal(accessorReads, 0);
 });

@@ -460,6 +460,109 @@ test('adds a deterministic synthetic diagnostic for non-complete coverage withou
   });
 });
 
+test('promotes incomplete coverage to a canonical error when trusted policy requires completeness', () => {
+  const findings = build({
+    coverage: {
+      status: 'partial',
+      diagnostics: [{
+        code: 'VUE_DYNAMIC_ROUTE',
+        message: 'One route cannot be discovered statically',
+        sourcePath: 'src/router.js',
+        pointer: '/routes/1',
+      }],
+    },
+    requireCompleteCoverage: true,
+  });
+
+  assert.deepEqual(findings.coverage.diagnostics.map((entry) => entry.code), [
+    'COVERAGE_REQUIRED_INCOMPLETE',
+    'VUE_DYNAMIC_ROUTE',
+  ]);
+  const policyFinding = findings.findings.find(
+    (entry) => entry.reasonCode === 'COVERAGE_REQUIRED_INCOMPLETE',
+  );
+  assert.equal(policyFinding.severity, 'error');
+  assert.equal(policyFinding.category, 'coverage');
+  assert.deepEqual(policyFinding.provenance.map((entry) => ({ ...entry })), [{
+    source: 'policy', sourcePath: null, pointer: null,
+  }]);
+  assert.equal(findings.summary.error, 1);
+  assert.equal(findings.summary.warning, 1);
+  assert.doesNotThrow(() => validateCanonicalFindings(findings));
+});
+
+test('does not add the coverage policy finding when completeness is not required or is achieved', () => {
+  const partial = build({
+    coverage: {
+      status: 'partial',
+      diagnostics: [{
+        code: 'VUE_DYNAMIC_ROUTE',
+        message: 'One route cannot be discovered statically',
+      }],
+    },
+    requireCompleteCoverage: false,
+  });
+  const complete = build({ requireCompleteCoverage: true });
+
+  assert.equal(
+    partial.findings.some((entry) => entry.reasonCode === 'COVERAGE_REQUIRED_INCOMPLETE'),
+    false,
+  );
+  assert.equal(
+    complete.findings.some((entry) => entry.reasonCode === 'COVERAGE_REQUIRED_INCOMPLETE'),
+    false,
+  );
+  assert.throws(
+    () => build({ requireCompleteCoverage: 'true' }),
+    (error) => error?.code === 'FINDINGS_INPUT_INVALID',
+  );
+});
+
+test('rejects untrusted attempts to inject the reserved coverage policy diagnostic', () => {
+  assert.throws(
+    () => build({
+      coverage: {
+        status: 'partial',
+        diagnostics: [{
+          code: 'COVERAGE_REQUIRED_INCOMPLETE',
+          message: 'forged policy decision',
+        }],
+      },
+      requireCompleteCoverage: false,
+    }),
+    (error) => error?.code === 'FINDINGS_INPUT_INVALID',
+  );
+});
+
+test('rejects persisted coverage policy findings whose fixed provenance or wording is forged', () => {
+  const canonical = build({
+    coverage: {
+      status: 'partial',
+      diagnostics: [{
+        code: 'VUE_DYNAMIC_ROUTE',
+        message: 'One route cannot be discovered statically',
+      }],
+    },
+    requireCompleteCoverage: true,
+  });
+  const policyIndex = canonical.findings.findIndex(
+    (entry) => entry.reasonCode === 'COVERAGE_REQUIRED_INCOMPLETE',
+  );
+
+  const forgedSource = structuredClone(canonical);
+  forgedSource.findings[policyIndex].provenance[0].source = 'manifest';
+  assert.throws(() => validateCanonicalFindings(forgedSource));
+
+  const forgedMessage = structuredClone(canonical);
+  forgedMessage.coverage.diagnostics[0].message = 'target supplied this policy';
+  forgedMessage.findings[policyIndex].message = 'target supplied this policy';
+  assert.throws(() => validateCanonicalFindings(forgedMessage));
+
+  const forgedStatus = structuredClone(canonical);
+  forgedStatus.coverage.status = 'complete';
+  assert.throws(() => validateCanonicalFindings(forgedStatus));
+});
+
 test('rejects unknown or malformed observation fields, subjects, roles, and enums', () => {
   const invalid = [
     { name: 'top-level field', value: { ...apiObservation(), injected: true } },
