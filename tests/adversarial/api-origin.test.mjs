@@ -113,6 +113,50 @@ test('inspects exact bounded JSON when an ordinary request header value overlaps
   assert.deepEqual(observation.inspection, { reasonCode: null, schemaViolations: [] });
 });
 
+test('does not allow raw response text to escape through inspection metadata', async () => {
+  const rawBody = '{"secret":"body-value"}';
+  const origin = 'http://127.0.0.1:34567';
+  const abusiveViolations = Array.from({ length: 105 }, (_, index) => ({
+    path: `/valid/${index}`,
+    keyword: 'type',
+  }));
+  abusiveViolations.unshift(
+    { path: rawBody, keyword: 'type' },
+    { path: '/valid', keyword: rawBody },
+    { path: '/bad~2escape', keyword: 'unknown' },
+    { path: `/${'x'.repeat(1025)}`, keyword: 'type' },
+  );
+
+  const observation = await requestApproved({
+    origin,
+    path: '/public',
+    method: 'GET',
+    headers: {},
+    timeoutMs: 1000,
+    maxBytes: 1024,
+    approvedOrigins: [origin],
+    fetchImpl: async () => new Response(rawBody, {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+    inspectBody() {
+      return {
+        reasonCode: 'SCHEMA_VIOLATION',
+        schemaViolations: abusiveViolations,
+        body: rawBody,
+      };
+    },
+  });
+
+  assertExactTransportShape(observation);
+  assert.equal(JSON.stringify(observation).includes(rawBody), false);
+  assert.equal(observation.inspection.schemaViolations.length <= 100, true);
+  assert.deepEqual(observation.inspection.schemaViolations[0], {
+    path: '/valid/0',
+    keyword: 'type',
+  });
+});
+
 test('requires trusted non-loopback approval before sweep transport executes', async () => {
   const origin = 'https://example.test';
   const operation = {

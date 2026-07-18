@@ -13,6 +13,24 @@ const INSPECTION_REASON_CODES = new Set([
   'SCHEMA_NOT_FOUND',
   'SCHEMA_VIOLATION',
 ]);
+const SCHEMA_VIOLATION_KEYWORDS = new Set([
+  '$ref',
+  'additionalProperties',
+  'anyOf',
+  'const',
+  'enum',
+  'maximum',
+  'minimum',
+  'minItems',
+  'minLength',
+  'oneOf',
+  'parse',
+  'pattern',
+  'required',
+  'type',
+]);
+const MAX_SCHEMA_VIOLATIONS = 100;
+const MAX_SCHEMA_PATH_LENGTH = 1024;
 
 function elapsedSince(startedAt) {
   return Math.max(0, performance.now() - startedAt);
@@ -44,7 +62,16 @@ function failure(startedAt, redirects, outcome, reasonCode, fields = {}) {
   });
 }
 
-function normalizedSchemaViolations(value) {
+function isJsonPointer(value) {
+  return value.length <= MAX_SCHEMA_PATH_LENGTH
+    && /^(?:\/(?:[^~\u0000-\u001f\u007f]|~[01])*)*$/u.test(value);
+}
+
+function containsRawBody(value, rawBody) {
+  return rawBody.length > 0 && value.includes(rawBody);
+}
+
+function normalizedSchemaViolations(value, rawBody) {
   if (!Array.isArray(value)) return [];
   return value
     .filter((violation) => (
@@ -52,11 +79,16 @@ function normalizedSchemaViolations(value) {
       && typeof violation === 'object'
       && typeof violation.path === 'string'
       && typeof violation.keyword === 'string'
+      && isJsonPointer(violation.path)
+      && SCHEMA_VIOLATION_KEYWORDS.has(violation.keyword)
+      && !containsRawBody(violation.path, rawBody)
+      && !containsRawBody(violation.keyword, rawBody)
     ))
+    .slice(0, MAX_SCHEMA_VIOLATIONS)
     .map(({ path, keyword }) => Object.freeze({ path, keyword }));
 }
 
-function normalizedInspection(value) {
+function normalizedInspection(value, rawBody = '') {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return Object.freeze({
       reasonCode: 'BODY_INSPECTION_FAILED',
@@ -70,7 +102,7 @@ function normalizedInspection(value) {
       : 'BODY_INSPECTION_FAILED');
   return Object.freeze({
     reasonCode,
-    schemaViolations: Object.freeze(normalizedSchemaViolations(value.schemaViolations)),
+    schemaViolations: Object.freeze(normalizedSchemaViolations(value.schemaViolations, rawBody)),
   });
 }
 
@@ -284,7 +316,7 @@ export async function requestApproved({
             text: bounded.text,
             status: response.status,
             contentType,
-          }));
+          }), bounded.text);
         } catch {
           inspection = normalizedInspection(null);
         }
