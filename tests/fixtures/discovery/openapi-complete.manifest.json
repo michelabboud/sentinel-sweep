@@ -239,16 +239,19 @@
       "path": "/landing",
       "name": "landing",
       "component": "LandingView",
-      "aliases": [],
+      "aliases": [
+        "/home",
+        "/welcome"
+      ],
       "auth": {
-        "state": "unknown",
+        "state": "public",
         "allowedRoles": []
       },
       "parameters": [],
       "provenance": {
         "adapter": "vue-router-static",
         "file": "vue-complete/router.js",
-        "pointer": "/routes/1"
+        "pointer": "/routes/1/children/0"
       }
     }
   ],

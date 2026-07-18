@@ -71,6 +71,23 @@ test('builds the strict golden manifest and remains deterministic', async () => 
     first.routes.find((route) => route.path === '/admin').auth.allowedRoles,
     [],
   );
+  assert.deepEqual(
+    first.routes.find((route) => route.path === '/landing'),
+    {
+      id: routeId('/landing'),
+      path: '/landing',
+      name: 'landing',
+      component: 'LandingView',
+      aliases: ['/home', '/welcome'],
+      auth: { state: 'public', allowedRoles: [] },
+      parameters: [],
+      provenance: {
+        adapter: 'vue-router-static',
+        file: 'vue-complete/router.js',
+        pointer: '/routes/1/children/0',
+      },
+    },
+  );
   assert.deepEqual(first, goldenManifest);
   assert.deepEqual(second, goldenManifest);
 });

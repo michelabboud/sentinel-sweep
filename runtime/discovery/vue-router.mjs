@@ -310,6 +310,17 @@ class LiteralParser {
     this.file = file;
   }
 
+  finishScalar(node, next, pointer, terminators) {
+    if (this.tokens[next] !== undefined && terminators.has(this.tokens[next].value)) {
+      return { node, next };
+    }
+    addGap(this.state, gapKind(pointer), this.file, pointer);
+    return {
+      node: { kind: 'unsupported', pointer },
+      next: skipExpression(this.tokens, next, terminators),
+    };
+  }
+
   parseValue(index, pointer, terminators = new Set([',', '}', ']'])) {
     const token = this.tokens[index];
     if (token === undefined) {
@@ -317,29 +328,48 @@ class LiteralParser {
       return { node: { kind: 'unsupported', pointer }, next: index };
     }
     if (token.type === 'string') {
-      return { node: { kind: 'string', value: token.value, pointer }, next: index + 1 };
+      return this.finishScalar(
+        { kind: 'string', value: token.value, pointer },
+        index + 1,
+        pointer,
+        terminators,
+      );
     }
     if (token.type === 'interpolated-template') {
       addGap(this.state, 'interpolated-template', this.file, pointer);
       return { node: { kind: 'unsupported', pointer }, next: index + 1 };
     }
     if (token.type === 'number') {
-      return { node: { kind: 'number', value: token.value, pointer }, next: index + 1 };
+      return this.finishScalar(
+        { kind: 'number', value: token.value, pointer },
+        index + 1,
+        pointer,
+        terminators,
+      );
     }
     if (token.type === 'identifier' && (token.value === 'true' || token.value === 'false')) {
-      return {
-        node: { kind: 'boolean', value: token.value === 'true', pointer },
-        next: index + 1,
-      };
+      return this.finishScalar(
+        { kind: 'boolean', value: token.value === 'true', pointer },
+        index + 1,
+        pointer,
+        terminators,
+      );
     }
     if (token.type === 'identifier' && token.value === 'null') {
-      return { node: { kind: 'null', value: null, pointer }, next: index + 1 };
+      return this.finishScalar(
+        { kind: 'null', value: null, pointer },
+        index + 1,
+        pointer,
+        terminators,
+      );
     }
     if (token.value === '-' && this.tokens[index + 1]?.type === 'number') {
-      return {
-        node: { kind: 'number', value: -this.tokens[index + 1].value, pointer },
-        next: index + 2,
-      };
+      return this.finishScalar(
+        { kind: 'number', value: -this.tokens[index + 1].value, pointer },
+        index + 2,
+        pointer,
+        terminators,
+      );
     }
     if (token.value === '{') return this.parseObject(index, pointer);
     if (token.value === '[') return this.parseArray(index, pointer);
@@ -697,7 +727,22 @@ function optionalRecordString(node, state, file) {
   return null;
 }
 
-function collectRouteRecords(array, parentPath, inheritedAuth, state, file, records) {
+function mergeEmptyChildRoute(parent, child) {
+  return {
+    ...child,
+    aliases: [...new Set([...parent.aliases, ...child.aliases])].sort(compareText),
+  };
+}
+
+function collectRouteRecords(
+  array,
+  parentPath,
+  inheritedAuth,
+  state,
+  file,
+  records,
+  parentRecord = null,
+) {
   for (const routeNode of array.items) {
     if (routeNode.kind === 'unsupported') continue;
     if (routeNode.kind !== 'object') {
@@ -722,7 +767,7 @@ function collectRouteRecords(array, parentPath, inheritedAuth, state, file, reco
       continue;
     }
     const auth = routeAuth(route, inheritedAuth);
-    records.push({
+    const record = {
       id: `route:${normalized.path}`,
       path: normalized.path,
       name: optionalRecordString(route.get('name'), state, file),
@@ -735,11 +780,33 @@ function collectRouteRecords(array, parentPath, inheritedAuth, state, file, reco
         file,
         pointer: routeNode.pointer,
       },
-    });
+    };
+    let emittedRecord = record;
+    if (pathNode.value === ''
+        && parentRecord !== null
+        && parentRecord.path === record.path) {
+      const parentIndex = records.indexOf(parentRecord);
+      if (parentIndex === -1) {
+        records.push(record);
+      } else {
+        emittedRecord = mergeEmptyChildRoute(parentRecord, record);
+        records[parentIndex] = emittedRecord;
+      }
+    } else {
+      records.push(record);
+    }
 
     const children = route.get('children');
     if (children?.kind === 'array') {
-      collectRouteRecords(children, normalized.path, auth.state, state, file, records);
+      collectRouteRecords(
+        children,
+        normalized.path,
+        auth.state,
+        state,
+        file,
+        records,
+        emittedRecord,
+      );
     } else if (children !== undefined && children.kind !== 'unsupported' && children.kind !== 'null') {
       addGap(state, 'invalid-children', file, children.pointer);
     }
@@ -751,7 +818,7 @@ function semanticRoute(route) {
   return JSON.stringify(semantic);
 }
 
-function stableRoutes(records) {
+function stableRoutes(records, state) {
   const unique = new Map();
   for (const route of records) {
     const key = semanticRoute(route);
@@ -761,7 +828,30 @@ function stableRoutes(records) {
       unique.set(key, route);
     }
   }
-  return [...unique.values()].sort((left, right) => (
+  const byPath = new Map();
+  for (const route of unique.values()) {
+    const candidates = byPath.get(route.path) ?? [];
+    candidates.push(route);
+    byPath.set(route.path, candidates);
+  }
+
+  const resolved = [];
+  for (const candidates of byPath.values()) {
+    candidates.sort((left, right) => (
+      compareText(JSON.stringify(left.provenance), JSON.stringify(right.provenance))
+      || compareText(semanticRoute(left), semanticRoute(right))
+    ));
+    resolved.push(candidates[0]);
+    for (const conflict of candidates.slice(1)) {
+      addGap(
+        state,
+        'route-conflict',
+        conflict.provenance.file,
+        conflict.provenance.pointer,
+      );
+    }
+  }
+  return resolved.sort((left, right) => (
     compareText(left.path, right.path)
     || compareText(semanticRoute(left), semanticRoute(right))
     || compareText(JSON.stringify(left.provenance), JSON.stringify(right.provenance))
@@ -813,6 +903,7 @@ export async function discoverVueRouter({ boundary, relativePaths } = {}) {
     }
   }
 
+  const routes = stableRoutes(records, state);
   const gaps = [...state.gaps.entries()].sort(([left], [right]) => compareText(left, right));
   return {
     coverage: {
@@ -821,7 +912,7 @@ export async function discoverVueRouter({ boundary, relativePaths } = {}) {
       gaps: gaps.map(([gap]) => gap),
     },
     diagnostics: gaps.map(([, gap]) => diagnosticForGap(gap)),
-    routes: stableRoutes(records),
+    routes,
     operations: [],
     schemas: [],
   };

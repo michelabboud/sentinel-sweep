@@ -33,13 +33,16 @@ const routes = [
   },
   {
     path: '/landing',
-    name: 'landing',
-    component: 'LandingView',
+    name: 'landing-shell',
+    component: 'LandingShell',
+    alias: '/welcome',
+    meta: { public: true },
     children: [
       {
         path: '',
         name: 'landing',
         component: 'LandingView',
+        alias: '/home',
       },
     ],
   },
