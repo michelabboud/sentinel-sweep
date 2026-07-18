@@ -10,6 +10,7 @@ export const MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const VALID_OPCODES = new Set([0, 1, 2, 8, 9, 10]);
+const INVALID_CLOSE_CODES = new Set([1004, 1005, 1006]);
 
 function websocketError(code, message) {
   return new SentinelError(code, message);
@@ -58,6 +59,13 @@ function closePayload(code) {
   const payload = Buffer.alloc(2);
   payload.writeUInt16BE(code);
   return payload;
+}
+
+function validCloseCode(code) {
+  return (code >= 1000
+      && code <= 1014
+      && !INVALID_CLOSE_CODES.has(code))
+    || (code >= 3000 && code <= 4999);
 }
 
 export class WebSocketConnection {
@@ -130,6 +138,8 @@ export class WebSocketConnection {
     this.closeInfo = { code: 1006 };
     this.closeEmitted = false;
     this.messageHandlers = new Set();
+    this.pendingMessages = [];
+    this.pendingMessageBytes = 0;
     this.closeHandlers = new Set();
     this.errorHandlers = new Set();
     this.closed = new Promise((resolve) => { this.resolveClosed = resolve; });
@@ -149,6 +159,12 @@ export class WebSocketConnection {
       throw websocketError('WEBSOCKET_HANDLER_INVALID', 'WebSocket message handler must be a function');
     }
     this.messageHandlers.add(handler);
+    if (this.pendingMessages.length > 0) {
+      const pending = this.pendingMessages;
+      this.pendingMessages = [];
+      this.pendingMessageBytes = 0;
+      for (const message of pending) this.emitHandlers(this.messageHandlers, message);
+    }
     return () => this.messageHandlers.delete(handler);
   }
 
@@ -280,6 +296,16 @@ export class WebSocketConnection {
         throw websocketError('WEBSOCKET_PROTOCOL_ERROR', 'WebSocket close frame is invalid');
       }
       const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005;
+      if (payload.length >= 2 && !validCloseCode(code)) {
+        throw websocketError('WEBSOCKET_PROTOCOL_ERROR', 'WebSocket close status is invalid');
+      }
+      if (payload.length > 2) {
+        try {
+          new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(2));
+        } catch {
+          throw websocketError('WEBSOCKET_PROTOCOL_ERROR', 'WebSocket close reason is not valid UTF-8');
+        }
+      }
       this.closeInfo = { code };
       if (this.state === 'open') this.sendFrame(8, payload);
       this.state = 'closing';
@@ -326,7 +352,16 @@ export class WebSocketConnection {
     this.fragments = [];
     this.fragmentBytes = 0;
     this.fragmentOpcode = null;
-    this.emitHandlers(this.messageHandlers, text);
+    if (this.messageHandlers.size === 0) {
+      const bytes = Buffer.byteLength(text);
+      if (this.pendingMessageBytes + bytes > MAX_MESSAGE_BYTES) {
+        throw websocketError('WEBSOCKET_MESSAGE_TOO_LARGE', 'Queued WebSocket messages exceed 8 MiB');
+      }
+      this.pendingMessages.push(text);
+      this.pendingMessageBytes += bytes;
+    } else {
+      this.emitHandlers(this.messageHandlers, text);
+    }
   }
 
   protocolFailure(error) {
@@ -349,6 +384,8 @@ export class WebSocketConnection {
     this.emitHandlers(this.closeHandlers, this.closeInfo);
     this.closeHandlers.clear();
     this.messageHandlers.clear();
+    this.pendingMessages = [];
+    this.pendingMessageBytes = 0;
     this.resolveClosed(this.closeInfo);
   }
 

@@ -51,8 +51,29 @@ const EMPTY_CONTAINER_FUNCTION = `function (selectors) {
 
 const WEBSOCKET_GUARD_BINDING = '__sentinelWebSocketBlocked';
 const WEBSOCKET_GUARD_MARKER = '__SENTINEL_BROWSER_WEBSOCKET_BLOCKED__';
-const WEBSOCKET_GUARD_EXPRESSION = `(() => {
+const SERVICE_WORKER_GUARD_BINDING = '__sentinelServiceWorkerBlocked';
+const SERVICE_WORKER_GUARD_MARKER = '__SENTINEL_BROWSER_SERVICE_WORKER_BLOCKED__';
+const TARGET_AUTO_ATTACH_FILTER = Object.freeze([
+  { type: 'browser', exclude: true },
+  {},
+]);
+const ROOT_AUTO_ATTACH_FILTER = Object.freeze([
+  { type: 'browser', exclude: true },
+  { type: 'page', exclude: true },
+  {},
+]);
+const PAGE_TARGET_TYPES = new Set(['page', 'iframe']);
+const CONTROLLED_TARGET_TYPES = new Set([
+  'tab',
+  'page',
+  'iframe',
+  'worker',
+  'shared_worker',
+  'service_worker',
+]);
+const PAGE_GUARD_EXPRESSION = `(() => {
   const notify = globalThis.__sentinelWebSocketBlocked;
+  const notifyServiceWorker = globalThis.__sentinelServiceWorkerBlocked;
   class SentinelBlockedWebSocket {
     constructor() {
       try { notify(); } catch {}
@@ -65,6 +86,20 @@ const WEBSOCKET_GUARD_EXPRESSION = `(() => {
     configurable: false,
     writable: false,
   });
+  const serviceWorkerPrototype = globalThis.ServiceWorkerContainer?.prototype;
+  if (serviceWorkerPrototype && typeof serviceWorkerPrototype.register === 'function') {
+    Object.defineProperty(serviceWorkerPrototype, 'register', {
+      value: function sentinelBlockedServiceWorkerRegistration() {
+        try { notifyServiceWorker(); } catch {}
+        try { console.error('__SENTINEL_BROWSER_SERVICE_WORKER_BLOCKED__'); } catch {}
+        return Promise.reject(
+          new DOMException('Blocked by Sentinel browser policy', 'SecurityError'),
+        );
+      },
+      configurable: false,
+      writable: false,
+    });
+  }
 })()`;
 
 function deepFreeze(value) {
@@ -297,9 +332,16 @@ async function runAttempt({
   let browserContextId;
   let targetId;
   let sessionId;
+  let discoverTargetsEnabled = false;
+  let rootAutoAttachEnabled = false;
+  const controlledSessions = new Set();
+  const sessionTargetIds = new Map();
+  const sessionTargetTypes = new Map();
   const unsubscriptions = [];
   let settleNavigation;
   const navigationSettled = new Promise((resolve) => { settleNavigation = resolve; });
+  let resolveMainSession;
+  const mainSessionReady = new Promise((resolve) => { resolveMainSession = resolve; });
 
   try {
     ({ browserContextId } = await client.send('Target.createBrowserContext', {
@@ -309,28 +351,168 @@ async function runAttempt({
       behavior: 'deny',
       browserContextId,
     });
-    ({ targetId } = await client.send('Target.createTarget', {
-      url: 'about:blank',
-      browserContextId,
-    }));
-    ({ sessionId } = await client.send('Target.attachToTarget', { targetId, flatten: true }));
 
-    const scoped = (handler) => async (params, metadata) => {
-      if (metadata.sessionId !== sessionId) return;
-      try {
-        await handler(params);
-      } catch {
-        recordOnce(records, {
-          category: 'runtime', severity: 'error', outcome: 'fail',
-          reasonCode: 'BROWSER_EVENT_HANDLER_FAILED',
-          message: 'Browser event processing failed inside the trusted runtime',
-          expected: 'bounded browser event handling', actual: 'event handling failed',
-        });
+    const stopMainLoading = async () => {
+      if (sessionId !== undefined) {
         await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
-        settleNavigation('event-failed');
       }
     };
-    unsubscriptions.push(client.on('Fetch.requestPaused', scoped(async (params) => {
+    const closeControlledSession = async (controlledSessionId) => {
+      const controlledTargetId = sessionTargetIds.get(controlledSessionId);
+      if (controlledTargetId !== undefined && controlledTargetId !== targetId) {
+        await client.send('Target.closeTarget', { targetId: controlledTargetId }).catch(() => {});
+      }
+    };
+    const recordEventHandlerFailure = async (controlledSessionId) => {
+      recordOnce(records, {
+        category: 'runtime', severity: 'error', outcome: 'fail',
+        reasonCode: 'BROWSER_EVENT_HANDLER_FAILED',
+        message: 'Browser event processing failed inside the trusted runtime',
+        expected: 'bounded browser event handling', actual: 'event handling failed',
+      });
+      await stopMainLoading();
+      await closeControlledSession(controlledSessionId);
+      settleNavigation('event-failed');
+    };
+    const scoped = (handler, { mainOnly = false } = {}) => async (params, metadata) => {
+      const controlledSessionId = metadata.sessionId;
+      if (controlledSessionId === null
+          || !controlledSessions.has(controlledSessionId)
+          || (mainOnly && controlledSessionId !== sessionId)) return;
+      try {
+        await handler(params, controlledSessionId);
+      } catch {
+        await recordEventHandlerFailure(controlledSessionId);
+      }
+    };
+
+    const configureControlledSession = async (
+      controlledSessionId,
+      targetType,
+      { resume = false } = {},
+    ) => {
+      if (targetType === 'tab') {
+        await client.send('Target.setAutoAttach', {
+          autoAttach: true,
+          waitForDebuggerOnStart: true,
+          flatten: true,
+          filter: TARGET_AUTO_ATTACH_FILTER,
+        }, controlledSessionId);
+        return;
+      }
+      await client.send('Fetch.enable', {
+        patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+      }, controlledSessionId);
+      await client.send('Network.enable', {}, controlledSessionId);
+      await client.send('Network.setBypassServiceWorker', {
+        bypass: true,
+      }, controlledSessionId);
+      await client.send('Network.setCacheDisabled', {
+        cacheDisabled: true,
+      }, controlledSessionId);
+      await client.send('Network.setBlockedURLs', {
+        urls: ['ws://*/*', 'wss://*/*'],
+      }, controlledSessionId);
+      await client.send('Runtime.enable', {}, controlledSessionId);
+      if (PAGE_TARGET_TYPES.has(targetType)) {
+        await client.send('Page.enable', {}, controlledSessionId);
+        await client.send('Runtime.addBinding', {
+          name: WEBSOCKET_GUARD_BINDING,
+        }, controlledSessionId);
+        await client.send('Runtime.addBinding', {
+          name: SERVICE_WORKER_GUARD_BINDING,
+        }, controlledSessionId);
+        await client.send('Page.addScriptToEvaluateOnNewDocument', {
+          source: PAGE_GUARD_EXPRESSION,
+        }, controlledSessionId);
+      }
+      await client.send('Target.setAutoAttach', {
+        autoAttach: true,
+        waitForDebuggerOnStart: true,
+        flatten: true,
+        filter: TARGET_AUTO_ATTACH_FILTER,
+      }, controlledSessionId);
+      if (resume) {
+        await client.send('Runtime.runIfWaitingForDebugger', {}, controlledSessionId);
+      }
+    };
+
+    unsubscriptions.push(client.on('Target.attachedToTarget', async (params, metadata) => {
+      const childSessionId = params?.sessionId;
+      const targetInfo = params?.targetInfo;
+      if (typeof childSessionId !== 'string'
+          || childSessionId.length === 0
+          || targetInfo === null
+          || typeof targetInfo !== 'object') return;
+      const parentControlled = metadata.sessionId !== null
+        && controlledSessions.has(metadata.sessionId);
+      const contextControlled = targetInfo.browserContextId === browserContextId;
+      if (!parentControlled && !contextControlled) {
+        await client.send('Runtime.runIfWaitingForDebugger', {}, childSessionId).catch(() => {});
+        return;
+      }
+
+      const targetType = typeof targetInfo.type === 'string' ? targetInfo.type : 'unknown';
+      const mainPage = targetType === 'page'
+        && (targetInfo.targetId === targetId || sessionId === undefined);
+      if ((targetType === 'page' && !mainPage) || !CONTROLLED_TARGET_TYPES.has(targetType)) {
+        recordOnce(records, {
+          category: 'security', severity: 'critical', outcome: 'fail',
+          reasonCode: 'UNEXPECTED_TARGET_BLOCKED',
+          message: 'Browser closed an unexpected child target before it could execute',
+          expected: 'no unexpected browser child targets', actual: 'unexpected target attempted',
+        });
+        if (typeof targetInfo.targetId === 'string') {
+          await client.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
+        }
+        const parentTargetId = metadata.sessionId === null
+          ? undefined
+          : sessionTargetIds.get(metadata.sessionId);
+        if (parentTargetId !== undefined) {
+          await client.send('Target.closeTarget', { targetId: parentTargetId }).catch(() => {});
+        }
+        return;
+      }
+
+      controlledSessions.add(childSessionId);
+      sessionTargetTypes.set(childSessionId, targetType);
+      if (typeof targetInfo.targetId === 'string') {
+        sessionTargetIds.set(childSessionId, targetInfo.targetId);
+      }
+      if (mainPage) sessionId = childSessionId;
+      try {
+        await configureControlledSession(childSessionId, targetType, {
+          resume: targetType !== 'tab',
+        });
+        if (metadata.sessionId !== null
+            && sessionTargetTypes.get(metadata.sessionId) === 'tab'
+            && targetType !== 'tab') {
+          await client.send('Runtime.runIfWaitingForDebugger', {}, metadata.sessionId);
+        }
+        if (mainPage) resolveMainSession(childSessionId);
+      } catch {
+        recordOnce(records, {
+          category: 'security', severity: 'critical', outcome: 'fail',
+          reasonCode: 'BROWSER_TARGET_POLICY_FAILED',
+          message: 'Browser closed a child target whose network policy could not be installed',
+          expected: 'network policy before target execution', actual: 'target policy failed',
+        });
+        if (typeof targetInfo.targetId === 'string') {
+          await client.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
+        }
+        if (mainPage) resolveMainSession(null);
+        settleNavigation('target-policy-failed');
+      }
+    }));
+    unsubscriptions.push(client.on('Target.detachedFromTarget', async (params) => {
+      if (typeof params?.sessionId === 'string') {
+        controlledSessions.delete(params.sessionId);
+        sessionTargetIds.delete(params.sessionId);
+        sessionTargetTypes.delete(params.sessionId);
+      }
+    }));
+
+    unsubscriptions.push(client.on('Fetch.requestPaused', scoped(async (params, controlledSessionId) => {
       const method = typeof params?.request?.method === 'string'
         ? params.request.method.toUpperCase()
         : 'UNKNOWN';
@@ -344,8 +526,9 @@ async function runAttempt({
         await client.send('Fetch.failRequest', {
           requestId: params.requestId,
           errorReason: 'BlockedByClient',
-        }, sessionId);
-        await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+        }, controlledSessionId);
+        await stopMainLoading();
+        await closeControlledSession(controlledSessionId);
         settleNavigation('mutation-blocked');
         return;
       }
@@ -362,18 +545,19 @@ async function runAttempt({
         await client.send('Fetch.failRequest', {
           requestId: params.requestId,
           errorReason: 'BlockedByClient',
-        }, sessionId);
-        await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+        }, controlledSessionId);
+        await stopMainLoading();
+        await closeControlledSession(controlledSessionId);
         settleNavigation('blocked');
         return;
       }
       await client.send('Fetch.continueRequest', {
         requestId: params.requestId,
         headers: requestHeaders(params?.request?.headers, classification === 'approved' ? token : null),
-      }, sessionId);
+      }, controlledSessionId);
     })));
-    unsubscriptions.push(client.on('Network.requestWillBeSent', scoped(async (params) => {
-      requestTypes.set(params.requestId, {
+    unsubscriptions.push(client.on('Network.requestWillBeSent', scoped(async (params, controlledSessionId) => {
+      requestTypes.set(`${controlledSessionId}:${params.requestId}`, {
         type: params.type,
         origin: exactNetworkOrigin(params?.request?.url, approvedOrigin),
       });
@@ -385,13 +569,15 @@ async function runAttempt({
           message: 'Browser blocked a request outside the exact approved origin',
           expected: 'exact approved origin', actual: 'unapproved origin',
         });
-        await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+        await stopMainLoading();
         settleNavigation('blocked');
       }
     })));
-    unsubscriptions.push(client.on('Network.responseReceived', scoped(async (params) => {
+    unsubscriptions.push(client.on('Network.responseReceived', scoped(async (params, controlledSessionId) => {
       const classification = exactNetworkOrigin(params?.response?.url, approvedOrigin);
-      if (params.type === 'Document' && classification === 'approved') {
+      if (controlledSessionId === sessionId
+          && params.type === 'Document'
+          && classification === 'approved') {
         documentStatus = Number.isInteger(params?.response?.status)
           ? params.response.status
           : Math.trunc(params?.response?.status);
@@ -405,8 +591,8 @@ async function runAttempt({
         });
       }
     })));
-    unsubscriptions.push(client.on('Network.loadingFailed', scoped(async (params) => {
-      const request = requestTypes.get(params.requestId);
+    unsubscriptions.push(client.on('Network.loadingFailed', scoped(async (params, controlledSessionId) => {
+      const request = requestTypes.get(`${controlledSessionId}:${params.requestId}`);
       if (request?.type !== 'Document' && request?.origin === 'approved') {
         recordOnce(records, {
           category: 'network', severity: 'error', outcome: 'fail',
@@ -416,41 +602,59 @@ async function runAttempt({
         });
       }
     })));
-    unsubscriptions.push(client.on('Network.webSocketCreated', scoped(async () => {
+    unsubscriptions.push(client.on('Network.webSocketCreated', scoped(async (_params, controlledSessionId) => {
       recordOnce(records, {
         category: 'security', severity: 'critical', outcome: 'fail',
         reasonCode: 'BROWSER_WEBSOCKET_BLOCKED',
         message: 'Browser blocked a page-initiated WebSocket channel',
         expected: 'no page-initiated WebSocket channels', actual: 'WebSocket attempted',
       });
-      await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+      await stopMainLoading();
+      await closeControlledSession(controlledSessionId);
     })));
     unsubscriptions.push(client.on('Runtime.bindingCalled', scoped(async (params) => {
-      if (params?.name !== WEBSOCKET_GUARD_BINDING) return;
+      if (params?.name !== WEBSOCKET_GUARD_BINDING
+          && params?.name !== SERVICE_WORKER_GUARD_BINDING) return;
+      const serviceWorker = params.name === SERVICE_WORKER_GUARD_BINDING;
       recordOnce(records, {
         category: 'security', severity: 'critical', outcome: 'fail',
-        reasonCode: 'BROWSER_WEBSOCKET_BLOCKED',
-        message: 'Browser blocked a page-initiated WebSocket channel',
-        expected: 'no page-initiated WebSocket channels', actual: 'WebSocket attempted',
+        reasonCode: serviceWorker ? 'SERVICE_WORKER_BLOCKED' : 'BROWSER_WEBSOCKET_BLOCKED',
+        message: serviceWorker
+          ? 'Browser blocked page-initiated service-worker registration'
+          : 'Browser blocked a page-initiated WebSocket channel',
+        expected: serviceWorker
+          ? 'no page-initiated service workers'
+          : 'no page-initiated WebSocket channels',
+        actual: serviceWorker ? 'service worker attempted' : 'WebSocket attempted',
       });
-      await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+      await stopMainLoading();
     })));
     unsubscriptions.push(client.on('Runtime.consoleAPICalled', scoped(async (params) => {
       if (params.type === 'error') {
         const blockedWebSocket = Array.isArray(params.args)
           && params.args.some((argument) => argument?.value === WEBSOCKET_GUARD_MARKER);
+        const blockedServiceWorker = Array.isArray(params.args)
+          && params.args.some((argument) => argument?.value === SERVICE_WORKER_GUARD_MARKER);
         recordOnce(records, {
-          category: blockedWebSocket ? 'security' : 'console',
-          severity: blockedWebSocket ? 'critical' : 'error',
+          category: blockedWebSocket || blockedServiceWorker ? 'security' : 'console',
+          severity: blockedWebSocket || blockedServiceWorker ? 'critical' : 'error',
           outcome: 'fail',
-          reasonCode: blockedWebSocket ? 'BROWSER_WEBSOCKET_BLOCKED' : 'CONSOLE_ERROR',
-          message: blockedWebSocket
-            ? 'Browser blocked a page-initiated WebSocket channel'
-            : 'The page reported a console error',
-          expected: blockedWebSocket
-            ? 'no page-initiated WebSocket channels'
-            : 'no console errors',
-          actual: blockedWebSocket ? 'WebSocket attempted' : 'console error reported',
+          reasonCode: blockedServiceWorker
+            ? 'SERVICE_WORKER_BLOCKED'
+            : blockedWebSocket ? 'BROWSER_WEBSOCKET_BLOCKED' : 'CONSOLE_ERROR',
+          message: blockedServiceWorker
+            ? 'Browser blocked page-initiated service-worker registration'
+            : blockedWebSocket
+              ? 'Browser blocked a page-initiated WebSocket channel'
+              : 'The page reported a console error',
+          expected: blockedServiceWorker
+            ? 'no page-initiated service workers'
+            : blockedWebSocket
+              ? 'no page-initiated WebSocket channels'
+              : 'no console errors',
+          actual: blockedServiceWorker
+            ? 'service worker attempted'
+            : blockedWebSocket ? 'WebSocket attempted' : 'console error reported',
         });
       }
     })));
@@ -475,7 +679,7 @@ async function runAttempt({
     })));
     unsubscriptions.push(client.on('Page.loadEventFired', scoped(async () => {
       settleNavigation('loaded');
-    })));
+    }, { mainOnly: true })));
     unsubscriptions.push(client.on('Page.frameNavigated', scoped(async (params) => {
       if (!navigationStarted || params?.frame?.parentId !== undefined) return;
       if (exactNetworkOrigin(params?.frame?.url, approvedOrigin) !== 'approved') {
@@ -486,30 +690,37 @@ async function runAttempt({
           message: 'Browser blocked a navigation outside the exact approved origin',
           expected: 'exact approved origin', actual: 'unapproved origin',
         });
-        await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+        await stopMainLoading();
         settleNavigation('blocked');
       }
-    })));
+    }, { mainOnly: true })));
 
-    await client.send('Page.enable', {}, sessionId);
-    await client.send('Runtime.enable', {}, sessionId);
-    await client.send('Runtime.addBinding', { name: WEBSOCKET_GUARD_BINDING }, sessionId);
-    await client.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: WEBSOCKET_GUARD_EXPRESSION,
-    }, sessionId);
-    await client.send('Network.enable', {}, sessionId);
-    await client.send('Network.setBypassServiceWorker', { bypass: true }, sessionId);
-    await client.send('Network.setCacheDisabled', { cacheDisabled: true }, sessionId);
-    await client.send('Network.setBlockedURLs', { urls: ['ws://*/*', 'wss://*/*'] }, sessionId);
+    await client.send('Target.setDiscoverTargets', { discover: true });
+    discoverTargetsEnabled = true;
+    await client.send('Target.setAutoAttach', {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      filter: ROOT_AUTO_ATTACH_FILTER,
+    });
+    rootAutoAttachEnabled = true;
+    ({ targetId } = await client.send('Target.createTarget', {
+      url: 'about:blank',
+      browserContextId,
+    }));
+    const mainTargetTimeout = timeoutPromise(config.responseTimeoutMs, null);
+    try {
+      sessionId = await Promise.race([mainSessionReady, mainTargetTimeout.promise]);
+    } finally {
+      mainTargetTimeout.cancel();
+    }
+    if (sessionId === null) throw new Error('main target policy unavailable');
     await client.send('Log.enable', {}, sessionId);
     await client.send('Emulation.setDeviceMetricsOverride', {
       width: viewport,
       height: 900,
       deviceScaleFactor: 1,
       mobile: false,
-    }, sessionId);
-    await client.send('Fetch.enable', {
-      patterns: [{ urlPattern: '*', requestStage: 'Request' }],
     }, sessionId);
 
     const requestedPath = materializePath(route, decision.parameterValues);
@@ -597,7 +808,9 @@ async function runAttempt({
 
     records.push(statusRecord(documentStatus, accessExpected));
     let screenshotPath = null;
-    if (config.screenshotOnError === true && records.some((record) => record.outcome === 'fail')) {
+    if (role === null
+        && config.screenshotOnError === true
+        && records.some((record) => record.outcome === 'fail')) {
       const captured = await client.send('Page.captureScreenshot', {
         format: 'png', fromSurface: true, captureBeyondViewport: false,
       }, sessionId);
@@ -637,11 +850,22 @@ async function runAttempt({
       evidence: { durationMs: performance.now() - startedAt, viewport },
     })];
   } finally {
-    for (const unsubscribe of unsubscriptions) unsubscribe();
     if (targetId !== undefined) await client.send('Target.closeTarget', { targetId }).catch(() => {});
     if (browserContextId !== undefined) {
       await client.send('Target.disposeBrowserContext', { browserContextId }).catch(() => {});
     }
+    if (rootAutoAttachEnabled) {
+      await client.send('Target.setAutoAttach', {
+        autoAttach: false,
+        waitForDebuggerOnStart: false,
+        flatten: true,
+      }).catch(() => {});
+    }
+    if (discoverTargetsEnabled) {
+      await client.send('Target.setDiscoverTargets', { discover: false }).catch(() => {});
+    }
+    await client.flushEvents().catch(() => {});
+    for (const unsubscribe of unsubscriptions) unsubscribe();
   }
 }
 

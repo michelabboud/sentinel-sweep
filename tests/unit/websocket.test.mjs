@@ -124,7 +124,7 @@ function createClientFrameCollector(socket, initial = Buffer.alloc(0)) {
   };
 }
 
-async function startRawWebSocketServer(t) {
+async function startRawWebSocketServer(t, { initialServerFrame = null } = {}) {
   const sockets = new Set();
   let resolvePeer;
   let rejectPeer;
@@ -141,7 +141,7 @@ async function startRawWebSocketServer(t) {
       const key = request.headers['sec-websocket-key'];
       assert.equal(typeof key, 'string');
       const accept = createHash('sha1').update(`${key}${WEBSOCKET_GUID}`).digest('base64');
-      socket.write([
+      const response = Buffer.from([
         'HTTP/1.1 101 Switching Protocols',
         'Upgrade: websocket',
         'Connection: Upgrade',
@@ -149,6 +149,9 @@ async function startRawWebSocketServer(t) {
         '',
         '',
       ].join('\r\n'));
+      socket.write(initialServerFrame === null
+        ? response
+        : Buffer.concat([response, initialServerFrame]));
       const collector = createClientFrameCollector(socket, head);
       resolvePeer({
         socket,
@@ -325,4 +328,91 @@ test('CDP rejects pending requests when the transport disconnects', async (t) =>
 
   await assert.rejects(pending, { code: 'CDP_DISCONNECTED' });
   await client.close();
+});
+
+test('queues a complete message received in the HTTP upgrade head until a listener registers', async (t) => {
+  const server = await startRawWebSocketServer(t, {
+    initialServerFrame: encodeServerFrame({ opcode: 1, payload: '{"head":true}' }),
+  });
+  const connection = await WebSocketConnection.connect(server.url);
+  const peer = await server.peer;
+
+  const message = await withTimeout(
+    new Promise((resolve) => connection.onMessage(resolve)),
+    'queued upgrade-head message',
+  );
+  assert.equal(message, '{"head":true}');
+
+  const closing = connection.close();
+  const closeFrame = await peer.nextFrame();
+  peer.send(encodeServerFrame({ opcode: 8, payload: closeFrame.payload }));
+  peer.socket.end();
+  await closing;
+});
+
+test('rejects invalid close status codes and malformed UTF-8 reasons as protocol failures', async (t) => {
+  for (const [name, payload] of [
+    ['reserved status code', Buffer.from([0x03, 0xed])],
+    ['malformed UTF-8 reason', Buffer.from([0x03, 0xe8, 0xc3, 0x28])],
+  ]) {
+    await t.test(name, async (subtest) => {
+      const server = await startRawWebSocketServer(subtest);
+      const connection = await WebSocketConnection.connect(server.url);
+      const peer = await server.peer;
+      const errored = withTimeout(
+        new Promise((resolve) => connection.onError(resolve)),
+        `${name} protocol error`,
+      );
+
+      peer.send(encodeServerFrame({ opcode: 8, payload }));
+      assert.equal((await errored).code, 'WEBSOCKET_PROTOCOL_ERROR');
+      const reply = await peer.nextFrame();
+      assert.equal(reply.opcode, 8);
+      assert.equal(reply.payload.readUInt16BE(0), 1002);
+      peer.socket.destroy();
+      await connection.close();
+    });
+  }
+});
+
+class FakeWebSocketConnection {
+  constructor() {
+    this.handlers = {};
+    this.closeCalls = 0;
+  }
+
+  onMessage(handler) { this.handlers.message = handler; }
+
+  onError(handler) { this.handlers.error = handler; }
+
+  onClose(handler) { this.handlers.close = handler; }
+
+  sendJson() {}
+
+  async close() { this.closeCalls += 1; }
+}
+
+test('actively closes the transport on invalid CDP messages and event-handler failures', async (t) => {
+  await t.test('invalid message', async () => {
+    const connection = new FakeWebSocketConnection();
+    const client = new CdpClient(connection);
+    connection.handlers.message('{not-json');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(connection.closeCalls, 1);
+    await client.close();
+  });
+
+  await t.test('event handler failure', async () => {
+    const connection = new FakeWebSocketConnection();
+    const client = new CdpClient(connection);
+    client.on('Runtime.consoleAPICalled', () => { throw new Error('handler failure'); });
+    connection.handlers.message(JSON.stringify({
+      method: 'Runtime.consoleAPICalled',
+      params: { type: 'error' },
+    }));
+    await client.flushEvents();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(connection.closeCalls, 1);
+    await client.close();
+  });
 });

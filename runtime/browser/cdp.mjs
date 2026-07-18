@@ -24,6 +24,7 @@ export class CdpClient {
     this.handlers = new Map();
     this.state = 'open';
     this.eventChain = Promise.resolve();
+    this.transportClosePromise = null;
 
     connection.onMessage((text) => this.receive(text));
     connection.onError(() => this.disconnect('CDP_TRANSPORT_FAILED'));
@@ -136,6 +137,16 @@ export class CdpClient {
       pending.reject(error);
     }
     this.pending.clear();
+    void this.closeTransport();
+  }
+
+  closeTransport() {
+    if (this.transportClosePromise === null) {
+      this.transportClosePromise = Promise.resolve()
+        .then(() => this.connection.close())
+        .catch(() => {});
+    }
+    return this.transportClosePromise;
   }
 
   async flushEvents() {
@@ -144,6 +155,6 @@ export class CdpClient {
 
   async close() {
     if (this.state !== 'closed') this.disconnect('CDP_DISCONNECTED');
-    await this.connection.close();
+    await this.closeTransport();
   }
 }

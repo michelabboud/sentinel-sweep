@@ -132,6 +132,7 @@ test('launches a fresh Chrome profile, speaks CDP, captures PNG, and terminates 
     assert.equal(session.args.includes('--headless=new'), true);
     assert.equal(session.args.includes('--remote-debugging-port=0'), true);
     assert.equal(session.args.includes('--disable-background-networking'), true);
+    assert.equal(session.args.includes('--disable-popup-blocking'), true);
     assert.equal(session.args.at(-1), 'about:blank');
     assert.equal(session.args.some((argument) => /bearer|authorization|secret/iu.test(argument)), false);
     await access(profileDir);
@@ -167,5 +168,67 @@ test('launches a fresh Chrome profile, speaks CDP, captures PNG, and terminates 
   }
 
   await waitForProcessesToExit(observedPids);
+  await assert.rejects(access(profileDir), { code: 'ENOENT' });
+});
+
+test('waits for the entire POSIX process group and kills a TERM-ignoring descendant', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX process groups are unavailable on Windows');
+    return;
+  }
+
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-chrome-group-'));
+  const targetRoot = path.join(temporary, 'target');
+  const fakeChrome = path.join(temporary, 'fake-chrome');
+  const childPidFile = path.join(temporary, 'child.pid');
+  const profileDir = path.join(temporary, 'profile');
+  await mkdir(targetRoot);
+  await writeFile(fakeChrome, `#!/bin/sh
+(
+  trap '' TERM
+  while :; do sleep 60; done
+) &
+child_pid=$!
+printf '%s\\n' "$child_pid" > '${childPidFile}'
+trap 'exit 0' TERM
+printf '%s\\n' 'DevTools listening on ws://127.0.0.1:9222/devtools/browser/00000000-0000-0000-0000-000000000000' >&2
+while :; do sleep 60; done
+`, { mode: 0o700 });
+  await chmod(fakeChrome, 0o700);
+
+  let session;
+  t.after(async () => {
+    if (session?.pid) {
+      try {
+        process.kill(-session.pid, 'SIGKILL');
+      } catch (error) {
+        if (error?.code !== 'ESRCH') throw error;
+      }
+    }
+    await rm(temporary, { recursive: true, force: true });
+  });
+
+  session = await launchChrome({
+    executablePath: fakeChrome,
+    profileDir,
+    targetRoot,
+    headless: true,
+    timeoutMs: 5000,
+  });
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      await access(childPidFile);
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  const descendantPid = Number((await readFile(childPidFile, 'utf8')).trim());
+  assert.equal(processExists(descendantPid), true);
+
+  await session.close();
+  assert.equal(processExists(descendantPid), false, 'TERM-ignoring descendant remained alive');
   await assert.rejects(access(profileDir), { code: 'ENOENT' });
 });

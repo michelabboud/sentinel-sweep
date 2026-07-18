@@ -31,7 +31,14 @@ function html(title, body = '') {
 async function startBrowserFixture(t) {
   const receiverRequests = [];
   const approvedRequests = [];
-  const mutations = { post: 0, delete: 0, websocket: 0 };
+  const mutations = {
+    post: 0,
+    delete: 0,
+    websocket: 0,
+    serviceWorker: 0,
+    worker: 0,
+    popup: 0,
+  };
   const receiver = createServer((request, response) => {
     receiverRequests.push({
       path: request.url,
@@ -51,6 +58,41 @@ async function startBrowserFixture(t) {
       path: requested.pathname,
       authorization: request.headers.authorization ?? null,
     });
+    if (requested.pathname === '/service-worker.js') {
+      response.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'no-store',
+        'service-worker-allowed': '/',
+      });
+      response.end('self.addEventListener("install", () => { fetch("/sw-mutate", { method: "POST" }).catch(() => {}); });');
+      return;
+    }
+    if (requested.pathname === '/worker.js') {
+      response.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      response.end('fetch("/worker-mutate", { method: "POST" }).catch(() => {});');
+      return;
+    }
+    if (requested.pathname === '/sw-mutate' && request.method === 'POST') {
+      mutations.serviceWorker += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (requested.pathname === '/worker-mutate' && request.method === 'POST') {
+      mutations.worker += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (requested.pathname === '/popup-mutate' && request.method === 'POST') {
+      mutations.popup += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
     if (requested.pathname === '/mutate' && request.method === 'POST') {
       mutations.post += 1;
       response.writeHead(204);
@@ -75,7 +117,20 @@ async function startBrowserFixture(t) {
 
     let status = 200;
     let body;
-    if (requested.pathname === '/protected') {
+    if (requested.pathname === '/auth-visual') {
+      if (request.headers.authorization === `Bearer ${ADMIN_TOKEN}`) {
+        body = html(
+          'Authenticated failure',
+          `<main>${ADMIN_TOKEN}</main><script>console.error("authenticated visual failure")</script>`,
+        );
+      } else if (request.headers.authorization === `Bearer ${USER_TOKEN}`) {
+        status = 403;
+        body = html('Forbidden', '<main>forbidden</main>');
+      } else {
+        status = 401;
+        body = html('Unauthorized', '<main>unauthorized</main>');
+      }
+    } else if (requested.pathname === '/protected') {
       if (request.headers.authorization === `Bearer ${ADMIN_TOKEN}`) {
         body = html('Admin', '<main>admin</main>');
       } else if (request.headers.authorization === `Bearer ${USER_TOKEN}`) {
@@ -103,6 +158,17 @@ async function startBrowserFixture(t) {
       body = html('Mutation', '<script>fetch("/mutate", { method: "POST" }).catch(() => {}); fetch("/mutate", { method: "DELETE" }).catch(() => {})</script>');
     } else if (requested.pathname === '/websocket') {
       body = html('WebSocket', '<script>new WebSocket("ws://" + location.host + "/socket")</script>');
+    } else if (requested.pathname === '/service-worker') {
+      body = html('Service worker', '<script>navigator.serviceWorker.register("/service-worker.js").catch(() => {})</script>');
+    } else if (requested.pathname === '/worker') {
+      body = html('Worker', '<script>new Worker("/worker.js")</script>');
+    } else if (requested.pathname === '/popup') {
+      body = html(
+        'Popup',
+        '<a id="open-child" href="/popup-child" target="_blank">open</a><script>document.querySelector("#open-child").click()</script>',
+      );
+    } else if (requested.pathname === '/popup-child') {
+      body = html('Popup child', '<script>fetch("/popup-mutate", { method: "POST" }).catch(() => {})</script>');
     } else {
       status = 404;
       body = html('Missing');
@@ -218,6 +284,10 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
     route('internal-nav'),
     route('mutation'),
     route('websocket'),
+    route('service-worker'),
+    route('worker'),
+    route('popup'),
+    route('auth-visual', { auth: { state: 'required', allowedRoles: ['admin'] } }),
   ];
   const manifest = browserManifest(routes);
   const config = browserConfig(fixture.origin, chromePath);
@@ -291,17 +361,66 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
   );
   assert.ok(blockedWebSocket, JSON.stringify(observations));
   assert.equal(blockedWebSocket.category, 'security');
-  assert.deepEqual(fixture.mutations, { post: 0, delete: 0, websocket: 0 });
+  const blockedServiceWorker = observationFor(
+    observations,
+    'route:/service-worker',
+    'SERVICE_WORKER_BLOCKED',
+  );
+  assert.ok(blockedServiceWorker, JSON.stringify({ observations, mutations: fixture.mutations }));
+  assert.equal(blockedServiceWorker.category, 'security');
+  const blockedWorker = observationFor(
+    observations,
+    'route:/worker',
+    'BROWSER_TARGET_POLICY_FAILED',
+  );
+  assert.ok(blockedWorker, JSON.stringify({
+    observations: observations.filter((entry) => entry.subjectId === 'route:/worker'),
+    mutations: fixture.mutations,
+  }));
+  assert.equal(blockedWorker.category, 'security');
+  const blockedPopup = observationFor(
+    observations,
+    'route:/popup',
+    'UNEXPECTED_TARGET_BLOCKED',
+  );
+  assert.ok(blockedPopup, JSON.stringify({
+    observations: observations.filter((entry) => entry.subjectId === 'route:/popup'),
+    mutations: fixture.mutations,
+  }));
+  assert.equal(blockedPopup.category, 'security');
+  const authenticatedFailure = observationFor(
+    observations,
+    'route:/auth-visual',
+    'CONSOLE_ERROR',
+    'admin',
+  );
+  assert.equal(authenticatedFailure.outcome, 'fail');
+  assert.equal(authenticatedFailure.evidence.screenshotPath, null);
+  assert.equal(
+    fixture.mutations.serviceWorker,
+    0,
+    'service-worker installation must not reach the mutation endpoint',
+  );
+  assert.deepEqual(fixture.mutations, {
+    post: 0,
+    delete: 0,
+    websocket: 0,
+    serviceWorker: 0,
+    worker: 0,
+    popup: 0,
+  });
   assert.equal(fixture.receiverRequests.length, 0);
 
   const screenshots = await pngFiles(runBoundary.root);
-  assert.equal(screenshots.length, 9, screenshots.join(','));
+  assert.equal(screenshots.length, 12, screenshots.join(','));
   for (const name of screenshots) {
     const bytes = await readFile(path.join(runBoundary.root, name));
     assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   }
-  assert.ok(observations.filter((entry) => entry.outcome === 'fail')
+  assert.ok(observations.filter((entry) => entry.outcome === 'fail' && entry.role === null)
     .every((entry) => entry.evidence.screenshotPath?.endsWith('.png')));
+  assert.ok(observations.filter((entry) => entry.role !== null)
+    .every((entry) => entry.evidence.screenshotPath === null));
   assert.ok(observations.filter((entry) => entry.outcome !== 'fail')
     .every((entry) => entry.evidence.screenshotPath === null));
 

@@ -162,6 +162,43 @@ async function waitForExit(exitPromise, timeoutMs) {
   ]).finally(() => clearTimeout(timer));
 }
 
+function processGroupExists(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    if (error?.code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processGroupExists(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !processGroupExists(pid);
+}
+
+function killWindowsProcessTree(pid) {
+  return new Promise((resolve) => {
+    let killer;
+    try {
+      killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      resolve(false);
+      return;
+    }
+    killer.once('error', () => resolve(false));
+    killer.once('exit', (code) => resolve(code === 0));
+  });
+}
+
 export async function launchChrome({
   executablePath,
   profileDir,
@@ -189,6 +226,7 @@ export async function launchChrome({
     '--disable-component-update',
     '--disable-default-apps',
     '--disable-extensions',
+    '--disable-popup-blocking',
     '--disable-sync',
     '--metrics-recording-only',
     '--disable-dev-shm-usage',
@@ -211,18 +249,40 @@ export async function launchChrome({
   const terminate = async () => {
     if (closed) return;
     closed = true;
+    let terminated = false;
     try {
-      signalProcessGroup(child, 'SIGTERM');
-      if (!(await waitForExit(exitPromise, 2000))) {
-        signalProcessGroup(child, 'SIGKILL');
+      if (process.platform === 'win32') {
+        await killWindowsProcessTree(child.pid);
+        terminated = await waitForExit(exitPromise, 4000);
+        if (!terminated) {
+          child.kill('SIGKILL');
+          terminated = await waitForExit(exitPromise, 2000);
+        }
+      } else {
+        signalProcessGroup(child, 'SIGTERM');
+        terminated = await waitForProcessGroupExit(child.pid, 2000);
+        if (!terminated) {
+          signalProcessGroup(child, 'SIGKILL');
+          terminated = await waitForProcessGroupExit(child.pid, 2000);
+        }
         await waitForExit(exitPromise, 2000);
       }
     } catch {
-      child.kill('SIGKILL');
+      try {
+        signalProcessGroup(child, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+      terminated = process.platform === 'win32'
+        ? await waitForExit(exitPromise, 2000)
+        : await waitForProcessGroupExit(child.pid, 2000).catch(() => false);
       await waitForExit(exitPromise, 2000);
     } finally {
       child.stderr?.destroy();
       await rm(profile, { recursive: true, force: true });
+    }
+    if (!terminated) {
+      throw chromeError('CHROME_TERMINATION_FAILED', 'Chrome process tree did not terminate');
     }
   };
 
