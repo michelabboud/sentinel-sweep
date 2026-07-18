@@ -21,7 +21,8 @@ const WRITE_FLAGS = fsConstants.O_CREAT
   | fsConstants.O_WRONLY
   | (fsConstants.O_NOFOLLOW ?? 0)
   | (fsConstants.O_CLOEXEC ?? 0);
-const INPUT_EXTENSIONS = new Set(['.har', '.json', '.yaml', '.yml']);
+const INPUT_EXTENSIONS = new Set(['.har', '.json', '.vue', '.yaml', '.yml']);
+const BLOCKED_INPUT_NAME = /(?:^|[._-])(?:credential|credentials|secret|secrets|private[-_]?key)(?:[._-]|$)/u;
 
 function boundaryError(code, message, details = {}) {
   return new SentinelError(code, message, details);
@@ -49,6 +50,17 @@ function resolveRelative(root, relativePath) {
     throw boundaryError('PATH_ESCAPE', 'Path escapes the pinned root');
   }
   return candidate;
+}
+
+function validateInputType(candidate) {
+  const basename = path.basename(candidate).toLowerCase();
+  const extension = path.extname(basename);
+  if (basename === '.env'
+      || basename.startsWith('.env.')
+      || !INPUT_EXTENSIONS.has(extension)
+      || BLOCKED_INPUT_NAME.test(basename)) {
+    throw boundaryError('INPUT_TYPE_BLOCKED', 'Input type is not allowed');
+  }
 }
 
 async function canonicalDirectory(root, { symlinkCode, invalidCode, create = false }) {
@@ -152,6 +164,7 @@ export class TargetBoundary {
 
   async readText(relativePath) {
     const candidate = resolveRelative(this.root, relativePath);
+    validateInputType(candidate);
     await inspectInput(this.root, candidate);
 
     let handle;
@@ -175,10 +188,7 @@ export class TargetBoundary {
 
   async resolveInput(relativePath) {
     const candidate = resolveRelative(this.root, relativePath);
-    const extension = path.extname(candidate).toLowerCase();
-    if (!INPUT_EXTENSIONS.has(extension)) {
-      throw boundaryError('INPUT_TYPE_BLOCKED', 'Input type is not allowed');
-    }
+    validateInputType(candidate);
     return inspectInput(this.root, candidate);
   }
 }

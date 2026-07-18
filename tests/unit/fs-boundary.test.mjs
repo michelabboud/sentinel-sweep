@@ -55,6 +55,40 @@ test('TargetBoundary reads regular files but rejects symlinks and escapes', asyn
   });
 });
 
+test('TargetBoundary readText rejects secret-bearing adapter inputs', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  const blockedInputs = [
+    '.env',
+    '.env.local',
+    'server.pem',
+    'private.key',
+    'credentials.json',
+    'service-account-credentials.yaml',
+  ];
+  await Promise.all(blockedInputs.map(
+    (name) => writeFile(path.join(targetRoot, name), 'must-not-be-read\n'),
+  ));
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  for (const name of blockedInputs) {
+    await assert.rejects(() => boundary.readText(name), { code: 'INPUT_TYPE_BLOCKED' });
+  }
+});
+
+test('TargetBoundary readText preserves approved OpenAPI and Vue adapter inputs', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'openapi.yaml'), 'openapi: 3.1.0\n');
+  await writeFile(path.join(targetRoot, 'AccountView.vue'), '<template />\n');
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  assert.equal(await boundary.readText('openapi.yaml'), 'openapi: 3.1.0\n');
+  assert.equal(await boundary.readText('AccountView.vue'), '<template />\n');
+});
+
 test('TargetBoundary never accepts .env as an adapter input', async (t) => {
   const root = await fixture(t);
   const targetRoot = path.join(root, 'target');

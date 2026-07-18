@@ -105,12 +105,9 @@ export function validateRedirect(from, location, approvedOrigins) {
   if (!Array.isArray(candidates)) {
     throw originError('APPROVED_ORIGINS_INVALID', 'Approved origins must be an array or set');
   }
-  const approved = new Set(candidates.map((candidate) => {
-    const url = parseUrl(candidate);
-    requireHttp(url);
-    rejectUserInfo(url);
-    return url.origin;
-  }));
+  const approved = new Set(candidates.map(
+    (candidate) => parseApprovedOrigin(candidate, { allowNonLoopback: true }),
+  ));
 
   if (!approved.has(destination.origin)) {
     throw originError('REDIRECT_ORIGIN_BLOCKED', 'Redirect origin is not approved');

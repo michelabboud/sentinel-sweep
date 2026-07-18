@@ -63,3 +63,20 @@ test('validateRedirect resolves same-origin redirects and blocks unapproved orig
     { code: 'REDIRECT_ORIGIN_BLOCKED' },
   );
 });
+
+test('validateRedirect rejects malformed approved-origin entries', () => {
+  const start = 'http://localhost:3000/login';
+  const malformed = [
+    ['http://localhost:3000/base', 'ORIGIN_BASE_PATH'],
+    ['http://localhost:3000?debug=1', 'ORIGIN_QUERY'],
+    ['http://localhost:3000#fragment', 'ORIGIN_FRAGMENT'],
+    ['http://user:pass@localhost:3000', 'ORIGIN_USERINFO'],
+  ];
+
+  for (const [approvedEntry, code] of malformed) {
+    assert.throws(
+      () => validateRedirect(start, '/session', [approvedEntry]),
+      { code },
+    );
+  }
+});
