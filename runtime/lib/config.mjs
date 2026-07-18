@@ -1,5 +1,6 @@
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, realpathSync } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types as utilTypes } from 'node:util';
@@ -12,6 +13,14 @@ const READ_FLAGS = fsConstants.O_RDONLY
   | (fsConstants.O_CLOEXEC ?? 0)
   | (fsConstants.O_NONBLOCK ?? 0);
 const BUNDLED_DEFAULTS_PATH = fileURLToPath(new URL('../../settings.json', import.meta.url));
+const SYSTEM_TEMP_ROOTS = (() => {
+  const lexical = path.resolve(tmpdir());
+  try {
+    return [...new Set([lexical, realpathSync.native(lexical)])];
+  } catch {
+    return [lexical];
+  }
+})();
 
 function configError(code, message, details = {}) {
   return new SentinelError(code, message, details);
@@ -124,6 +133,7 @@ const FILE_IDENTITY_FIELDS = [
   'mtimeNs',
 ];
 const PATH_IDENTITY_FIELDS = ['dev', 'ino', 'birthtimeNs', 'ctimeNs'];
+const PATH_STABLE_IDENTITY_FIELDS = ['dev', 'ino', 'birthtimeNs'];
 
 function statInteger(value) {
   if (typeof value === 'bigint') return value;
@@ -143,6 +153,11 @@ function statIdentity(stat, fields) {
       || (Object.prototype.hasOwnProperty.call(identity, 'size') && identity.size < 0n)) {
     return null;
   }
+  for (const field of ['birthtimeNs', 'ctimeNs', 'mtimeNs']) {
+    if (Object.prototype.hasOwnProperty.call(identity, field) && identity[field] === 0n) {
+      return null;
+    }
+  }
   return identity;
 }
 
@@ -151,8 +166,11 @@ function fileIdentity(stat) {
   return statIdentity(stat, FILE_IDENTITY_FIELDS);
 }
 
-function pathIdentity(stat) {
-  return statIdentity(stat, PATH_IDENTITY_FIELDS);
+function pathIdentity(stat, bindChangeTime) {
+  return statIdentity(
+    stat,
+    bindChangeTime ? PATH_IDENTITY_FIELDS : PATH_STABLE_IDENTITY_FIELDS,
+  );
 }
 
 function identitiesMatch(left, right, fields) {
@@ -234,36 +252,115 @@ async function inspectCurrentTrustedPath({ filePath, targetRoot, label }) {
   return { resolved, canonical, stat };
 }
 
-async function captureParentBindings(resolved, canonical, label) {
-  const parentPaths = [...new Set([path.dirname(resolved), path.dirname(canonical)])];
+function comparablePathComponent(value) {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+function isVolatileTempAncestor(candidate, filePath) {
+  const resolvedCandidate = path.resolve(candidate);
+  const resolvedFile = path.resolve(filePath);
+  return SYSTEM_TEMP_ROOTS.some((tempRoot) => (
+    isWithin(tempRoot, resolvedFile) && isWithin(resolvedCandidate, tempRoot)
+  ));
+}
+
+function commonPathAncestor(leftPath, rightPath) {
+  const left = path.resolve(leftPath);
+  const right = path.resolve(rightPath);
+  const leftRoot = path.parse(left).root;
+  const rightRoot = path.parse(right).root;
+  if (comparablePathComponent(leftRoot) !== comparablePathComponent(rightRoot)) return null;
+
+  const leftParts = left.slice(leftRoot.length).split(path.sep).filter(Boolean);
+  const rightParts = right.slice(rightRoot.length).split(path.sep).filter(Boolean);
+  let common = leftRoot;
+  const count = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < count; index += 1) {
+    if (comparablePathComponent(leftParts[index])
+        !== comparablePathComponent(rightParts[index])) {
+      break;
+    }
+    common = path.join(common, leftParts[index]);
+  }
+  return common;
+}
+
+function configBranchAncestors(filePath, targetPath) {
+  const parentPath = path.dirname(path.resolve(filePath));
+  const root = path.parse(parentPath).root;
+  const common = commonPathAncestor(parentPath, targetPath) ?? root;
+  const relative = path.relative(common, parentPath);
+  if (relative === '') return [];
+
+  const ancestors = [];
+  let current = common;
+  const components = relative.split(path.sep).filter(Boolean);
+  for (let index = 0; index < components.length; index += 1) {
+    const component = components[index];
+    current = path.join(current, component);
+    ancestors.push({
+      path: current,
+      // Shared temp ancestors have volatile ctime from unrelated siblings. Their
+      // stable identity remains bound; config-side descendants bind ctime.
+      bindChangeTime: !isVolatileTempAncestor(current, filePath),
+    });
+  }
+  return ancestors;
+}
+
+async function captureAncestorBindings(resolved, canonical, targetRoot, label) {
+  const boundary = validateTrustedLocationBoundary(targetRoot);
+  // Bind only each config-side branch. The shared common ancestor (for example
+  // /tmp) is excluded so unrelated sibling churn cannot invalidate the read.
+  const requestedBindings = [
+    ...configBranchAncestors(resolved, boundary.lexical),
+    ...configBranchAncestors(canonical, boundary.canonical),
+  ];
+  const ancestorRequests = new Map();
+  for (const request of requestedBindings) {
+    const existing = ancestorRequests.get(request.path);
+    ancestorRequests.set(request.path, {
+      path: request.path,
+      bindChangeTime: request.bindChangeTime || existing?.bindChangeTime === true,
+    });
+  }
   const bindings = [];
-  for (const parentPath of parentPaths) {
+  for (const { path: ancestorPath, bindChangeTime } of ancestorRequests.values()) {
     let stat;
     try {
-      stat = await lstat(parentPath, { bigint: true });
+      stat = await lstat(ancestorPath, { bigint: true });
     } catch {
-      throw configError(`${label}_FILE_CHANGED`, `${label} parent path changed during verified read`);
+      throw configError(
+        `${label}_FILE_CHANGED`,
+        `${label} ancestor path changed during verified read`,
+      );
     }
-    const identity = pathIdentity(stat);
+    const identity = pathIdentity(stat, bindChangeTime);
     if (identity === null) {
-      throw configError(`${label}_FILE_CHANGED`, `${label} parent identity is unavailable`);
+      throw configError(`${label}_FILE_CHANGED`, `${label} ancestor identity is unavailable`);
     }
     bindings.push(Object.freeze({
-      path: parentPath,
+      path: ancestorPath,
+      bindChangeTime,
       identity: Object.freeze(identity),
     }));
   }
   return Object.freeze(bindings);
 }
 
-function parentBindingsMatch(expected, current) {
+function ancestorBindingsMatch(expected, current) {
   return Array.isArray(expected)
     && expected.length === current.length
     && expected.every((entry, index) => (
       entry !== null
       && typeof entry === 'object'
       && entry.path === current[index].path
-      && identitiesMatch(entry.identity, current[index].identity, PATH_IDENTITY_FIELDS)
+      && entry.bindChangeTime === current[index].bindChangeTime
+      && identitiesMatch(
+        entry.identity,
+        current[index].identity,
+        entry.bindChangeTime ? PATH_IDENTITY_FIELDS : PATH_STABLE_IDENTITY_FIELDS,
+      )
     ));
 }
 
@@ -283,7 +380,12 @@ export async function captureTrustedPathBinding({
   validateOpenedFileIdentity(expectedStat, current.stat, { label });
   return Object.freeze({
     canonicalPath: current.canonical,
-    parentBindings: await captureParentBindings(current.resolved, current.canonical, label),
+    ancestorBindings: await captureAncestorBindings(
+      current.resolved,
+      current.canonical,
+      targetRoot,
+      label,
+    ),
   });
 }
 
@@ -304,9 +406,14 @@ async function validateCurrentTrustedPathBinding({
     throw configError(`${label}_FILE_CHANGED`, `${label} canonical path changed during verified read`);
   }
   validateOpenedFileIdentity(descriptorStat, current.stat, { label });
-  const currentParents = await captureParentBindings(current.resolved, current.canonical, label);
-  if (!parentBindingsMatch(expectedPathBinding.parentBindings, currentParents)) {
-    throw configError(`${label}_FILE_CHANGED`, `${label} parent path changed during verified read`);
+  const currentAncestors = await captureAncestorBindings(
+    current.resolved,
+    current.canonical,
+    targetRoot,
+    label,
+  );
+  if (!ancestorBindingsMatch(expectedPathBinding.ancestorBindings, currentAncestors)) {
+    throw configError(`${label}_FILE_CHANGED`, `${label} ancestor path changed during verified read`);
   }
 }
 

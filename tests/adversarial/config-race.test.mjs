@@ -232,6 +232,86 @@ test('detects parent relocation restored before the post-read path check', async
   assert.equal(intercepted, true);
 });
 
+test('detects higher-ancestor relocation restored while the immediate parent stays put', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const trustedAncestor = path.join(root, 'trusted-tree');
+  const trustedParent = path.join(trustedAncestor, 'nested', 'config-parent');
+  const movedAncestor = path.join(targetRoot, 'relocated-tree');
+  const configPath = path.join(trustedParent, 'sentinel.config.json');
+  await mkdir(targetRoot);
+  await mkdir(trustedParent, { recursive: true });
+  await writeFile(configPath, '{}\n', { mode: 0o600 });
+  await chmod(configPath, 0o600);
+
+  const probe = await open(configPath, 'r');
+  const fileHandlePrototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const originalDescriptor = Object.getOwnPropertyDescriptor(fileHandlePrototype, 'readFile');
+  let intercepted = false;
+  Object.defineProperty(fileHandlePrototype, 'readFile', {
+    ...originalDescriptor,
+    value: async function relocateAncestorDuringRead(...args) {
+      if (intercepted) return originalDescriptor.value.apply(this, args);
+      intercepted = true;
+      await rename(trustedAncestor, movedAncestor);
+      await symlink(movedAncestor, trustedAncestor, 'dir');
+      try {
+        return await originalDescriptor.value.apply(this, args);
+      } finally {
+        await unlink(trustedAncestor);
+        await rename(movedAncestor, trustedAncestor);
+      }
+    },
+  });
+  t.after(() => {
+    Object.defineProperty(fileHandlePrototype, 'readFile', originalDescriptor);
+  });
+
+  await assert.rejects(
+    configModule.loadTrustedConfig({ configPath, targetRoot }),
+    { code: 'CONFIG_FILE_CHANGED' },
+  );
+  assert.equal(intercepted, true);
+});
+
+test('ignores unrelated churn in the shared target and config ancestor', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const trustedParent = path.join(root, 'trusted');
+  const unrelatedSibling = path.join(root, 'unrelated-sibling');
+  const configPath = path.join(trustedParent, 'sentinel.config.json');
+  await mkdir(targetRoot);
+  await mkdir(trustedParent);
+  await writeFile(configPath, '{}\n', { mode: 0o600 });
+  await chmod(configPath, 0o600);
+
+  const probe = await open(configPath, 'r');
+  const fileHandlePrototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const originalDescriptor = Object.getOwnPropertyDescriptor(fileHandlePrototype, 'readFile');
+  let intercepted = false;
+  Object.defineProperty(fileHandlePrototype, 'readFile', {
+    ...originalDescriptor,
+    value: async function churnSharedAncestor(...args) {
+      const result = await originalDescriptor.value.apply(this, args);
+      if (!intercepted) {
+        intercepted = true;
+        await mkdir(unrelatedSibling);
+        await rm(unrelatedSibling, { recursive: true });
+      }
+      return result;
+    },
+  });
+  t.after(() => {
+    Object.defineProperty(fileHandlePrototype, 'readFile', originalDescriptor);
+  });
+
+  const config = await configModule.loadTrustedConfig({ configPath, targetRoot });
+  assert.equal(intercepted, true);
+  assert.equal(config.schemaVersion, '2.0');
+});
+
 test('rejects simulated inode reuse when extended file identity changed', async (t) => {
   assert.equal(typeof configModule.captureTrustedPathBinding, 'function');
   const root = await fixture(t);

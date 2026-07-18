@@ -177,3 +177,25 @@ test('opened descriptor identity binds reuse-resistant metadata but ignores atim
     );
   }
 });
+
+test('extended identity rejects unavailable epoch-zero timestamps but permits an empty file', () => {
+  const validate = configModule.validateOpenedFileIdentity;
+  const empty = regularStat({ size: 0n });
+
+  assert.doesNotThrow(() => validate(
+    empty,
+    regularStat({ size: 0n }),
+    { label: 'CONFIG', platform: 'win32' },
+  ));
+  for (const field of ['birthtimeNs', 'ctimeNs', 'mtimeNs']) {
+    assert.throws(
+      () => validate(
+        regularStat({ [field]: 0n }),
+        regularStat({ [field]: 0n }),
+        { label: 'CONFIG', platform: 'win32' },
+      ),
+      { code: 'CONFIG_FILE_CHANGED' },
+      field,
+    );
+  }
+});
