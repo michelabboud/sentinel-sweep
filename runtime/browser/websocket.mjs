@@ -116,7 +116,9 @@ export class WebSocketConnection {
         if (response.statusCode !== 101
             || response.headers.upgrade?.toLowerCase() !== 'websocket'
             || !headerHasToken(response.headers.connection, 'upgrade')
-            || response.headers['sec-websocket-accept'] !== expectedAccept) {
+            || response.headers['sec-websocket-accept'] !== expectedAccept
+            || response.headers['sec-websocket-extensions'] !== undefined
+            || response.headers['sec-websocket-protocol'] !== undefined) {
           socket.destroy();
           fail(websocketError('WEBSOCKET_HANDSHAKE_INVALID', 'WebSocket upgrade validation failed'));
           return;
@@ -233,7 +235,7 @@ export class WebSocketConnection {
   }
 
   receive(chunk) {
-    if (this.state === 'closed') return;
+    if (this.state !== 'open') return;
     this.buffer = Buffer.concat([this.buffer, chunk]);
     try {
       this.parseFrames();
@@ -243,7 +245,7 @@ export class WebSocketConnection {
   }
 
   parseFrames() {
-    while (this.buffer.length >= 2) {
+    while (this.state === 'open' && this.buffer.length >= 2) {
       const first = this.buffer[0];
       const second = this.buffer[1];
       const fin = (first & 0x80) !== 0;
@@ -287,6 +289,7 @@ export class WebSocketConnection {
       const payload = Buffer.from(this.buffer.subarray(offset, offset + length));
       this.buffer = this.buffer.subarray(offset + length);
       this.handleFrame(opcode, fin, payload);
+      if (this.state !== 'open') this.clearInboundState();
     }
   }
 
@@ -309,6 +312,7 @@ export class WebSocketConnection {
       this.closeInfo = { code };
       if (this.state === 'open') this.sendFrame(8, payload);
       this.state = 'closing';
+      this.clearInboundState();
       this.socket.end();
       return;
     }
@@ -365,16 +369,25 @@ export class WebSocketConnection {
   }
 
   protocolFailure(error) {
+    if (this.state !== 'open') return;
     const normalized = error instanceof SentinelError
       ? error
       : websocketError('WEBSOCKET_PROTOCOL_ERROR', 'WebSocket protocol processing failed');
-    this.emitError(normalized);
-    if (this.state === 'open') {
-      const code = normalized.code === 'WEBSOCKET_MESSAGE_TOO_LARGE' ? 1009 : 1002;
-      this.sendFrame(8, closePayload(code));
-    }
     this.state = 'closing';
+    this.clearInboundState();
+    this.emitError(normalized);
+    const code = normalized.code === 'WEBSOCKET_MESSAGE_TOO_LARGE' ? 1009 : 1002;
+    this.sendFrame(8, closePayload(code));
     this.socket.end();
+  }
+
+  clearInboundState() {
+    this.buffer = Buffer.alloc(0);
+    this.fragments = [];
+    this.fragmentBytes = 0;
+    this.fragmentOpcode = null;
+    this.pendingMessages = [];
+    this.pendingMessageBytes = 0;
   }
 
   finishClose() {
@@ -384,8 +397,7 @@ export class WebSocketConnection {
     this.emitHandlers(this.closeHandlers, this.closeInfo);
     this.closeHandlers.clear();
     this.messageHandlers.clear();
-    this.pendingMessages = [];
-    this.pendingMessageBytes = 0;
+    this.clearInboundState();
     this.resolveClosed(this.closeInfo);
   }
 
@@ -394,6 +406,7 @@ export class WebSocketConnection {
     if (this.state === 'open') {
       this.sendFrame(8, closePayload(1000));
       this.state = 'closing';
+      this.clearInboundState();
       this.socket.end();
     }
     const timer = setTimeout(() => this.socket.destroy(), 1000);

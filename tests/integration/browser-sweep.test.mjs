@@ -1,13 +1,22 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { CdpClient } from '../../runtime/browser/cdp.mjs';
 import { resolveChromeExecutable } from '../../runtime/browser/chrome.mjs';
 import { sweepBrowser } from '../../runtime/browser/sweep.mjs';
-import { RunBoundary } from '../../runtime/lib/fs-boundary.mjs';
+import { RunBoundary, TargetBoundary } from '../../runtime/lib/fs-boundary.mjs';
 import { buildExecutionPlan } from '../../runtime/policy/execution.mjs';
 
 const ADMIN_TOKEN = 'sentinel-browser-admin-secret';
@@ -37,6 +46,9 @@ async function startBrowserFixture(t) {
     websocket: 0,
     serviceWorker: 0,
     worker: 0,
+    sharedWorker: 0,
+    framePost: 0,
+    frameDelete: 0,
     popup: 0,
   };
   const receiver = createServer((request, response) => {
@@ -75,6 +87,14 @@ async function startBrowserFixture(t) {
       response.end('fetch("/worker-mutate", { method: "POST" }).catch(() => {});');
       return;
     }
+    if (requested.pathname === '/shared-worker.js') {
+      response.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      response.end('fetch("/shared-worker-mutate", { method: "POST" }).catch(() => {});');
+      return;
+    }
     if (requested.pathname === '/sw-mutate' && request.method === 'POST') {
       mutations.serviceWorker += 1;
       response.writeHead(204);
@@ -83,6 +103,24 @@ async function startBrowserFixture(t) {
     }
     if (requested.pathname === '/worker-mutate' && request.method === 'POST') {
       mutations.worker += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (requested.pathname === '/shared-worker-mutate' && request.method === 'POST') {
+      mutations.sharedWorker += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (requested.pathname === '/frame-mutate' && request.method === 'POST') {
+      mutations.framePost += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    if (requested.pathname === '/frame-mutate' && request.method === 'DELETE') {
+      mutations.frameDelete += 1;
       response.writeHead(204);
       response.end();
       return;
@@ -114,10 +152,48 @@ async function startBrowserFixture(t) {
       response.end();
       return;
     }
+    if (requested.pathname === '/frame-child') {
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      response.end(html(
+        'Frame child',
+        '<script>fetch("/frame-mutate", { method: "POST" }).catch(() => {}); fetch("/frame-mutate", { method: "DELETE" }).catch(() => {})</script>',
+      ));
+      return;
+    }
+    if (requested.pathname === '/slow-navigation') {
+      setTimeout(() => {
+        if (response.destroyed) return;
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        response.end(html('Slow navigation', '<main>late</main>'));
+      }, 3000).unref?.();
+      return;
+    }
 
     let status = 200;
     let body;
-    if (requested.pathname === '/auth-visual') {
+    if (requested.pathname === '/protected-redirect') {
+      if (request.headers.authorization === `Bearer ${ADMIN_TOKEN}`) {
+        response.writeHead(302, {
+          location: `${receiverOrigin}/protected-must-not-receive`,
+          'cache-control': 'no-store',
+        });
+        response.end();
+        return;
+      }
+      if (request.headers.authorization === `Bearer ${USER_TOKEN}`) {
+        status = 403;
+        body = html('Forbidden', '<main>forbidden</main>');
+      } else {
+        status = 401;
+        body = html('Unauthorized', '<main>unauthorized</main>');
+      }
+    } else if (requested.pathname === '/auth-visual') {
       if (request.headers.authorization === `Bearer ${ADMIN_TOKEN}`) {
         body = html(
           'Authenticated failure',
@@ -150,6 +226,11 @@ async function startBrowserFixture(t) {
       body = html('Network', '<img src="/broken-resource" alt="broken">');
     } else if (requested.pathname === '/overflow') {
       body = html('Overflow', '<div style="width:700px;height:10px">wide</div>');
+    } else if (requested.pathname === '/delayed-defect') {
+      body = html(
+        'Delayed defect',
+        '<script>setTimeout(() => { console.error("delayed defect"); const node = document.createElement("div"); node.style.width = "700px"; node.style.height = "10px"; node.textContent = "wide"; document.body.append(node); }, 150)</script>',
+      );
     } else if (requested.pathname === '/empty') {
       body = html('Empty', '<main id="empty"></main>');
     } else if (requested.pathname === '/internal-nav') {
@@ -162,6 +243,12 @@ async function startBrowserFixture(t) {
       body = html('Service worker', '<script>navigator.serviceWorker.register("/service-worker.js").catch(() => {})</script>');
     } else if (requested.pathname === '/worker') {
       body = html('Worker', '<script>new Worker("/worker.js")</script>');
+    } else if (requested.pathname === '/shared-worker') {
+      body = html('Shared worker', '<script>new SharedWorker("/shared-worker.js")</script>');
+    } else if (requested.pathname === '/frame-mutation') {
+      body = html('Frame mutation', '<iframe src="/frame-child"></iframe>');
+    } else if (requested.pathname === '/cross-frame') {
+      body = html('Cross frame', `<iframe src="${receiverOrigin}/frame-must-not-receive"></iframe>`);
     } else if (requested.pathname === '/popup') {
       body = html(
         'Popup',
@@ -265,27 +352,41 @@ async function pngFiles(root) {
   return (await readdir(root)).filter((name) => name.endsWith('.png')).sort();
 }
 
+async function createBrowserBoundaries(temporary) {
+  const targetRoot = path.join(temporary, 'target');
+  await mkdir(targetRoot);
+  return {
+    runBoundary: await RunBoundary.create(path.join(temporary, 'run')),
+    targetBoundary: await TargetBoundary.create(targetRoot),
+  };
+}
+
 test('runs real browser/RBAC/console/network/layout checks without leaking origins or credentials', async (t) => {
   const chromePath = await findChromeOrSkip(t);
   if (chromePath === null) return;
   const fixture = await startBrowserFixture(t);
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-sweep-'));
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const runBoundary = await RunBoundary.create(path.join(temporary, 'run'));
+  const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
   const routes = [
     route('ok'),
     route('protected', { auth: { state: 'required', allowedRoles: ['admin'] } }),
+    route('protected-redirect', { auth: { state: 'required', allowedRoles: ['admin'] } }),
     route('console'),
     route('exception'),
     route('network'),
     route('cross'),
     route('overflow'),
+    route('delayed-defect'),
     route('empty'),
     route('internal-nav'),
     route('mutation'),
     route('websocket'),
     route('service-worker'),
     route('worker'),
+    route('shared-worker'),
+    route('frame-mutation'),
+    route('cross-frame'),
     route('popup'),
     route('auth-visual', { auth: { state: 'required', allowedRoles: ['admin'] } }),
   ];
@@ -306,6 +407,7 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
       SENTINEL_BROWSER_USER_TOKEN: USER_TOKEN,
     },
     runBoundary,
+    targetBoundary,
   });
 
   const ready = observationFor(observations, 'route:/ok', 'DOCUMENT_STATUS_EXPECTED');
@@ -333,6 +435,17 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
   assert.equal(unauthenticated.evidence.status, 401);
   assert.equal(lowerPrivilege.evidence.status, 403);
   assert.equal(authorized.evidence.status, 200);
+  const protectedRedirect = observationFor(
+    observations,
+    'route:/protected-redirect',
+    'NAVIGATION_ORIGIN_BLOCKED',
+    'admin',
+  );
+  assert.equal(protectedRedirect.category, 'security');
+  assert.ok(fixture.approvedRequests.some((request) => (
+    request.path === '/protected-redirect'
+      && request.authorization === `Bearer ${ADMIN_TOKEN}`
+  )));
 
   assert.equal(observationFor(observations, 'route:/console', 'CONSOLE_ERROR').outcome, 'fail');
   assert.equal(observationFor(observations, 'route:/exception', 'UNCAUGHT_EXCEPTION').outcome, 'fail');
@@ -345,6 +458,19 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
   assert.ok(blockedNavigation, JSON.stringify(observations));
   assert.equal(blockedNavigation.category, 'security');
   assert.equal(observationFor(observations, 'route:/overflow', 'HORIZONTAL_OVERFLOW').evidence.viewport, 375);
+  assert.equal(
+    observationFor(observations, 'route:/delayed-defect', 'CONSOLE_ERROR').outcome,
+    'fail',
+  );
+  const delayedOverflow = observationFor(
+    observations,
+    'route:/delayed-defect',
+    'HORIZONTAL_OVERFLOW',
+  );
+  assert.ok(delayedOverflow, JSON.stringify(
+    observations.filter((entry) => entry.subjectId === 'route:/delayed-defect'),
+  ));
+  assert.equal(delayedOverflow.outcome, 'fail');
   assert.equal(observationFor(observations, 'route:/empty', 'EMPTY_CONTAINER').outcome, 'fail');
   assert.equal(
     observationFor(observations, 'route:/internal-nav', 'NAVIGATION_ORIGIN_BLOCKED').category,
@@ -371,13 +497,37 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
   const blockedWorker = observationFor(
     observations,
     'route:/worker',
-    'BROWSER_TARGET_POLICY_FAILED',
+    'WORKER_BLOCKED',
   );
   assert.ok(blockedWorker, JSON.stringify({
     observations: observations.filter((entry) => entry.subjectId === 'route:/worker'),
     mutations: fixture.mutations,
   }));
   assert.equal(blockedWorker.category, 'security');
+  const blockedSharedWorker = observationFor(
+    observations,
+    'route:/shared-worker',
+    'WORKER_BLOCKED',
+  );
+  assert.ok(blockedSharedWorker, JSON.stringify({
+    observations: observations.filter((entry) => entry.subjectId === 'route:/shared-worker'),
+    mutations: fixture.mutations,
+  }));
+  assert.equal(blockedSharedWorker.category, 'security');
+  const blockedFrameMutation = observationFor(
+    observations,
+    'route:/frame-mutation',
+    'FRAME_MUTATION_BLOCKED',
+  );
+  assert.ok(blockedFrameMutation, JSON.stringify({
+    observations: observations.filter((entry) => entry.subjectId === 'route:/frame-mutation'),
+    mutations: fixture.mutations,
+  }));
+  assert.equal(blockedFrameMutation.category, 'security');
+  assert.equal(
+    observationFor(observations, 'route:/cross-frame', 'NAVIGATION_ORIGIN_BLOCKED').category,
+    'security',
+  );
   const blockedPopup = observationFor(
     observations,
     'route:/popup',
@@ -407,12 +557,15 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
     websocket: 0,
     serviceWorker: 0,
     worker: 0,
+    sharedWorker: 0,
+    framePost: 0,
+    frameDelete: 0,
     popup: 0,
   });
   assert.equal(fixture.receiverRequests.length, 0);
 
   const screenshots = await pngFiles(runBoundary.root);
-  assert.equal(screenshots.length, 12, screenshots.join(','));
+  assert.equal(screenshots.length, 16, screenshots.join(','));
   for (const name of screenshots) {
     const bytes = await readFile(path.join(runBoundary.root, name));
     assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
@@ -460,14 +613,154 @@ test('does not create screenshots when screenshot-on-error is disabled', async (
   const fixture = await startBrowserFixture(t);
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-no-shot-'));
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const runBoundary = await RunBoundary.create(path.join(temporary, 'run'));
+  const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
   const manifest = browserManifest([route('console')]);
   const config = browserConfig(fixture.origin, chromePath, { screenshotOnError: false });
   const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
 
-  const observations = await sweepBrowser({ manifest, plan, config, env: {}, runBoundary });
+  const observations = await sweepBrowser({
+    manifest,
+    plan,
+    config,
+    env: {},
+    runBoundary,
+    targetBoundary,
+  });
 
   assert.equal(observationFor(observations, 'route:/console', 'CONSOLE_ERROR').outcome, 'fail');
   assert.deepEqual(await pngFiles(runBoundary.root), []);
   assert.ok(observations.every((entry) => entry.evidence.screenshotPath === null));
+});
+
+test('retains earlier findings when CDP screenshot capture fails', async (t) => {
+  const chromePath = await findChromeOrSkip(t);
+  if (chromePath === null) return;
+  const fixture = await startBrowserFixture(t);
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-shot-failure-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
+  const manifest = browserManifest([route('console')]);
+  const config = browserConfig(fixture.origin, chromePath);
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+  const connect = CdpClient.connect;
+  CdpClient.connect = async (...args) => {
+    const client = await connect.call(CdpClient, ...args);
+    const send = client.send.bind(client);
+    client.send = (method, ...sendArgs) => {
+      if (method === 'Page.captureScreenshot') {
+        return Promise.reject(new Error('injected screenshot capture failure'));
+      }
+      return send(method, ...sendArgs);
+    };
+    return client;
+  };
+  t.after(() => { CdpClient.connect = connect; });
+
+  const observations = await sweepBrowser({
+    manifest,
+    plan,
+    config,
+    runBoundary,
+    targetBoundary,
+  });
+
+  const consoleFailure = observationFor(observations, 'route:/console', 'CONSOLE_ERROR');
+  const captureFailure = observationFor(
+    observations,
+    'route:/console',
+    'SCREENSHOT_CAPTURE_FAILED',
+  );
+  assert.equal(consoleFailure.outcome, 'fail');
+  assert.equal(captureFailure.outcome, 'fail');
+  assert.equal(consoleFailure.evidence.screenshotPath, null);
+  assert.equal(captureFailure.evidence.screenshotPath, null);
+  assert.deepEqual(await pngFiles(runBoundary.root), []);
+});
+
+test('requires a trusted TargetBoundary and ignores a forged manifest target root', async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-boundary-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const targetRoot = path.join(temporary, 'target');
+  const forgedRoot = path.join(temporary, 'forged-safe-root');
+  const runRoot = path.join(temporary, 'run');
+  await Promise.all([mkdir(targetRoot), mkdir(forgedRoot)]);
+  const fakeChrome = path.join(targetRoot, 'chrome');
+  await writeFile(fakeChrome, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  await chmod(fakeChrome, 0o700);
+  const targetBoundary = await TargetBoundary.create(targetRoot);
+  const runBoundary = await RunBoundary.create(runRoot);
+  const manifest = {
+    ...browserManifest([]),
+    target: { root: forgedRoot },
+  };
+  const config = browserConfig('http://127.0.0.1:1', fakeChrome, {
+    responseTimeoutMs: 500,
+  });
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+
+  await assert.rejects(
+    sweepBrowser({ manifest, plan, config, runBoundary, targetBoundary }),
+    { code: 'CHROME_TARGET_LOCAL' },
+  );
+  await assert.rejects(
+    sweepBrowser({ manifest, plan, config, runBoundary }),
+    { code: 'BROWSER_TARGET_BOUNDARY_INVALID' },
+  );
+});
+
+test('bounds stalled navigation by one attempt wall-clock deadline', async (t) => {
+  const chromePath = await findChromeOrSkip(t);
+  if (chromePath === null) return;
+  const fixture = await startBrowserFixture(t);
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-timeout-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const { runBoundary, targetBoundary } = await createBrowserBoundaries(temporary);
+  const manifest = browserManifest([route('slow-navigation')]);
+  const config = browserConfig(fixture.origin, chromePath, {
+    responseTimeoutMs: 600,
+    screenshotOnError: false,
+  });
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+  const startedAt = performance.now();
+
+  const observations = await sweepBrowser({
+    manifest,
+    plan,
+    config,
+    runBoundary,
+    targetBoundary,
+  });
+
+  assert.ok(performance.now() - startedAt < 1800, JSON.stringify(observations));
+  assert.equal(
+    observationFor(observations, 'route:/slow-navigation', 'BROWSER_TIMEOUT').outcome,
+    'fail',
+  );
+});
+
+test('propagates screenshot artifact write failures as fatal run errors', async (t) => {
+  const chromePath = await findChromeOrSkip(t);
+  if (chromePath === null) return;
+  const fixture = await startBrowserFixture(t);
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'sentinel-browser-artifact-'));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const boundaries = await createBrowserBoundaries(temporary);
+  const manifest = browserManifest([route('console')]);
+  const config = browserConfig(fixture.origin, chromePath);
+  const plan = buildExecutionPlan({ manifest, config, mode: 'browser' });
+  const rejectingRunBoundary = {
+    root: boundaries.runBoundary.root,
+    async writeBytes() { throw new Error('sentinel artifact write failed'); },
+  };
+
+  await assert.rejects(
+    sweepBrowser({
+      manifest,
+      plan,
+      config,
+      runBoundary: rejectingRunBoundary,
+      targetBoundary: boundaries.targetBoundary,
+    }),
+    /sentinel artifact write failed/u,
+  );
 });

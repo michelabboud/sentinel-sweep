@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 
+import { SentinelError } from '../lib/errors.mjs';
+import { TargetBoundary } from '../lib/fs-boundary.mjs';
 import { parseApprovedOrigin, resolveRequestUrl } from '../lib/origin.mjs';
 import { resolveSecret } from '../lib/secrets.mjs';
 import { CdpClient } from './cdp.mjs';
@@ -15,6 +17,7 @@ const RESERVED_CREDENTIAL_HEADERS = new Set([
   'x-auth-token',
 ]);
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const SETTLE_QUIET_MS = 250;
 
 const SEVERITY_ORDER = new Map([
   ['critical', 0],
@@ -53,6 +56,8 @@ const WEBSOCKET_GUARD_BINDING = '__sentinelWebSocketBlocked';
 const WEBSOCKET_GUARD_MARKER = '__SENTINEL_BROWSER_WEBSOCKET_BLOCKED__';
 const SERVICE_WORKER_GUARD_BINDING = '__sentinelServiceWorkerBlocked';
 const SERVICE_WORKER_GUARD_MARKER = '__SENTINEL_BROWSER_SERVICE_WORKER_BLOCKED__';
+const WORKER_GUARD_BINDING = '__sentinelWorkerBlocked';
+const WORKER_GUARD_MARKER = '__SENTINEL_BROWSER_WORKER_BLOCKED__';
 const TARGET_AUTO_ATTACH_FILTER = Object.freeze([
   { type: 'browser', exclude: true },
   {},
@@ -67,13 +72,11 @@ const CONTROLLED_TARGET_TYPES = new Set([
   'tab',
   'page',
   'iframe',
-  'worker',
-  'shared_worker',
-  'service_worker',
 ]);
 const PAGE_GUARD_EXPRESSION = `(() => {
   const notify = globalThis.__sentinelWebSocketBlocked;
   const notifyServiceWorker = globalThis.__sentinelServiceWorkerBlocked;
+  const notifyWorker = globalThis.__sentinelWorkerBlocked;
   class SentinelBlockedWebSocket {
     constructor() {
       try { notify(); } catch {}
@@ -83,6 +86,23 @@ const PAGE_GUARD_EXPRESSION = `(() => {
   }
   Object.defineProperty(globalThis, 'WebSocket', {
     value: SentinelBlockedWebSocket,
+    configurable: false,
+    writable: false,
+  });
+  class SentinelBlockedWorker {
+    constructor() {
+      try { notifyWorker(); } catch {}
+      try { console.error('__SENTINEL_BROWSER_WORKER_BLOCKED__'); } catch {}
+      throw new DOMException('Blocked by Sentinel browser policy', 'SecurityError');
+    }
+  }
+  Object.defineProperty(globalThis, 'Worker', {
+    value: SentinelBlockedWorker,
+    configurable: false,
+    writable: false,
+  });
+  Object.defineProperty(globalThis, 'SharedWorker', {
+    value: SentinelBlockedWorker,
     configurable: false,
     writable: false,
   });
@@ -302,13 +322,100 @@ function screenshotName(route, role, viewport) {
   return `browser-${identity}.png`;
 }
 
-function timeoutPromise(timeoutMs, value) {
-  let timer;
-  const promise = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(value), timeoutMs);
-    timer.unref?.();
-  });
-  return { promise, cancel: () => clearTimeout(timer) };
+function attemptTimeoutError() {
+  return new SentinelError(
+    'BROWSER_ATTEMPT_TIMEOUT',
+    'Browser attempt exceeded its wall-clock deadline',
+  );
+}
+
+class AttemptDeadline {
+  constructor(timeoutMs) {
+    this.expiresAt = performance.now() + timeoutMs;
+    this.controller = new AbortController();
+    this.timer = setTimeout(() => this.controller.abort(), timeoutMs);
+    this.timer.unref?.();
+  }
+
+  get signal() { return this.controller.signal; }
+
+  get expired() { return this.signal.aborted || performance.now() >= this.expiresAt; }
+
+  remainingMs() {
+    if (this.expired) throw attemptTimeoutError();
+    return Math.max(1, Math.ceil(this.expiresAt - performance.now()));
+  }
+
+  send(client, method, params = {}, sessionId) {
+    return client.send(method, params, sessionId, {
+      timeoutMs: this.remainingMs(),
+      signal: this.signal,
+    });
+  }
+
+  flush(client) {
+    this.remainingMs();
+    return client.flushEvents({ signal: this.signal });
+  }
+
+  wait(milliseconds) {
+    const bounded = Math.min(Math.max(0, milliseconds), this.remainingMs());
+    if (bounded === 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let timer;
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(attemptTimeoutError());
+      };
+      timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, bounded);
+      timer.unref?.();
+      this.signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  race(promise) {
+    this.remainingMs();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        cleanup();
+        reject(attemptTimeoutError());
+      };
+      const cleanup = () => this.signal.removeEventListener('abort', onAbort);
+      this.signal.addEventListener('abort', onAbort, { once: true });
+      Promise.resolve(promise).then(
+        (value) => { cleanup(); resolve(value); },
+        (error) => { cleanup(); reject(error); },
+      );
+    });
+  }
+
+  close() {
+    clearTimeout(this.timer);
+  }
+}
+
+async function waitForBrowserSettle({ client, deadline, inFlightRequests, activity }) {
+  while (true) {
+    await deadline.flush(client);
+    const quietFor = performance.now() - activity.lastAt;
+    if (inFlightRequests.size === 0 && quietFor >= SETTLE_QUIET_MS) {
+      const version = activity.version;
+      await deadline.flush(client);
+      if (inFlightRequests.size === 0 && activity.version === version) return;
+      continue;
+    }
+    const waitMs = inFlightRequests.size === 0
+      ? SETTLE_QUIET_MS - quietFor
+      : 25;
+    await deadline.wait(Math.max(1, waitMs));
+  }
 }
 
 async function runAttempt({
@@ -324,16 +431,36 @@ async function runAttempt({
   runBoundary,
 }) {
   const startedAt = performance.now();
+  const rawClient = client;
+  const deadline = new AttemptDeadline(config.responseTimeoutMs);
+  client = Object.freeze({
+    flushEvents: () => deadline.flush(rawClient),
+    on: (...args) => rawClient.on(...args),
+    send: (method, params = {}, controlledSessionId) => (
+      deadline.send(rawClient, method, params, controlledSessionId)
+    ),
+  });
   const records = [];
   const requestTypes = new Map();
+  const inFlightRequests = new Set();
+  const activity = { lastAt: performance.now(), version: 0 };
+  const noteActivity = () => {
+    activity.lastAt = performance.now();
+    activity.version += 1;
+  };
   let documentStatus = null;
   let blockedOrigin = false;
   let navigationStarted = false;
+  let mainFrameId = null;
   let browserContextId;
   let targetId;
   let sessionId;
   let discoverTargetsEnabled = false;
   let rootAutoAttachEnabled = false;
+  let attemptActive = true;
+  let fatalError = null;
+  let screenshotBytes = null;
+  let screenshotPath = null;
   const controlledSessions = new Set();
   const sessionTargetIds = new Map();
   const sessionTargetTypes = new Map();
@@ -376,9 +503,11 @@ async function runAttempt({
     };
     const scoped = (handler, { mainOnly = false } = {}) => async (params, metadata) => {
       const controlledSessionId = metadata.sessionId;
-      if (controlledSessionId === null
+      if (!attemptActive
+          || controlledSessionId === null
           || !controlledSessions.has(controlledSessionId)
           || (mainOnly && controlledSessionId !== sessionId)) return;
+      noteActivity();
       try {
         await handler(params, controlledSessionId);
       } catch {
@@ -422,6 +551,9 @@ async function runAttempt({
         await client.send('Runtime.addBinding', {
           name: SERVICE_WORKER_GUARD_BINDING,
         }, controlledSessionId);
+        await client.send('Runtime.addBinding', {
+          name: WORKER_GUARD_BINDING,
+        }, controlledSessionId);
         await client.send('Page.addScriptToEvaluateOnNewDocument', {
           source: PAGE_GUARD_EXPRESSION,
         }, controlledSessionId);
@@ -438,6 +570,8 @@ async function runAttempt({
     };
 
     unsubscriptions.push(client.on('Target.attachedToTarget', async (params, metadata) => {
+      if (!attemptActive) return;
+      noteActivity();
       const childSessionId = params?.sessionId;
       const targetInfo = params?.targetInfo;
       if (typeof childSessionId !== 'string'
@@ -453,6 +587,30 @@ async function runAttempt({
       }
 
       const targetType = typeof targetInfo.type === 'string' ? targetInfo.type : 'unknown';
+      if (targetType === 'worker' || targetType === 'shared_worker') {
+        recordOnce(records, {
+          category: 'security', severity: 'critical', outcome: 'fail',
+          reasonCode: 'WORKER_BLOCKED',
+          message: 'Browser closed a worker target before it could execute',
+          expected: 'no page-initiated worker targets', actual: 'worker target attempted',
+        });
+        if (typeof targetInfo.targetId === 'string') {
+          await client.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
+        }
+        return;
+      }
+      if (targetType === 'service_worker') {
+        recordOnce(records, {
+          category: 'security', severity: 'critical', outcome: 'fail',
+          reasonCode: 'SERVICE_WORKER_BLOCKED',
+          message: 'Browser closed a service-worker target before it could execute',
+          expected: 'no page-initiated service workers', actual: 'service worker target attempted',
+        });
+        if (typeof targetInfo.targetId === 'string') {
+          await client.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
+        }
+        return;
+      }
       const mainPage = targetType === 'page'
         && (targetInfo.targetId === targetId || sessionId === undefined);
       if ((targetType === 'page' && !mainPage) || !CONTROLLED_TARGET_TYPES.has(targetType)) {
@@ -505,6 +663,8 @@ async function runAttempt({
       }
     }));
     unsubscriptions.push(client.on('Target.detachedFromTarget', async (params) => {
+      if (!attemptActive) return;
+      noteActivity();
       if (typeof params?.sessionId === 'string') {
         controlledSessions.delete(params.sessionId);
         sessionTargetIds.delete(params.sessionId);
@@ -517,10 +677,15 @@ async function runAttempt({
         ? params.request.method.toUpperCase()
         : 'UNKNOWN';
       if (!READ_METHODS.has(method)) {
+        const frameMutation = mainFrameId !== null
+          && typeof params?.frameId === 'string'
+          && params.frameId !== mainFrameId;
         recordOnce(records, {
           category: 'security', severity: 'critical', outcome: 'fail',
-          reasonCode: 'BROWSER_MUTATION_BLOCKED',
-          message: 'Browser blocked a page-initiated mutation before dispatch',
+          reasonCode: frameMutation ? 'FRAME_MUTATION_BLOCKED' : 'BROWSER_MUTATION_BLOCKED',
+          message: frameMutation
+            ? 'Browser blocked a frame-initiated mutation before dispatch'
+            : 'Browser blocked a page-initiated mutation before dispatch',
           expected: 'GET, HEAD, or OPTIONS', actual: 'mutation method',
         });
         await client.send('Fetch.failRequest', {
@@ -557,11 +722,14 @@ async function runAttempt({
       }, controlledSessionId);
     })));
     unsubscriptions.push(client.on('Network.requestWillBeSent', scoped(async (params, controlledSessionId) => {
+      const requestKey = `${controlledSessionId}:${params.requestId}`;
+      const origin = exactNetworkOrigin(params?.request?.url, approvedOrigin);
       requestTypes.set(`${controlledSessionId}:${params.requestId}`, {
         type: params.type,
-        origin: exactNetworkOrigin(params?.request?.url, approvedOrigin),
+        origin,
       });
-      if (exactNetworkOrigin(params?.request?.url, approvedOrigin) === 'blocked') {
+      if (origin === 'approved') inFlightRequests.add(requestKey);
+      if (origin === 'blocked') {
         blockedOrigin = true;
         recordOnce(records, {
           category: 'security', severity: 'critical', outcome: 'fail',
@@ -572,6 +740,14 @@ async function runAttempt({
         await stopMainLoading();
         settleNavigation('blocked');
       }
+    })));
+    unsubscriptions.push(client.on('Network.loadingFinished', scoped(async (
+      params,
+      controlledSessionId,
+    ) => {
+      const requestKey = `${controlledSessionId}:${params.requestId}`;
+      inFlightRequests.delete(requestKey);
+      requestTypes.delete(requestKey);
     })));
     unsubscriptions.push(client.on('Network.responseReceived', scoped(async (params, controlledSessionId) => {
       const classification = exactNetworkOrigin(params?.response?.url, approvedOrigin);
@@ -592,7 +768,10 @@ async function runAttempt({
       }
     })));
     unsubscriptions.push(client.on('Network.loadingFailed', scoped(async (params, controlledSessionId) => {
-      const request = requestTypes.get(`${controlledSessionId}:${params.requestId}`);
+      const requestKey = `${controlledSessionId}:${params.requestId}`;
+      const request = requestTypes.get(requestKey);
+      inFlightRequests.delete(requestKey);
+      requestTypes.delete(requestKey);
       if (request?.type !== 'Document' && request?.origin === 'approved') {
         recordOnce(records, {
           category: 'network', severity: 'error', outcome: 'fail',
@@ -614,18 +793,28 @@ async function runAttempt({
     })));
     unsubscriptions.push(client.on('Runtime.bindingCalled', scoped(async (params) => {
       if (params?.name !== WEBSOCKET_GUARD_BINDING
-          && params?.name !== SERVICE_WORKER_GUARD_BINDING) return;
+          && params?.name !== SERVICE_WORKER_GUARD_BINDING
+          && params?.name !== WORKER_GUARD_BINDING) return;
       const serviceWorker = params.name === SERVICE_WORKER_GUARD_BINDING;
+      const worker = params.name === WORKER_GUARD_BINDING;
       recordOnce(records, {
         category: 'security', severity: 'critical', outcome: 'fail',
-        reasonCode: serviceWorker ? 'SERVICE_WORKER_BLOCKED' : 'BROWSER_WEBSOCKET_BLOCKED',
+        reasonCode: serviceWorker
+          ? 'SERVICE_WORKER_BLOCKED'
+          : worker ? 'WORKER_BLOCKED' : 'BROWSER_WEBSOCKET_BLOCKED',
         message: serviceWorker
           ? 'Browser blocked page-initiated service-worker registration'
-          : 'Browser blocked a page-initiated WebSocket channel',
+          : worker
+            ? 'Browser blocked page-initiated worker construction'
+            : 'Browser blocked a page-initiated WebSocket channel',
         expected: serviceWorker
           ? 'no page-initiated service workers'
-          : 'no page-initiated WebSocket channels',
-        actual: serviceWorker ? 'service worker attempted' : 'WebSocket attempted',
+          : worker
+            ? 'no page-initiated workers'
+            : 'no page-initiated WebSocket channels',
+        actual: serviceWorker
+          ? 'service worker attempted'
+          : worker ? 'worker attempted' : 'WebSocket attempted',
       });
       await stopMainLoading();
     })));
@@ -635,26 +824,40 @@ async function runAttempt({
           && params.args.some((argument) => argument?.value === WEBSOCKET_GUARD_MARKER);
         const blockedServiceWorker = Array.isArray(params.args)
           && params.args.some((argument) => argument?.value === SERVICE_WORKER_GUARD_MARKER);
+        const blockedWorker = Array.isArray(params.args)
+          && params.args.some((argument) => argument?.value === WORKER_GUARD_MARKER);
         recordOnce(records, {
-          category: blockedWebSocket || blockedServiceWorker ? 'security' : 'console',
-          severity: blockedWebSocket || blockedServiceWorker ? 'critical' : 'error',
+          category: blockedWebSocket || blockedServiceWorker || blockedWorker
+            ? 'security'
+            : 'console',
+          severity: blockedWebSocket || blockedServiceWorker || blockedWorker
+            ? 'critical'
+            : 'error',
           outcome: 'fail',
           reasonCode: blockedServiceWorker
             ? 'SERVICE_WORKER_BLOCKED'
-            : blockedWebSocket ? 'BROWSER_WEBSOCKET_BLOCKED' : 'CONSOLE_ERROR',
+            : blockedWorker
+              ? 'WORKER_BLOCKED'
+              : blockedWebSocket ? 'BROWSER_WEBSOCKET_BLOCKED' : 'CONSOLE_ERROR',
           message: blockedServiceWorker
             ? 'Browser blocked page-initiated service-worker registration'
+            : blockedWorker
+              ? 'Browser blocked page-initiated worker construction'
             : blockedWebSocket
               ? 'Browser blocked a page-initiated WebSocket channel'
               : 'The page reported a console error',
           expected: blockedServiceWorker
             ? 'no page-initiated service workers'
+            : blockedWorker
+              ? 'no page-initiated workers'
             : blockedWebSocket
               ? 'no page-initiated WebSocket channels'
               : 'no console errors',
           actual: blockedServiceWorker
             ? 'service worker attempted'
-            : blockedWebSocket ? 'WebSocket attempted' : 'console error reported',
+            : blockedWorker
+              ? 'worker attempted'
+              : blockedWebSocket ? 'WebSocket attempted' : 'console error reported',
         });
       }
     })));
@@ -681,6 +884,9 @@ async function runAttempt({
       settleNavigation('loaded');
     }, { mainOnly: true })));
     unsubscriptions.push(client.on('Page.frameNavigated', scoped(async (params) => {
+      if (params?.frame?.parentId === undefined && typeof params?.frame?.id === 'string') {
+        mainFrameId = params.frame.id;
+      }
       if (!navigationStarted || params?.frame?.parentId !== undefined) return;
       if (exactNetworkOrigin(params?.frame?.url, approvedOrigin) !== 'approved') {
         blockedOrigin = true;
@@ -708,12 +914,7 @@ async function runAttempt({
       url: 'about:blank',
       browserContextId,
     }));
-    const mainTargetTimeout = timeoutPromise(config.responseTimeoutMs, null);
-    try {
-      sessionId = await Promise.race([mainSessionReady, mainTargetTimeout.promise]);
-    } finally {
-      mainTargetTimeout.cancel();
-    }
+    sessionId = await deadline.race(mainSessionReady);
     if (sessionId === null) throw new Error('main target policy unavailable');
     await client.send('Log.enable', {}, sessionId);
     await client.send('Emulation.setDeviceMetricsOverride', {
@@ -725,39 +926,32 @@ async function runAttempt({
 
     const requestedPath = materializePath(route, decision.parameterValues);
     const navigationUrl = resolveRequestUrl(approvedOrigin, requestedPath);
-    const navigationTimeout = timeoutPromise(config.responseTimeoutMs, 'timeout');
-    try {
-      try {
-        navigationStarted = true;
-        await client.send('Page.navigate', { url: navigationUrl }, sessionId);
-      } catch {
-        await client.flushEvents();
-        if (!blockedOrigin) {
-          recordOnce(records, {
-            category: 'network', severity: 'error', outcome: 'fail',
-            reasonCode: 'NAVIGATION_FAILED',
-            message: 'Browser navigation failed before a document loaded',
-            expected: 'successful bounded navigation', actual: 'navigation failed',
-          });
-          settleNavigation('failed');
-        }
-      }
-      const navigationResult = await Promise.race([navigationSettled, navigationTimeout.promise]);
-      if (navigationResult === 'timeout') {
-        await client.send('Page.stopLoading', {}, sessionId).catch(() => {});
+    let navigationError = null;
+    navigationStarted = true;
+    void client.send('Page.navigate', { url: navigationUrl }, sessionId).catch((error) => {
+      navigationError = error;
+      settleNavigation('failed');
+    });
+    await deadline.race(navigationSettled);
+    await client.flushEvents();
+    if (navigationError !== null && !blockedOrigin) {
+      if (rawClient.disconnectError !== null) throw rawClient.disconnectError;
+      if (!deadline.expired) {
         recordOnce(records, {
           category: 'network', severity: 'error', outcome: 'fail',
-          reasonCode: 'BROWSER_TIMEOUT',
-          message: 'Browser navigation exceeded the configured timeout',
-          expected: 'navigation before timeout', actual: 'timeout',
+          reasonCode: 'NAVIGATION_FAILED',
+          message: 'Browser navigation failed before a document loaded',
+          expected: 'successful bounded navigation', actual: 'navigation failed',
         });
       }
-    } finally {
-      navigationTimeout.cancel();
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 75));
-    await client.flushEvents();
+    await waitForBrowserSettle({
+      client: rawClient,
+      deadline,
+      inFlightRequests,
+      activity,
+    });
     if (!blockedOrigin) {
       const overflow = await client.send('Runtime.evaluate', {
         expression: OVERFLOW_EXPRESSION,
@@ -806,67 +1000,120 @@ async function runAttempt({
       }
     }
 
-    records.push(statusRecord(documentStatus, accessExpected));
-    let screenshotPath = null;
+    recordOnce(records, statusRecord(documentStatus, accessExpected));
     if (role === null
         && config.screenshotOnError === true
         && records.some((record) => record.outcome === 'fail')) {
-      const captured = await client.send('Page.captureScreenshot', {
-        format: 'png', fromSurface: true, captureBeyondViewport: false,
-      }, sessionId);
-      const bytes = Buffer.from(captured?.data ?? '', 'base64');
-      if (bytes.length >= 8
-          && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+      try {
+        const captured = await client.send('Page.captureScreenshot', {
+          format: 'png', fromSurface: true, captureBeyondViewport: false,
+        }, sessionId);
+        const bytes = Buffer.from(captured?.data ?? '', 'base64');
+        if (bytes.length < 8
+            || !bytes.subarray(0, 8)
+              .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+          throw new Error('invalid PNG screenshot');
+        }
         screenshotPath = screenshotName(route, role, viewport);
-        await runBoundary.writeBytes(screenshotPath, bytes);
-      } else {
+        screenshotBytes = bytes;
+      } catch (error) {
+        if (deadline.expired
+            || error?.code === 'BROWSER_ATTEMPT_TIMEOUT'
+            || error?.code === 'CDP_COMMAND_ABORTED'
+            || error?.code === 'CDP_COMMAND_TIMEOUT'
+            || rawClient.disconnectError !== null) throw error;
+        screenshotPath = null;
+        screenshotBytes = null;
         recordOnce(records, {
           category: 'runtime', severity: 'error', outcome: 'fail',
           reasonCode: 'SCREENSHOT_CAPTURE_FAILED',
-          message: 'Chrome did not return a valid PNG screenshot',
-          expected: 'valid PNG bytes', actual: 'invalid screenshot data',
+          message: 'Chrome could not provide a valid PNG screenshot',
+          expected: 'valid PNG bytes', actual: 'screenshot capture failed',
         });
       }
     }
-
-    records.sort(compareRecords);
-    const durationMs = Math.max(0, performance.now() - startedAt);
-    return records.map((record) => observation(route, {
-      ...record,
-      role,
-      evidence: {
-        status: documentStatus,
-        durationMs,
-        viewport,
-        screenshotPath: record.outcome === 'fail' ? screenshotPath : null,
-      },
-    }));
-  } catch {
-    return [observation(route, {
-      category: 'runtime', severity: 'error', outcome: 'fail', role,
-      reasonCode: 'BROWSER_RUNTIME_ERROR',
-      message: 'Browser check failed inside the trusted runtime',
-      expected: 'completed bounded browser check', actual: 'runtime error',
-      evidence: { durationMs: performance.now() - startedAt, viewport },
-    })];
+  } catch (error) {
+    const disconnected = rawClient.disconnectError;
+    if (disconnected?.code === 'CDP_EVENT_QUEUE_OVERFLOW') {
+      fatalError = disconnected;
+    } else if (disconnected !== null && !deadline.expired) {
+      fatalError = disconnected;
+    } else if (deadline.expired
+        || error?.code === 'BROWSER_ATTEMPT_TIMEOUT'
+        || error?.code === 'CDP_COMMAND_ABORTED'
+        || error?.code === 'CDP_COMMAND_TIMEOUT') {
+      recordOnce(records, {
+        category: 'network', severity: 'error', outcome: 'fail',
+        reasonCode: 'BROWSER_TIMEOUT',
+        message: 'Browser attempt exceeded the configured wall-clock timeout',
+        expected: 'completed browser attempt before timeout', actual: 'timeout',
+      });
+    } else {
+      recordOnce(records, {
+        category: 'runtime', severity: 'error', outcome: 'fail',
+        reasonCode: 'BROWSER_RUNTIME_ERROR',
+        message: 'Browser check failed inside the trusted runtime',
+        expected: 'completed bounded browser check', actual: 'runtime error',
+      });
+    }
+    recordOnce(records, statusRecord(documentStatus, accessExpected));
   } finally {
-    if (targetId !== undefined) await client.send('Target.closeTarget', { targetId }).catch(() => {});
-    if (browserContextId !== undefined) {
-      await client.send('Target.disposeBrowserContext', { browserContextId }).catch(() => {});
-    }
-    if (rootAutoAttachEnabled) {
-      await client.send('Target.setAutoAttach', {
-        autoAttach: false,
-        waitForDebuggerOnStart: false,
-        flatten: true,
-      }).catch(() => {});
-    }
-    if (discoverTargetsEnabled) {
-      await client.send('Target.setDiscoverTargets', { discover: false }).catch(() => {});
-    }
-    await client.flushEvents().catch(() => {});
+    attemptActive = false;
     for (const unsubscribe of unsubscriptions) unsubscribe();
+    let cleanupComplete = rawClient.state === 'open';
+    if (cleanupComplete) {
+      try {
+        if (targetId !== undefined) await client.send('Target.closeTarget', { targetId });
+        if (browserContextId !== undefined) {
+          await client.send('Target.disposeBrowserContext', { browserContextId });
+        }
+        if (rootAutoAttachEnabled) {
+          await client.send('Target.setAutoAttach', {
+            autoAttach: false,
+            waitForDebuggerOnStart: false,
+            flatten: true,
+          });
+        }
+        if (discoverTargetsEnabled) {
+          await client.send('Target.setDiscoverTargets', { discover: false });
+        }
+        await client.flushEvents();
+      } catch (error) {
+        cleanupComplete = false;
+        if (error?.code === 'CDP_EVENT_QUEUE_OVERFLOW'
+            || rawClient.disconnectError?.code === 'CDP_EVENT_QUEUE_OVERFLOW') {
+          fatalError = rawClient.disconnectError ?? error;
+        }
+      }
+    }
+    if (!cleanupComplete && rawClient.state === 'open') {
+      rawClient.disconnect('CDP_ATTEMPT_CLEANUP_FAILED');
+    }
+    if (rawClient.disconnectError?.code === 'CDP_EVENT_QUEUE_OVERFLOW') {
+      fatalError = rawClient.disconnectError;
+    }
+    try {
+      if (screenshotBytes !== null && fatalError === null) {
+        await deadline.race(runBoundary.writeBytes(screenshotPath, screenshotBytes));
+      }
+    } finally {
+      deadline.close();
+    }
   }
+
+  if (fatalError !== null) throw fatalError;
+  records.sort(compareRecords);
+  const durationMs = Math.max(0, performance.now() - startedAt);
+  return records.map((record) => observation(route, {
+    ...record,
+    role,
+    evidence: {
+      status: documentStatus,
+      durationMs,
+      viewport,
+      screenshotPath: record.outcome === 'fail' ? screenshotPath : null,
+    },
+  }));
 }
 
 /** Runs exact-origin browser checks and returns immutable, credential-free observations. */
@@ -876,7 +1123,14 @@ export async function sweepBrowser({
   config,
   env = process.env,
   runBoundary,
+  targetBoundary,
 } = {}) {
+  if (!(targetBoundary instanceof TargetBoundary)) {
+    throw new SentinelError(
+      'BROWSER_TARGET_BOUNDARY_INVALID',
+      'A trusted TargetBoundary is required for browser sweeps',
+    );
+  }
   const routes = Array.isArray(manifest?.routes) ? manifest.routes : [];
   const decisions = Array.isArray(plan?.routes) ? plan.routes : [];
   const decisionsById = new Map(decisions.map((decision) => [decision.subjectId, decision]));
@@ -888,14 +1142,14 @@ export async function sweepBrowser({
   const chrome = await launchChrome({
     executablePath: config?.chromePath ?? undefined,
     profileDir,
-    targetRoot: typeof manifest?.target?.root === 'string' ? manifest.target.root : undefined,
+    targetRoot: targetBoundary.root,
     headless: true,
     timeoutMs: config?.responseTimeoutMs,
   });
   let client;
   try {
     client = await CdpClient.connect(chrome.webSocketUrl);
-    for (const route of routes) {
+    routeLoop: for (const route of routes) {
       const decision = decisionsById.get(route?.id);
       if (decision?.action !== 'execute') {
         observations.push(policySkip(route, decision));
@@ -933,14 +1187,16 @@ export async function sweepBrowser({
           continue;
         }
         for (const viewport of config.viewports) {
-          observations.push(...await runAttempt({
+          const attemptObservations = await runAttempt({
             client, route, decision, config, approvedOrigin,
             role: attempt.role,
             accessExpected: attempt.accessExpected,
             token: credential.token,
             viewport,
             runBoundary,
-          }));
+          });
+          observations.push(...attemptObservations);
+          if (client.state !== 'open') break routeLoop;
         }
       }
     }
