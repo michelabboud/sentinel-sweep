@@ -1,9 +1,220 @@
+import { performance } from 'node:perf_hooks';
 import { isDeepStrictEqual } from 'node:util';
+import { createContext, Script } from 'node:vm';
+
+const MAX_PATTERN_CODE_UNITS = 512;
+const MAX_PATTERN_VALUE_CODE_UNITS = 1024 * 1024;
+const MAX_PATTERN_EVALUATIONS = 256;
+const MAX_PATTERN_TOTAL_MS = 250;
+const MAX_PATTERN_EXECUTION_MS = 20;
+const MAX_PATTERN_GROUP_DEPTH = 32;
+const MAX_PATTERN_QUANTIFIERS = 128;
+const MAX_PATTERN_REPEAT = 10_000;
+const PATTERN_TEST_SCRIPT = new Script(
+  'new RegExp(pattern, "u").test(value)',
+  { filename: 'sentinel-schema-pattern.vm' },
+);
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isAsciiDigit(character) {
+  return character >= '0' && character <= '9';
+}
+
+function braceQuantifier(pattern, start) {
+  let index = start + 1;
+  if (!isAsciiDigit(pattern[index])) return null;
+
+  let minimum = 0;
+  while (isAsciiDigit(pattern[index])) {
+    minimum = (minimum * 10) + (pattern.charCodeAt(index) - 48);
+    if (minimum > MAX_PATTERN_REPEAT) return { safe: false, end: index };
+    index += 1;
+  }
+
+  let maximum = minimum;
+  if (pattern[index] === ',') {
+    index += 1;
+    if (pattern[index] === '}') {
+      maximum = null;
+    } else {
+      if (!isAsciiDigit(pattern[index])) return null;
+      maximum = 0;
+      while (isAsciiDigit(pattern[index])) {
+        maximum = (maximum * 10) + (pattern.charCodeAt(index) - 48);
+        if (maximum > MAX_PATTERN_REPEAT) return { safe: false, end: index };
+        index += 1;
+      }
+    }
+  }
+
+  if (pattern[index] !== '}') return null;
+  if (maximum !== null && maximum < minimum) return { safe: false, end: index };
+  return { safe: true, end: index };
+}
+
+/*
+ * Reject constructs whose worst-case behavior is difficult to prove locally.
+ * The isolated VM timeout below remains the authoritative execution bound: this
+ * structural pass deliberately catches common ReDoS shapes before execution.
+ */
+function patternIsConservativelySafe(pattern) {
+  if (pattern.length > MAX_PATTERN_CODE_UNITS) return false;
+
+  const groups = [{
+    hasAlternation: false,
+    hasComplexAtom: false,
+    hasQuantifier: false,
+  }];
+  let inCharacterClass = false;
+  let lastAtom = null;
+  let quantifiers = 0;
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+
+    if (character === '\\') {
+      const escaped = pattern[index + 1];
+      if (escaped === undefined) break;
+      if (!inCharacterClass
+          && ((escaped >= '1' && escaped <= '9')
+            || (escaped === 'k' && pattern[index + 2] === '<'))) {
+        return false;
+      }
+      index += 1;
+      if (!inCharacterClass) lastAtom = { complex: false, quantified: false };
+      continue;
+    }
+
+    if (inCharacterClass) {
+      if (character === ']') {
+        inCharacterClass = false;
+        lastAtom = { complex: false, quantified: false };
+      }
+      continue;
+    }
+
+    if (character === '[') {
+      inCharacterClass = true;
+      lastAtom = null;
+      continue;
+    }
+
+    if (character === '(') {
+      if (pattern[index + 1] === '?' && pattern[index + 2] === '<') {
+        if (pattern[index + 3] === '=' || pattern[index + 3] === '!') return false;
+        const nameEnd = pattern.indexOf('>', index + 3);
+        if (nameEnd === -1) break;
+        index = nameEnd;
+      } else if (pattern[index + 1] === '?'
+          && (pattern[index + 2] === ':'
+            || pattern[index + 2] === '='
+            || pattern[index + 2] === '!')) {
+        index += 2;
+      }
+      if (groups.length >= MAX_PATTERN_GROUP_DEPTH) return false;
+      groups.push({
+        hasAlternation: false,
+        hasComplexAtom: false,
+        hasQuantifier: false,
+      });
+      lastAtom = null;
+      continue;
+    }
+
+    if (character === ')') {
+      if (groups.length === 1) break;
+      const group = groups.pop();
+      const complex = group.hasAlternation || group.hasComplexAtom || group.hasQuantifier;
+      groups[groups.length - 1].hasComplexAtom ||= complex;
+      lastAtom = { complex, quantified: false };
+      continue;
+    }
+
+    if (character === '|') {
+      groups[groups.length - 1].hasAlternation = true;
+      lastAtom = null;
+      continue;
+    }
+
+    let quantifierEnd = index;
+    let isQuantifier = character === '*' || character === '+' || character === '?';
+    if (character === '{' && lastAtom !== null) {
+      const quantifier = braceQuantifier(pattern, index);
+      if (quantifier !== null) {
+        if (!quantifier.safe) return false;
+        isQuantifier = true;
+        quantifierEnd = quantifier.end;
+      }
+    }
+
+    if (isQuantifier) {
+      if (lastAtom === null) break;
+      if (lastAtom.quantified) {
+        if (character === '?') continue;
+        return false;
+      }
+      if (lastAtom.complex) return false;
+      quantifiers += 1;
+      if (quantifiers > MAX_PATTERN_QUANTIFIERS) return false;
+      groups[groups.length - 1].hasQuantifier = true;
+      lastAtom.quantified = true;
+      index = quantifierEnd;
+      continue;
+    }
+
+    if (character === '^' || character === '$') {
+      lastAtom = null;
+      continue;
+    }
+    lastAtom = { complex: false, quantified: false };
+  }
+
+  return true;
+}
+
+function createPatternBudget() {
+  return {
+    context: null,
+    evaluations: 0,
+    startedAt: performance.now(),
+  };
+}
+
+function isolatedPatternMatches(pattern, value, budget) {
+  budget.evaluations += 1;
+  if (budget.evaluations > MAX_PATTERN_EVALUATIONS
+      || value.length > MAX_PATTERN_VALUE_CODE_UNITS
+      || !patternIsConservativelySafe(pattern)
+      || performance.now() - budget.startedAt >= MAX_PATTERN_TOTAL_MS) {
+    return false;
+  }
+
+  try {
+    if (budget.context === null) {
+      const sandbox = Object.create(null);
+      sandbox.pattern = '';
+      sandbox.value = '';
+      budget.context = createContext(sandbox, {
+        codeGeneration: { strings: false, wasm: false },
+        name: 'sentinel-schema-pattern',
+      });
+    }
+    budget.context.pattern = pattern;
+    budget.context.value = value;
+
+    const remainingMs = MAX_PATTERN_TOTAL_MS - (performance.now() - budget.startedAt);
+    if (remainingMs <= 0) return false;
+    const timeout = Math.max(1, Math.min(MAX_PATTERN_EXECUTION_MS, Math.ceil(remainingMs)));
+    return PATTERN_TEST_SCRIPT.runInContext(budget.context, { timeout }) === true;
+  } catch {
+    budget.context = null;
+    return false;
+  }
 }
 
 function matchesType(value, type) {
@@ -63,7 +274,13 @@ function branchIsValid(value, schema, context) {
 }
 
 function validateNode(value, schema, context, violations) {
-  const { path, rootSchema, registry, depth } = context;
+  const {
+    path,
+    rootSchema,
+    registry,
+    depth,
+    patternBudget,
+  } = context;
   const add = (keyword, violationPath = path) => violations.push({ path: violationPath, keyword });
 
   if (!isObject(schema) || depth > 128) {
@@ -76,6 +293,7 @@ function validateNode(value, schema, context, violations) {
     rootSchema: childRoot,
     registry,
     depth: depth + 1,
+    patternBudget,
   });
 
   if (hasOwn(schema, '$ref')) {
@@ -125,11 +343,7 @@ function validateNode(value, schema, context, violations) {
       add('minLength');
     }
     if (typeof schema.pattern === 'string') {
-      try {
-        if (!new RegExp(schema.pattern, 'u').test(value)) add('pattern');
-      } catch {
-        add('pattern');
-      }
+      if (!isolatedPatternMatches(schema.pattern, value, patternBudget)) add('pattern');
     }
   }
 
@@ -191,6 +405,7 @@ export function checkJsonSchema(value, schema, registry = {}) {
     rootSchema: schema,
     registry,
     depth: 0,
+    patternBudget: createPatternBudget(),
   }, violations);
 
   violations.sort((left, right) => (
