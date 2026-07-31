@@ -221,8 +221,12 @@ test('launches a fresh Chrome profile, speaks CDP, captures PNG, and terminates 
     assert.equal(childEnvironment.get('XDG_CACHE_HOME'), path.join(profileDir, '.cache'));
     assert.equal(childEnvironment.get('TMPDIR'), path.join(profileDir, '.tmp'));
     assert.equal([...childEnvironment.values()].includes(environmentCanary), false);
+    // Only handlers attributable to THIS session (its private profile path in
+    // their command line) count: a global /proc diff would blame any unrelated
+    // Chrome that starts on the host while the test runs.
     const newCrashpad = [...await crashpadProcesses()]
-      .filter(([pid, command]) => crashpadBaseline.get(pid) !== command);
+      .filter(([pid, command]) => crashpadBaseline.get(pid) !== command)
+      .filter(([, command]) => command.includes(profileDir));
     assert.deepEqual(newCrashpad, [], 'Chrome spawned a persistent crashpad handler');
 
     client = await CdpClient.connect(session.webSocketUrl);
@@ -257,7 +261,8 @@ test('launches a fresh Chrome profile, speaks CDP, captures PNG, and terminates 
 
   await waitForProcessesToExit(observedPids);
   const crashpadAfterClose = [...await crashpadProcesses()]
-    .filter(([pid, command]) => crashpadBaseline.get(pid) !== command);
+    .filter(([pid, command]) => crashpadBaseline.get(pid) !== command)
+    .filter(([, command]) => command.includes(profileDir));
   assert.deepEqual(crashpadAfterClose, [], 'Chrome left a crashpad handler after close');
   await assert.rejects(access(profileDir), { code: 'ENOENT' });
 });
