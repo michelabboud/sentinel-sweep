@@ -1,5 +1,10 @@
 # Sentinel Sweep Report
 
+> [!WARNING]
+> **LEGACY 1.x EXAMPLE — not a current Sentinel 2.0 report.** This frozen sample is
+> preserved only as historical output evidence and does not satisfy the v2 findings,
+> artifact, identity, or safety contracts. Do not use it as a current template.
+
 ## Summary
 
 | Field | Value |

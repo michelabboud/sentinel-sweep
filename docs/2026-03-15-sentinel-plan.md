@@ -1,5 +1,13 @@
 # Sentinel Plugin Implementation Plan
 
+> [!WARNING]
+> **SUPERSEDED 1.x PLAN — historical evidence only.** This prompt/curl/Playwright-MCP
+> plan is not current Sentinel 2.0 guidance and must not be executed. Current
+> authority is [ADR 0001](adr/0001-deterministic-trusted-core.md), the approved
+> [Sentinel 2.0 design](superpowers/specs/2026-07-18-sentinel-2.0-goal-hardening-design.md),
+> and the approved
+> [Sentinel 2.0 implementation plan](superpowers/plans/2026-07-18-sentinel-2.0-goal-hardening.md).
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a Claude Code plugin that performs automated QA sweeps (browser + API) on web applications, catching console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys.

@@ -1,5 +1,13 @@
 # Example Sweep Report
 
+> [!WARNING]
+> **LEGACY 1.x EXAMPLE — not a current Sentinel 2.0 report.** This directory is
+> preserved only as historical output evidence. Its separate API/browser findings,
+> risk-score workflow, paths, and report sections are not the v2 artifact contract.
+> Use the current [architecture](../../ARCHITECTURE.md) and
+> [review report](../reports/2026-07-18-sentinel-plugin-review-and-architecture.md)
+> for Sentinel 2.0 behavior and evidence.
+
 This directory contains a sample Sentinel sweep report showing what output looks like after running `/sentinel sweep` on a typical Vue 3 + FastAPI application.
 
 ## Files

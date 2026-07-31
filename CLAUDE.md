@@ -1,231 +1,223 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with the Sentinel plugin.
+This file contains project-specific guidance for work in Sentinel. Read the root
+`VERSION`, `PROGRESS.md`, `ARCHITECTURE.md`, `SECURITY.md`, and `docs/adr/README.md`
+before making release or architecture claims.
 
-## Repository Overview
+## Product contract
 
-**Sentinel** is a Claude Code plugin that automates QA sweeps for web applications. It catches console errors, layout problems, RBAC violations, API schema drift, and missing i18n keys.
+Sentinel 2.0 is a deterministic QA runner with a narrow, testable goal:
 
-- **Version**: 1.8.5
-- **License**: Apache-2.0
-- **Languages**: Python, TypeScript/JavaScript, Rust, Go, PHP
-- **Frontend**: Vue 3, Nuxt 3, Next.js, React Router, SvelteKit, Angular, Remix
-- **Backend**: FastAPI, Express.js, Django REST, NestJS, Next.js API, Flask, Hono, Koa, Actix-web, Axum, Rocket, Gin, Echo, Chi, Laravel
-- **API protocols**: REST, GraphQL, gRPC, tRPC
-- **Schemas**: Pydantic v2, Zod, TypeScript interfaces, Django serializers, Rust serde, Go structs, GraphQL types, Laravel FormRequest
-- **Auth**: JWT, NextAuth/Auth.js, session/cookie, API key, OAuth PKCE
-- **ORM cascade detection**: SQLAlchemy, Django ORM, Prisma, TypeORM, Mongoose, Diesel, SeaORM, GORM, Eloquent
-- **Cross-cutting**: OpenAPI import + auto-gen, i18n, a11y, dead endpoints, WebSocket detection, API versioning, migration drift, rate limiting, security headers
-- **Features**: Health score dashboard (--dashboard), CI mode (--ci), incremental sweep (--changed-only), visual diff, Postman/Insomnia/Bruno export, interactive config, auto-fix with regression guard, parallel manifest generation
-- **Browser automation**: Playwright MCP
+> From a private trusted config, safely discover supported OpenAPI and Vue Router
+> surfaces in an untrusted target, execute only policy-approved API and browser
+> checks, and publish one canonical redacted result.
+
+The deterministic execution matrix is:
+
+- OpenAPI 3.0/3.1 JSON with literal relative paths and local component references;
+- static literal Vue Router arrays;
+- explicit bearer-token roles using environment references;
+- built-in HTTP plus system Chrome/Chromium over CDP; and
+- Linux with Node.js 18+.
+
+Sentinel 2.0 accepts zero or one canonical approved origin and zero or one configured
+service per invocation; executable work requires exactly one origin. Multi-service
+projects require separate invocations/configs.
+Do not restore or advertise the old unproved multi-framework/auth/ORM, GraphQL,
+gRPC, tRPC, automatic-fix, direct-PR, Playwright-MCP, or multi-service execution
+claims without a new approved design and complete real E2E proof.
 
 ## Architecture
 
-Sentinel is a 5-component plugin using an orchestrator pattern:
-
-```
-/sentinel (orchestrator skill)
-    ├── manifest-generator (agent, opus)
-    │   Reads codebase → produces sentinel-manifest.json
-    │
-    ├── api-sweeper (agent, sonnet)
-    │   Tests endpoints via curl → api-findings.json
-    │
-    ├── browser-sweeper (agent, sonnet)
-    │   Navigates via Playwright → browser-findings.json
-    │
-    └── sentinel-setup (skill, context: fork)
-        Environment detection + configuration
-```
-
-### Key design decisions
-
-- **Orchestrator is a pure router** — parses args, loads settings, generates run ID, dispatches agents, collects findings, generates report. No domain logic in the orchestrator.
-- **Agents are stateless** — they receive everything via the dispatch prompt (manifest path, settings, flags). No shared state between sweepers.
-- **Browser and API sweepers run in parallel** during `/sentinel sweep` — dispatched in a single Agent tool call.
-- **Run-scoped output directories** — each sweep writes to `sentinel-reports/{ISO-timestamp}/` to prevent parallel run collisions. A `latest` symlink points to the most recent run.
-
-## Repository Structure
-
-```
-sentinel-sweep/
-├── CLAUDE.md                           # This file
-├── README.md                           # User-facing documentation
-├── CHANGELOG.md                        # Version history
-├── LICENSE                             # Apache-2.0
-├── settings.json                       # Default plugin settings
-├── .gitignore                          # Ignores sentinel-reports/, node_modules/
-├── VERSION                              # Single source of truth for version
-│
-├── commands/
-│   └── sentinel.md                     # Legacy command (mirrors skills/run/)
-│
-├── skills/
-│   ├── run/SKILL.md                    # Main orchestrator (Skills 2.0)
-│   └── sentinel-setup/SKILL.md         # Environment setup (context: fork)
-│
-├── agents/
-│   ├── manifest-generator.md           # Codebase analysis → manifest.json
-│   ├── api-sweeper.md                  # Endpoint testing agent
-│   └── browser-sweeper.md             # Playwright navigation agent
-│
-├── plugins/sentinel/                   # Installable plugin copy (mirrors root)
-│   ├── .claude-plugin/plugin.json
-│   ├── agents/
-│   ├── commands/
-│   ├── skills/
-│   ├── settings.json
-│   ├── README.md
-│   └── LICENSE
-│
-├── .claude-plugin/
-│   ├── plugin.json                     # Plugin metadata
-│   └── marketplace.json                # Marketplace registration
-│
-└── docs/                               # Design documents and plans
+```text
+operator / CI / thin Claude or Codex host
+                    |
+                    v
+           runtime/cli.mjs
+             /           \
+ private external config  descriptor-pinned target
+             \           /
+        deterministic discovery
+        OpenAPI JSON + Vue literals
+                    |
+          strict v2 manifest
+                    |
+        fail-closed complete plan
+             /              \
+       API runner        Chrome/CDP runner
+             \              /
+        canonical redacted findings
+                    |
+       transactional publication/history
 ```
 
-## Component Details
+Safety-critical logic belongs in the dependency-free Node core. Claude and Codex
+hosts collect explicit operator intent, invoke one documented core command, preserve
+exit status, and explain canonical output. They do not parse target source, choose
+origins, resolve credentials, compute policy, execute HTTP/browser work directly, or
+recalculate reports.
 
-### Orchestrator (`skills/run/SKILL.md`)
+## Trust boundary
 
-The main entry point. Handles:
-1. Argument parsing (`sweep`, `api`, `report`, `manifest`, `setup`, `trends`, `diff`, `fix`, `clean`)
-2. Settings loading from `settings.json` with defaults
-3. Run ID generation (ISO timestamp)
-4. Run directory creation under `sentinel-reports/`
-5. Agent dispatch (parallel for sweep, single for api)
-6. Finding collection and deduplication
-7. Report generation (markdown + terminal summary)
-8. Run comparison (`diff`), auto-fix suggestions (`fix`), and history cleanup (`clean`)
+- Bundled runtime/defaults/schemas are trusted release assets.
+- Operator config is trusted only after location, owner, mode, identity, and schema
+  validation. It must be outside the target.
+- Target source, imported contracts, comments, docs, pages, responses, redirects,
+  manifests, and existing reports are untrusted data.
+- Environment secret values are transient request inputs, never persisted data.
+- Target source can add evidence or increase risk; it cannot grant origin, role,
+  parameter, mutation, output, or host authority.
 
-Flags: `--sandbox`, `--dry-run`, `--reuse-manifest`, `--risk-level`, `--safe-only`, `--list`, `--severity`
+Never evaluate/import target code or invoke target-local executables during
+discovery. Never scan `.env`, seed, SSH, cloud, or arbitrary documentation files for
+credentials.
 
-### Manifest Generator (`agents/manifest-generator.md`)
+## Core invariants
 
-- Model: Opus (needs deep codebase understanding)
-- Reads router files, API endpoints, Pydantic schemas, auth config, DB models
-- Outputs `sentinel-manifest.json` with routes, endpoints, schemas, CRUD flows, auth config
-- Supports `"manual": true` entries that survive re-generation
+1. Exact origins are operator-approved; redirects are manually revalidated.
+2. At most one canonical origin/service is accepted per invocation, and executable
+   work requires exactly one approved origin.
+3. Every operation and route receives an explicit execute/skip decision.
+4. `GET`, `HEAD`, and `OPTIONS` still require known origin, parameters, auth,
+   responses, and side effects.
+5. Every other method is a mutation and requires all six documented sandbox gates,
+   plus complete auth/parameter evidence.
+6. Secret values never enter config, manifests, findings, errors, subprocess
+   arguments, stdout/stderr, screenshots metadata, reports, exports, or history.
+7. Coverage is explicit `complete`, `partial`, or `unsupported`; unknown does not
+   become empty success.
+8. `sentinel-findings.json` is canonical; every report/history/diff/exit consumer
+   uses its stored summary.
+9. A failed engine or artifact write does not advance history or `latest`.
+10. Outputs remain private, run-scoped, descriptor-anchored, and transactional.
+11. Same-UID processes with output-parent write access must cooperate; this is not a
+    sandbox against a malicious process inside the Unix principal boundary.
 
-### API Sweeper (`agents/api-sweeper.md`)
+## Repository structure
 
-- Model: Sonnet (high-throughput testing)
-- Tests endpoint health (2xx), RBAC enforcement, CRUD flows, response schema validation
-- Uses curl/Bash for HTTP requests
-- Outputs `api-findings.json`
+```text
+runtime/                    deterministic core
+  cli.mjs                  command parser and lifecycle
+  lib/                     boundaries, config, origins, secrets, schemas
+  discovery/               OpenAPI and Vue adapters
+  policy/                  complete execute/skip planner
+  api/                     HTTP/RBAC/schema execution
+  browser/                 WebSocket/CDP/Chrome execution
+schemas/                    strict settings/manifest/findings/history contracts
+commands/, skills/          thin Claude host
+agents/                     explanation-only host roles
+codex/                      transparent Node launcher and Codex docs
+plugins/sentinel/           installable mirror of shipped assets
+tests/                      unit/contract/adversarial/integration/E2E + legacy shell
+docs/adr/                   append-only architectural decisions
+docs/reports/               durable reviews and release evidence
+docs/guides/                migration/operator guidance
+PROGRESS.md                 exact release-gate state
+VERSION                     version source of truth
+```
 
-### Browser Sweeper (`agents/browser-sweeper.md`)
+## Public CLI
 
-- Model: Sonnet
-- Uses Playwright MCP for browser automation
-- Tests console errors, network failures, layout issues, responsive breakpoints, i18n keys
-- Outputs `browser-findings.json` with screenshots
+Commands are `setup`, `manifest`, `api`, `browser`, `sweep`, `report`, `dashboard`,
+`export`, `trends`, `diff`, and `clean`. `--help` and `--version` are sole-argument
+metadata invocations. Read `runtime/cli.mjs` before changing the explicit command/
+flag matrix; do not infer aliases or retain removed 1.x flags.
 
-### Setup Skill (`skills/sentinel-setup/SKILL.md`)
+Exit codes:
 
-- Runs in forked context (`context: fork`)
-- Checks Playwright installation
-- Detects frontend/backend frameworks
-- Verifies dev server connectivity
-- Detects Tailwind breakpoints
+- `0`: command completed; an execution result has no critical/error findings;
+- `1`: usage/config/readiness/runtime/engine/validation/publication failure; and
+- `2`: completed execution with critical/error findings.
 
-### Multi-Service Architecture
+For `setup`, `executionReady` is a compatibility alias for `sweepReady`. The public
+mode-specific fields are `apiReady`, `browserReady`, and `sweepReady`. A successful
+setup invocation can return readiness false.
 
-Sentinel supports projects with multiple APIs and frontends (e.g., Internal Archive + Public Portal under one repo).
+## Configuration
 
-- **Configuration**: Add a `services` array to `settings.json` with `name`, `apiBaseUrl`, `baseUrl`, `sourcePath`
-- **Auto-detection**: If no `services` config, the manifest generator auto-detects from multiple `docker-compose.yml` files
-- **Manifest tagging**: Routes and endpoints are tagged with `"service": "service-name"` in multi-service mode
-- **Parallel dispatch**: One api-sweeper and one browser-sweeper per service, all dispatched in a single Agent call
-- **Report grouping**: Findings are grouped by service in the report output
-- **Backward compatible**: Single-service projects work exactly as before (no `service` field)
+The loaded config is bundled defaults merged with one explicit external JSON file.
+The config must be current-UID owned, mode `0600` or `0400`, a non-symlink regular
+file with one hard link, and outside the target both lexically and canonically.
 
-## Important Conventions
+`reportDir` is relative beneath the target; the core appends `sentinel-v2`. Role
+values are references such as `env:SENTINEL_ADMIN_TOKEN`. Stable-ID overrides may
+add roles, parameter examples, mutation side effects, rollback, target model, and
+delete mode, but cannot erase provenance or directly lower computed risk.
 
-### Hello Protocol
+## Artifacts
 
-All agents implement the Hello Protocol:
-- `hello` → short identification
-- `hello <name> ID` → full capability profile
+A completed run contains:
 
-### Risk Scoring
+```text
+<reportDir>/sentinel-v2/<run-id>/
+  .sentinel-run-identity-v2
+  sentinel-manifest.json
+  sentinel-findings.json
+  sweep.md
+  dashboard.html
+  pr-comment.md
+  browser-<digest>.png       # only when captured
+```
 
-Base score by HTTP method: GET=0, POST=25, PUT/PATCH=30, DELETE=60
+The versioned root also owns `sweep-history.json` and `latest`. Files are `0600`,
+directories are `0700`, and history is capped at 128 runs. Existing artifacts are
+untrusted and must be revalidated before every consumer uses them.
 
-Additive modifiers: admin-only (+10), "delete" in path (+15), "purge"/"reset" (+20), "bulk" (+15), confirm required (+15), cascade deletes (+10), hard-delete (+15)
+## Testing
 
-Risk levels: safe (0-25), medium (26-50), high (51-75), critical (76-100)
-
-### Manifest Parameter Resolution
-
-Dynamic parameters use lookup expressions:
-- `"lookup:groups[0].id"` — resolve from API response
-- `"static:00000000-..."` — fallback for unresolvable params
-
-### Plugin Parity
-
-The `plugins/sentinel/` directory must mirror the root-level files exactly. When updating agents, skills, settings, or docs at root level, always copy changes to `plugins/sentinel/`.
-
-## Development Guidelines
-
-### Adding a New Sweeper
-
-1. Create agent file in `agents/` with Hello Protocol
-2. Add dispatch logic in the orchestrator skill
-3. Define findings JSON schema (match existing format)
-4. Update report generation to include new finding types
-5. Mirror to `plugins/sentinel/agents/`
-
-### Extending Framework Support
-
-1. Update `sentinel-setup` to detect the new framework
-2. Update `manifest-generator` with parsing rules for the framework's router/endpoint patterns
-3. Document in README under Framework Support
-
-### Version Bumping
-
-The `VERSION` file is the single source of truth. Use the bump script:
+Use Node 18 for the release floor. Focused tests should cover happy, failure, and
+adversarial paths. The complete local gate is:
 
 ```bash
-./scripts/bump-version.sh 1.8.5
+npm test
+npm run lint
+npm run audit
+bash tests/e2e/clean-install.test.sh
+bash tests/e2e/plugin-install.test.sh
+claude plugin validate --strict .
+git diff --check
 ```
 
-This updates VERSION, all JSON/MD files, and syncs the plugin mirror. Then add a CHANGELOG entry and run tests.
+The real goal E2E may not skip for missing Chrome. It must prove exact repeated
+discovery, expected API/RBAC/schema/browser findings, zero mutation counters, zero
+cross-origin authorization forwarding, no fixture token in any artifact or captured
+output, canonical consumer consistency, and process cleanup.
 
-### Testing Changes
+Run the aggregate gates again after mirror/version changes and from a committed
+archive. Never claim the goal or release from focused tests alone.
 
-Run setup first to verify environment:
-```
-/sentinel setup
-```
+## Documentation and decisions
 
-Test with dry-run to see what would execute:
-```
-/sentinel sweep --dry-run
-```
+Document every non-obvious invariant, operating constraint, and failure mode. Add an
+ADR for security/architecture/public-contract decisions with real alternatives.
+ADRs are append-only; supersede rather than rewrite accepted history.
 
-Test API-only (no Playwright needed):
-```
-/sentinel api
-```
+Keep these synchronized with behavior:
 
-### Settings
+- `README.md`
+- `ARCHITECTURE.md`
+- `SECURITY.md`
+- `CONTRIBUTING.md`
+- `CHANGELOG.md`
+- `PROGRESS.md`
+- `docs/guides/migrating-to-2.0.md`
+- `docs/sweep-history-spec.md`
+- `docs/reports/2026-07-18-sentinel-plugin-review-and-architecture.md`
 
-All settings have defaults in the orchestrator. The `settings.json` file only needs entries that differ from defaults:
+The canonical report contains all 28 historical findings and exact release-evidence
+placeholders. Change a pending gate to passed only after recording evidence from the
+exact release commit.
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `riskPolicy.maxRiskLevel` | `"medium"` | Auto-execute threshold |
-| `breakpoints` | `[375, 768, 1280]` | Responsive viewport widths |
-| `responseTimeout` | `5000` | API timeout (ms) |
-| `screenshotOnError` | `true` | Capture layout issue screenshots |
-| `reportDir` | `"sentinel-reports"` | Output directory |
-| `browser.headless` | `true` | Headless browser mode |
+## Package and release
 
-## Common Issues
+Root assets are canonical; `plugins/sentinel/` is the installable mirror. Changes to
+runtime, schemas, settings, package metadata, commands, skills, agents, README,
+security docs, Codex assets, or plugin metadata require mirror parity verification.
 
-- **Empty manifest**: Framework not supported in v1. Add entries manually with `"manual": true`.
-- **Browser sweep skipped**: Playwright MCP not installed. Run `/sentinel setup` to fix.
-- **RBAC false positives**: Check `auth.roles` credentials in manifest match your seed data.
-- **Stale findings**: Each run is isolated in its own timestamped directory. Check `latest` symlink.
+`VERSION` is the source of truth. Use `scripts/bump-version.sh`, then run structure,
+version, mirror, full local, clean-archive, and plugin-install gates. Push main, wait
+for CI on the exact main SHA, then create the annotated tag and GitHub release and
+test the downloaded archive. A plan does not override these closeout requirements.
+
+Preserve user-owned `.sentinal/`, `sentinel-reports/`, unrelated worktree changes,
+and historical 1.x docs/changelog entries. Never rewrite published history.
