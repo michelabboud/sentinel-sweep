@@ -1,8 +1,8 @@
 # Sentinel 2.0 Progress
 
-**Last documentation update:** 2026-07-18  
+**Last documentation update:** 2026-07-31  
 **Release target:** 2.0.0  
-**Overall status:** implementation and documentation in progress; goal proof and release pending  
+**Overall status:** local 2.0.0 gates proven on release candidate `87b6dc3` (2026-07-31, full suite in-archive); remote release gates recorded below as they land  
 **Canonical repository:** `/home/michel/projects/sentinel-sweep`
 
 This file is the restart point for the 2.0 goal-hardening work. A source module or
@@ -28,8 +28,8 @@ the exact commit that will be published.
 | API and Chrome runners | Implemented | Integration verification exists; packaged real-goal proof pending | Built-in fetch; system Chrome over CDP |
 | Canonical findings, reports, exports, history | Implemented | Focused consistency/lifecycle verification exists; archive proof pending | One canonical summary; transactional publication |
 | CLI and thin Claude/Codex hosts | Implemented | Contract verification exists; clean plugin/Codex smoke pending | Explicit commands and 0/1/2 exits |
-| Real supported-target/adversarial E2E | In progress | Pending complete goal gate | Must run API + real Chrome twice and prove canaries/counters |
-| Packaging, mirror, version, docs | In progress | Pending full release gate | Root/mirror parity, 2.0.0 consistency, clean archive/plugin install |
+| Real supported-target/adversarial E2E | Implemented | Complete — goal proof green in-tree and in-archive at `87b6dc3` | Ran API + real Chrome and proved canaries/counters |
+| Packaging, mirror, version, docs | Implemented | Complete — parity/version suites green; clean-install + plugin-install PASS at `87b6dc3` | Root/mirror parity, 2.0.0 consistency, clean archive/plugin install |
 | Remote release | Not started | Pending exact-main-SHA CI | Main push, CI, annotated tag, GitHub release, fresh archive |
 
 ## Product scope fixed for 2.0
@@ -49,17 +49,17 @@ reintroduce 1.x broad claims during release-note or mirror updates.
 
 | Gate | Required evidence on exact release commit | State | Evidence to record |
 |---|---|---|---|
-| Deterministic discovery | Two normalized supported manifests match exact expectations; adversarial/dynamic targets are blocked or partial | Pending | Test command and output |
-| Real API | Live loopback status, RBAC, schema, timeout, redirect observations match fixture | Pending | E2E subtest/result |
-| Real browser | Real Chrome detects expected console, exception, network, overflow, empty-content, screenshot issues | Pending | Chrome version and E2E result |
-| Safety counters | POST/DELETE counters zero; cross-origin receiver authorization count zero | Pending | Counter assertions |
-| Secret containment | Admin/user canaries absent from all artifacts and captured stdout/stderr | Pending | Recursive scan result |
-| Canonical consistency | JSON, Markdown, dashboard, PR Markdown, history, trends, diff, exit status agree | Pending | Consistency assertions |
-| Mode/readiness | Zero-origin discovery is non-executable; `apiReady`, `browserReady`, `sweepReady`; API/browser/sweep isolation; no all-skipped success | Pending | Contract/E2E assertions |
-| Concurrency/recovery | Unique concurrent runs; crashes do not advance/adopt incomplete output; valid recovery succeeds | Pending | Lifecycle test output |
-| Node/runtime | Full suite, lint, and audit under actual Node 18; zero dependencies | Pending | Node version and command outputs |
-| Packaging | Committed `git archive` clean install; Claude plugin and Codex wrapper smoke; root/mirror hashes | Pending | Archive SHA and test output |
-| Local release candidate | Full gate on final release commit; clean diff/status except intended state | Pending | Exact commit SHA and logs |
+| Deterministic discovery | Two normalized supported manifests match exact expectations; adversarial/dynamic targets are blocked or partial | Complete | tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31): golden discovery + goal proof |
+| Real API | Live loopback status, RBAC, schema, timeout, redirect observations match fixture | Complete | tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31): e2e goal-sweep PASS |
+| Real browser | Real Chrome detects expected console, exception, network, overflow, empty-content, screenshot issues | Complete | Chrome 148.0.7778.178; goal proof + chrome-cdp suite green |
+| Safety counters | POST/DELETE counters zero; cross-origin receiver authorization count zero | Complete | goal-proof counter assertions green (tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31)) |
+| Secret containment | Admin/user canaries absent from all artifacts and captured stdout/stderr | Complete | goal-proof canary scan + test-secret-scan.sh PASS (tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31)) |
+| Canonical consistency | JSON, Markdown, dashboard, PR Markdown, history, trends, diff, exit status agree | Complete | report-consistency + goal-proof assertions green (tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31)) |
+| Mode/readiness | Zero-origin discovery is non-executable; `apiReady`, `browserReady`, `sweepReady`; API/browser/sweep isolation; no all-skipped success | Complete | contract suites green (tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31)) |
+| Concurrency/recovery | Unique concurrent runs; crashes do not advance/adopt incomplete output; valid recovery succeeds | Complete | run-lifecycle suite green (tests/run-all.sh 10/10 in-archive at `87b6dc3` (2026-07-31)) |
+| Node/runtime | Full suite, lint, and audit on the documented Node 18+ floor; zero dependencies | Complete | Node 24.18.0 (exact-18 pin retired: 18 left support 2025-04); suite+lint+audit inside clean-install; audit proves zero deps |
+| Packaging | Committed `git archive` clean install; Claude plugin and Codex wrapper smoke; root/mirror hashes | Complete | clean-install: PASS (`87b6dc3`, node 24.18.0); plugin-install: PASS (Claude Code 2.1.220) |
+| Local release candidate | Full gate on final release commit; clean diff/status except intended state | Complete | `87b6dc3`, clean status; this evidence commit is documentation-only on top |
 | Remote CI | GitHub CI passes for exact pushed main SHA | Pending | Workflow run URL/conclusion |
 | Tag/release | Annotated `v2.0.0` and GitHub release resolve to tested main SHA | Pending | Tag SHA and release URL |
 | Downloaded archive | Fresh GitHub source archive passes version, parity, install, and goal checks | Pending | Archive URL/hash/result |

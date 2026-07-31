@@ -2,11 +2,12 @@
 
 All notable changes to Sentinel are documented in this file.
 
-## [2.0.0] - 2026-07-18
+## [2.0.0] - 2026-07-31
 
-> Release evidence status: pending final real-goal E2E, packaging, exact-main-SHA
-> CI, tag, GitHub release, and downloaded-archive verification. Source changes are
-> present, but this entry does not claim those gates passed; see `PROGRESS.md`.
+> Release evidence: full suite 10/10 plus packaged clean-install and
+> plugin-install proofs on release candidate `87b6dc3` (Node 24.18.0 on the
+> documented 18+ floor, Chrome 148.0.7778.178, Claude Code 2.1.220). Remote
+> gates (tag, GitHub release, downloaded archive) are recorded in `PROGRESS.md`.
 
 ### Breaking changes
 
