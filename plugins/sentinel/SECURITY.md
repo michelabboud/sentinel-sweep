@@ -97,6 +97,13 @@ secret-bearing command results or existing artifacts when they are reread. It al
 refuses to scan `.env`, `.env.local`, seed, SSH, cloud, and arbitrary documentation
 files for credentials.
 
+CLI and domain error messages are drawn from fixed tables and never embed target
+data. Finding messages are template text that may carry bounded, target-derived
+location detail — a route path, or a blocked browser target's scheme and pathname
+— never an origin, port, query string, header, or body. Every finding string
+passes the redactor before persistence, and published artifacts are re-read and
+rejected if redaction would change them.
+
 Operational rules:
 
 - inject dedicated development/test tokens through a secret system or controlled
@@ -149,6 +156,19 @@ sweeps on hosts shared with untrusted local accounts; a migration to
 The launcher disables background features relevant to deterministic testing and
 terminates the Chrome process group and removes the fresh profile at close. Do not
 reuse an interactive personal browser profile.
+
+**Host requirement — unprivileged user namespaces.** Chrome's own sandbox needs
+them, and Sentinel never passes `--no-sandbox`. Stock Ubuntu 24.04 (and other
+AppArmor-restricted hosts) disable them by default, so Chrome exits before CDP
+readiness and browser checks fail closed with `CHROME_EXITED_EARLY` (which
+reports the exit code, signal, and Chrome's stderr tail). Enable them with
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or run sweeps
+in a container/profile that permits them. Sentinel's CI applies exactly this
+setting rather than weakening the launcher.
+
+Browser-internal service workers (`chrome-extension:` / `chrome:`) are Chrome's
+own component-extension infrastructure and are left untouched; page-initiated
+service-worker registration remains blocked and reported.
 
 ## Filesystem, artifacts, and retention
 
