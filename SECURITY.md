@@ -137,6 +137,15 @@ fixed list of system locations. A browser executable located inside the target i
 rejected. Credentials are installed as transport headers in memory, not in Chrome
 arguments.
 
+Loopback-only is not an authentication boundary: Chrome's DevTools endpoint is
+unauthenticated TCP, so for the duration of the browser sweep ANY local account on
+the host — not just the sweep's own UID — can discover the ephemeral port, attach,
+drive the browser, and observe the role token installed as a transport header. This
+matches the default posture of Puppeteer/Playwright/Selenium, and it is one reason
+role credentials must be disposable dev/test tokens (see above). Do not run browser
+sweeps on hosts shared with untrusted local accounts; a migration to
+`--remote-debugging-pipe` (no TCP listener) is the tracked remediation.
+
 The launcher disables background features relevant to deterministic testing and
 terminates the Chrome process group and removes the fresh profile at close. Do not
 reuse an interactive personal browser profile.
