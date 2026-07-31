@@ -496,6 +496,16 @@ test('proves the packaged Sentinel goal against real HTTP and mandatory Chrome',
   assert.deepEqual(firstTerminal.summary, firstFindings.summary);
   assert.deepEqual(secondTerminal.summary, secondFindings.summary);
   assert.deepEqual(findingIdentityContract(firstFindings), findingIdentityContract(secondFindings));
+  if (firstFindings.findings.length !== expectedFindings.count) {
+    // Environment-sensitive checks (fonts, GPU, viewport metrics) surface as
+    // count drift; the histogram names exactly which findings differ.
+    const histogram = {};
+    for (const finding of firstFindings.findings) {
+      const key = `${finding.source}:${finding.category}:${finding.reasonCode}:${finding.subjectId}`;
+      histogram[key] = (histogram[key] ?? 0) + 1;
+    }
+    console.error(`finding histogram (${firstFindings.findings.length} findings):`, JSON.stringify(histogram, null, 1));
+  }
   assert.equal(firstFindings.findings.length, expectedFindings.count);
   assert.deepEqual(firstFindings.summary, expectedFindings.summary);
   assert.deepEqual(findingIdentityContract(firstFindings), expectedFindings.identities);
