@@ -158,9 +158,16 @@ jobs:
             try { process.kill(-proc.pid, 'SIGKILL'); } catch { try { proc.kill('SIGKILL'); } catch {} }
           }
           await direct('sameproc-mkdtemp', await mkdtemp('/tmp/.chrome-sp-'));
-          const runtimeStyle = `/tmp/.chrome-profile-${process.pid}-${randomBytes(16).toString('hex')}`;
-          await mkdir(runtimeStyle, { mode: 0o700 });
-          await direct('sameproc-rtname ', runtimeStyle);
+          // Length ladder: find the profile-path length where Chrome traps.
+          for (const hexLength of [8, 16, 20, 24, 32]) {
+            const name = `/tmp/.chrome-profile-${process.pid}-${randomBytes(16).toString('hex').slice(0, hexLength)}`;
+            await mkdir(name, { mode: 0o700 });
+            await direct(`len-${String(name.length).padStart(3, '0')}       `, name);
+          }
+          // Same-length control with different content than the runtime pattern.
+          const control = `/tmp/.chrome-${'x'.repeat(58 - '/tmp/.chrome-'.length)}`;
+          await mkdir(control, { mode: 0o700 });
+          await direct('ctrl-len-058     ', control);
           NODE
 
       - name: Node spawn-option bisect for the SIGTRAP
