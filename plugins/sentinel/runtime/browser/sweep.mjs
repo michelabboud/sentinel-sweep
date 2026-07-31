@@ -694,11 +694,11 @@ async function runAttempt({
         recordOnce(records, {
           category: 'security', severity: 'critical', outcome: 'fail',
           reasonCode: 'SERVICE_WORKER_BLOCKED',
-          message: 'Browser closed a service-worker target before it could execute',
-          expected: 'no page-initiated service workers',
           // Protocol + pathname only: enough to tell an application worker
           // from a browser-internal target, with no origin/port disclosure.
-          actual: `service worker target attempted (${describeTargetLocation(targetInfo.url)})`,
+          message: `Browser closed a service-worker target before it could execute (${describeTargetLocation(targetInfo.url)})`,
+          expected: 'no page-initiated service workers',
+          actual: 'service worker target attempted',
         });
         if (typeof targetInfo.targetId === 'string') {
           await client.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
