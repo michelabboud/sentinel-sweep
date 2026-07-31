@@ -1,156 +1,211 @@
 # Contributing to Sentinel
 
-Thanks for your interest in contributing to Sentinel! This guide covers how to set up, develop, test, and submit changes.
+Sentinel's production boundary is intentionally smaller than its historical 1.x
+prompts. Contributions must preserve deterministic behavior, explicit coverage,
+default-deny execution, secret containment, transactional artifacts, and parity
+between the root package and installable mirror.
 
-## Getting Started
+Read [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), and the
+[ADR log](docs/adr/README.md) before changing discovery, policy, credentials,
+origins, filesystem handling, browser execution, findings, history, or packaging.
 
-1. Fork and clone the repository:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/sentinel-sweep.git
-   cd sentinel-sweep
-   ```
+## Development environment
 
-2. Install as a local plugin:
-   ```bash
-   claude plugin marketplace add /path/to/sentinel-sweep
-   claude plugin install sentinel
-   ```
+- Linux with `/proc` mounted
+- Node.js 18 or newer
+- System Chrome/Chromium for browser integration and E2E tests
+- Bash, Python 3, Git, and the Claude CLI for the plugin validation gate
 
-3. Verify your setup:
-   ```
-   /sentinel setup
-   ```
+The Node runtime has zero third-party dependencies, so there is no package install
+step. Clone the repository and verify the toolchain:
 
-## Repository Structure
-
+```bash
+git clone https://github.com/michelabboud/sentinel-sweep.git
+cd sentinel-sweep
+node --version
+npm run audit
 ```
+
+## Repository map
+
+```text
 sentinel-sweep/
-  VERSION                          # Single source of truth for version
-  commands/sentinel.md             # Legacy command (must stay in sync with skill)
-  skills/run/SKILL.md              # Main orchestrator (Skills 2.0)
-  skills/sentinel-setup/SKILL.md   # Environment setup skill
-  agents/                          # Sweeper and manifest agents
-  plugins/sentinel/                # Installable mirror (must match root)
-  schemas/                         # JSON Schema definitions
-  tests/                           # Integration test suites
-  scripts/                         # Utility scripts (bump-version.sh)
-  docs/                            # Design documents
+├── runtime/
+│   ├── cli.mjs                 # strict CLI and lifecycle orchestration
+│   ├── discovery/              # OpenAPI JSON and static Vue Router adapters
+│   ├── policy/                 # fail-closed execution decisions
+│   ├── api/                    # bounded HTTP/RBAC/schema runner
+│   ├── browser/                # WebSocket, CDP, Chrome, browser checks
+│   └── lib/                    # contracts, boundaries, config, origins, secrets
+├── schemas/                    # strict v2 settings/manifest/findings/history contracts
+├── commands/ and skills/       # thin Claude host surfaces
+├── agents/                     # explanation-only host roles
+├── codex/                      # transparent Codex launcher and host docs
+├── plugins/sentinel/           # installable byte-for-byte mirror
+├── tests/
+│   ├── unit/
+│   ├── contract/
+│   ├── adversarial/
+│   ├── integration/
+│   └── e2e/
+├── docs/adr/                   # append-only architecture decisions
+├── docs/reports/               # durable review and verification reports
+├── docs/guides/                # operator and migration guides
+├── VERSION                     # release version source of truth
+└── PROGRESS.md                 # exact release-gate state
 ```
 
-## Development Guidelines
+## Non-negotiable invariants
 
-### Editing the Orchestrator
+1. The target repository, imported descriptions, pages, responses, redirects, and
+   existing artifacts are untrusted data.
+2. Only bundled assets and a validated private config outside the target can grant
+   authority.
+3. Discovery never evaluates or imports target code and never invokes target-local
+   executables.
+4. Sentinel 2.0 accepts zero or one canonical approved origin and zero or one
+   configured service per invocation; executable work requires exactly one origin.
+5. A request never leaves the exact approved origin; redirects are revalidated
+   manually.
+6. Secret values are transient. They must not enter serialized data, subprocess
+   arguments, errors, stdout/stderr, screenshots metadata, or artifacts.
+7. Every operation and route gets an explicit execute/skip policy decision.
+8. Non-read methods remain blocked unless every documented mutation condition and
+   required execution input is satisfied.
+9. `sentinel-findings.json` is canonical; all consumers use its stored summary.
+10. Failed or incomplete runs do not advance history or `latest`.
+11. Persisted directories/files remain private and publication stays recoverable.
+12. Linux descriptor anchoring and the cooperative same-UID limitation remain
+    explicit; do not imply a stronger sandbox than the implementation provides.
 
-The orchestrator logic lives in **two** files that must stay identical:
-- `commands/sentinel.md` (legacy command format)
-- `skills/run/SKILL.md` (Skills 2.0 format)
+## Change workflow
 
-Only the YAML frontmatter differs. After editing one, copy the body to the other. The CI test `test-structure.sh` verifies parity.
+1. Add or update an ADR when a decision has credible alternatives, changes a trust
+   boundary/public contract, or will be costly to reverse. ADRs are append-only;
+   supersede an accepted record instead of rewriting its historical decision.
+2. Write a focused test that fails for the intended reason.
+3. Implement the smallest complete production slice, including failure behavior.
+4. Run the focused test under the real Node 18 floor.
+5. Run the aggregate unit, contract, adversarial, integration, legacy, and E2E gates
+   proportionate to the change.
+6. Update README, architecture, security, migration, changelog, progress, and durable
+   reports affected by the change.
+7. Synchronize the installable mirror and verify hashes; do not hand-maintain a
+   divergent implementation.
+8. Run the full release gate before claiming completion.
 
-### Plugin Mirror
+Do not add an npm dependency casually. A new dependency needs current version,
+security, maintenance, adoption, and alternatives research recorded in
+`docs/reports/`, or an ADR when architecturally significant.
 
-The `plugins/sentinel/` directory is the installable copy. After any change to root-level files, copy them to the mirror:
+## Tests and verification
+
+Run the normal local gates:
 
 ```bash
-cp agents/*.md plugins/sentinel/agents/
-cp skills/run/SKILL.md plugins/sentinel/skills/run/SKILL.md
-cp skills/sentinel-setup/SKILL.md plugins/sentinel/skills/sentinel-setup/SKILL.md
-cp settings.json plugins/sentinel/settings.json
-cp README.md plugins/sentinel/README.md
-cp LICENSE plugins/sentinel/LICENSE
+npm test
+npm run lint
+npm run audit
+bash tests/e2e/clean-install.test.sh
+bash tests/e2e/plugin-install.test.sh
+claude plugin validate --strict .
+git diff --check
 ```
 
-The `test-mirror-parity.sh` test catches drift.
+The aggregate suite includes legacy shell contracts plus Node unit, contract,
+adversarial, integration, and real-goal E2E tests. Browser/release E2E is not allowed
+to skip because Chrome is missing.
 
-### Hello Protocol
-
-Every agent and skill must implement the Hello Protocol:
-- `hello` -> short greeting (1-2 lines)
-- `hello <name> ID` -> full capability profile
-
-See any agent file for the pattern.
-
-### Version Consistency
-
-The `VERSION` file at the project root is the single source of truth. Use the bump script to update all files at once:
+Verify the runtime floor rather than relying on a newer local Node version:
 
 ```bash
-./scripts/bump-version.sh 1.3.0
+npx --yes -p node@18.20.8 -c 'node --version && npm test && npm run lint && npm run audit'
 ```
 
-This updates VERSION, all JSON/MD files, and syncs the plugin mirror. The `test-version-consistency.sh` test verifies all locations match the VERSION file.
-
-## Running Tests
+Use focused Node tests while iterating, for example:
 
 ```bash
-# Run the full test suite (218 tests, 8 suites)
-./tests/run-all.sh
-
-# Run individual suites
-./tests/test-structure.sh          # File structure, Hello Protocol, parity
-./tests/test-frontmatter.sh        # YAML frontmatter validation
-./tests/test-manifest-schema.sh    # JSON Schema validation
-./tests/test-mirror-parity.sh      # Root vs plugins/sentinel/ diff
-./tests/test-version-consistency.sh # Cross-file version match
-./tests/test-runtime-behavior.sh   # Runtime logic (risk scoring, dedup, etc.)
-./tests/test-bump-version.sh       # Version bump regex safety, IP preservation
-./tests/test-feature-coverage.sh   # v1.7+ features, schemas, enums, Codex sync
+node --test tests/unit/execution-policy.test.mjs
+node --test tests/adversarial/trust-boundary.test.mjs
+node --test tests/integration/api-sweep.test.mjs
+node --test tests/e2e/goal-sweep.test.mjs
 ```
 
-All tests must pass before submitting a PR. The same suite runs in GitHub Actions CI.
+Never report a gate as passed without the actual command output from the exact code
+state being evaluated.
 
-## Adding a New Subcommand
+## Adding or changing discovery support
 
-1. Add the subcommand to the argument parser in Step 1 (valid values list)
-2. Add it to the usage block with description and example
-3. Add a `### Subcommand: \`name\`` section with implementation steps
-4. Update the `hello ID` profile to list the new command
-5. Update the `argument-hint` in frontmatter
-6. Mirror changes: command -> skill -> plugins/sentinel/
-7. Update README.md commands table
-8. Run tests
+Deterministic support requires more than recognizing a framework name. A new adapter
+must have:
 
-## Adding a New Sweeper Agent
+- a non-evaluating grammar and explicit allowlisted files;
+- stable identities and provenance for every record;
+- complete, partial, and unsupported outcomes with diagnostics;
+- conflict and duplicate behavior;
+- manifest-schema integration;
+- policy behavior for every unknown field;
+- adversarial fixtures; and
+- a real end-to-end target that proves the public coverage claim.
 
-1. Create agent file in `agents/` with:
-   - YAML frontmatter (name, description, model, tools, version, triggers, references)
-   - Hello Protocol section
-   - Complete sweep instructions
-2. Add dispatch logic in the orchestrator (both command and skill)
-3. Follow the findings JSON schema (`schemas/findings.schema.json`)
-4. Mirror to `plugins/sentinel/agents/`
-5. Update report generation if new finding categories are introduced
-6. Add tests
+Until all of those exist, document the pattern as unsupported enrichment. Never map
+an unsupported application to an empty successful manifest.
 
-## Extending Framework Support
+## Changing the CLI or public contracts
 
-Sentinel supports 5 languages (Python, JS/TS, Rust, Go, PHP) with 7 frontend and 14+ backend parsers. To add a new framework:
+The parser has an explicit command/flag matrix. Update together:
 
-1. Add detection logic in manifest-generator Section 1 (Framework Detection)
-2. Add route parser (Section 3) or endpoint parser (Section 4) with auth detection
-3. Add schema parser (Section 5) if the framework has a schema system
-4. Add ORM cascade detection (Section 6) if applicable
-5. Update `sentinel-manifest.schema.json` framework enum
-6. Add framework to the README "Framework Support" table
-7. Run `test-feature-coverage.sh` to verify enum coverage
+- `runtime/cli.mjs` and its contract tests;
+- strict JSON schemas and golden fixtures when their data changes;
+- `commands/sentinel.md` and `skills/run/SKILL.md` host mapping;
+- root, Codex, security, architecture, migration, and history docs;
+- mirror parity inventory; and
+- clean-install/plugin-install tests.
 
-## Commit Messages
+Keep exit semantics stable: `0` is completion without critical/error findings for a
+run, `1` is usage/config/readiness/runtime/publication failure, and `2` is a completed
+run with critical/error findings.
 
-Follow conventional commits:
-- `feat:` new feature
-- `fix:` bug fix
-- `docs:` documentation only
-- `test:` adding/updating tests
-- `chore:` maintenance, CI, mirror sync
+## Config and secret tests
 
-## Pull Request Process
+Use synthetic canary values only. Tests should prove absence by scanning every
+artifact plus captured stdout/stderr without printing the canary into review output.
+Config fixtures must be outside the target, owned by the current UID, mode `0600` or
+`0400`, and not symlinked or hard-linked.
 
-1. Fork the repo and create a branch from `main`
-2. Make changes following the guidelines above
-3. Run the full test suite: `./tests/run-all.sh`
-4. Ensure plugin mirror is in sync
-5. Submit a PR with a clear description of what changed and why
+When testing multiple services, run one Sentinel invocation per service. A config
+with multiple distinct origins/services should assert
+`CONFIG_MULTI_SERVICE_UNSUPPORTED`.
 
-## License
+## Mirror and release version
 
-By contributing, you agree that your contributions will be licensed under the Apache-2.0 license.
+Root assets are canonical and `plugins/sentinel/` is the installable mirror. The
+version source of truth is `VERSION`. At release time use:
+
+```bash
+./scripts/bump-version.sh 2.0.0
+bash tests/test-mirror-parity.sh
+bash tests/test-version-consistency.sh
+```
+
+The bump/sync process must include runtime modules, schemas, package metadata,
+defaults, commands, skills, agents, README, security docs, Codex assets, and plugin
+metadata. Do not tag or publish until the exact release commit has passed local and
+remote gates.
+
+## Documentation expectations
+
+Documentation is part of the contract. Keep examples schema-valid and commands
+copyable. Separate implemented source from observed proof, and preserve limitations
+and pending evidence honestly. The durable 28-issue review lives at
+`docs/reports/2026-07-18-sentinel-plugin-review-and-architecture.md`; update its gate
+table when—and only when—the exact evidence exists.
+
+## Commit and pull request guidance
+
+Use focused conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`,
+`release:`). Describe the trust assumptions and failure cases in the pull request.
+Include exact test commands and results, Node/Chrome versions, and any gate that is
+still pending.
+
+Contributions are licensed under Apache-2.0; see [LICENSE](LICENSE).

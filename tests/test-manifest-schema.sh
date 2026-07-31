@@ -1,201 +1,171 @@
 #!/usr/bin/env bash
-# test-manifest-schema.sh — Validates findings JSON fixtures against the schema contract
-# documented in Section 5 of the orchestrator skill (skills/run/SKILL.md)
+# test-manifest-schema.sh — Exercise the shipped v2 schemas with Sentinel's runtime validator.
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-PASS=0
-FAIL=0
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FIXTURES_DIR="$PROJECT_ROOT/tests/fixtures"
+cd "$PROJECT_ROOT"
 
-pass() {
-  echo -e "  ${GREEN}PASS${NC} $1"
-  PASS=$((PASS + 1))
+node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+import {
+  loadBundledSchema,
+  validateAgainstSchema,
+} from './runtime/lib/schema.mjs';
+
+async function readJson(relativePath) {
+  return JSON.parse(await readFile(relativePath, 'utf8'));
 }
 
-fail() {
-  echo -e "  ${RED}FAIL${NC} $1"
-  FAIL=$((FAIL + 1))
+const schemaNames = ['settings', 'sentinel-manifest', 'findings', 'sweep-history'];
+const schemas = Object.fromEntries(
+  await Promise.all(schemaNames.map(async (name) => [name, await loadBundledSchema(name)])),
+);
+
+assert.deepEqual(
+  schemaNames.map((name) => schemas[name].$id),
+  [
+    'sentinel-settings-v2',
+    'sentinel-manifest-v2',
+    'sentinel-findings-v2',
+    'sentinel-history-v2',
+  ],
+);
+
+const settings = await readJson('settings.json');
+const manifest = {
+  ...await readJson('tests/fixtures/discovery/openapi-complete.manifest.json'),
+  generatedAt: '2026-07-18T00:00:00.000Z',
+};
+const findings = await readJson('tests/fixtures/report/canonical-findings.json');
+const history = await readJson('tests/fixtures/sample-sweep-history.json');
+
+for (const [name, document] of [
+  ['settings', settings],
+  ['sentinel-manifest', manifest],
+  ['findings', findings],
+  ['sweep-history', history],
+]) {
+  assert.doesNotThrow(
+    () => validateAgainstSchema(document, schemas[name], { name }),
+    `${name} fixture must satisfy its bundled v2 schema`,
+  );
 }
 
-# Validate a JSON file is parseable
-check_valid_json() {
-  local file="$1"
-  local label="$2"
-  if python3 -c "import json; json.load(open('$file'))" 2>/dev/null; then
-    pass "$label: valid JSON"
-    return 0
-  else
-    fail "$label: invalid JSON — file cannot be parsed"
-    return 1
-  fi
+for (const field of ['maxConcurrency', 'retentionRuns']) {
+  assert.equal(
+    Object.hasOwn(schemas.settings.properties, field),
+    false,
+    `settings schema must not advertise ignored field ${field}`,
+  );
+  assert.equal(
+    Object.hasOwn(settings, field),
+    false,
+    `bundled settings must not advertise ignored field ${field}`,
+  );
 }
 
-# Check that a metadata field exists using python3
-check_metadata_field() {
-  local file="$1"
-  local field="$2"
-  local label="$3"
-  local result
-  result=$(python3 -c "
-import json
-data = json.load(open('$file'))
-md = data.get('metadata', {})
-if '$field' in md:
-    print('exists')
-else:
-    print('missing')
-" 2>/dev/null || echo "error")
-  if [[ "$result" == "exists" ]]; then
-    pass "$label"
-    return 0
-  else
-    fail "$label"
-    return 1
-  fi
+for (const field of ['framework', 'auth', 'service', 'analysis']) {
+  assert.equal(
+    Object.hasOwn(schemas['sentinel-manifest'].$defs, field),
+    false,
+    `manifest schema must not retain unused definition ${field}`,
+  );
 }
 
-# Check that a metadata field has a specific value
-check_metadata_value() {
-  local file="$1"
-  local field="$2"
-  local expected="$3"
-  local label="$4"
-  local result
-  result=$(python3 -c "
-import json
-data = json.load(open('$file'))
-md = data.get('metadata', {})
-val = md.get('$field', '__missing__')
-print(str(val))
-" 2>/dev/null || echo "__error__")
-  if [[ "$result" == "$expected" ]]; then
-    pass "$label"
-  else
-    fail "$label (expected '$expected', got '$result')"
-  fi
+function expectAdditionalPropertyRejection({ name, schema, document, mutate, path }) {
+  const candidate = structuredClone(document);
+  mutate(candidate);
+  assert.throws(
+    () => validateAgainstSchema(candidate, schema, { name }),
+    (error) => error?.code === 'SCHEMA_INVALID'
+      && error.details?.violations?.some((violation) => (
+        violation.path === path && violation.keyword === 'additionalProperties'
+      )),
+    `${name} must reject legacy field ${path}`,
+  );
 }
 
-# Validate all findings in a file have required fields and valid values
-validate_findings() {
-  local file="$1"
-  local label="$2"
+const cases = [
+  {
+    name: 'settings maxConcurrency',
+    schema: schemas.settings,
+    document: settings,
+    mutate: (value) => { value.maxConcurrency = 4; },
+    path: '/maxConcurrency',
+  },
+  {
+    name: 'settings retentionRuns',
+    schema: schemas.settings,
+    document: settings,
+    mutate: (value) => { value.retentionRuns = 16; },
+    path: '/retentionRuns',
+  },
+  {
+    name: 'settings responseTimeout alias',
+    schema: schemas.settings,
+    document: settings,
+    mutate: (value) => { value.responseTimeout = 5000; },
+    path: '/responseTimeout',
+  },
+  {
+    name: 'manifest top-level auth',
+    schema: schemas['sentinel-manifest'],
+    document: manifest,
+    mutate: (value) => { value.auth = { method: 'bearer' }; },
+    path: '/auth',
+  },
+  {
+    name: 'manifest top-level services',
+    schema: schemas['sentinel-manifest'],
+    document: manifest,
+    mutate: (value) => { value.services = [{ name: 'legacy' }]; },
+    path: '/services',
+  },
+  ...[
+    'i18n',
+    'a11y',
+    'deadCode',
+    'deadCss',
+    'n1Queries',
+    'vulnerabilities',
+    'apiVersioning',
+    'migrationDrift',
+    'rateLimiting',
+  ].map((field) => ({
+    name: `manifest top-level ${field}`,
+    schema: schemas['sentinel-manifest'],
+    document: manifest,
+    mutate: (value) => { value[field] = null; },
+    path: `/${field}`,
+  })),
+  {
+    name: 'manifest target framework',
+    schema: schemas['sentinel-manifest'],
+    document: manifest,
+    mutate: (value) => {
+      value.target.framework = { frontend: 'vue', backend: 'express' };
+    },
+    path: '/target/framework',
+  },
+  {
+    name: 'findings metadata',
+    schema: schemas.findings,
+    document: findings,
+    mutate: (value) => { value.metadata = { mode: 'api' }; },
+    path: '/metadata',
+  },
+  {
+    name: 'history run duration',
+    schema: schemas['sweep-history'],
+    document: history,
+    mutate: (value) => { value.runs[0].duration = '30s'; },
+    path: '/runs/0/duration',
+  },
+];
 
-  local result
-  result=$(python3 - "$file" "$label" << 'PYEOF'
-import json, sys
+for (const testCase of cases) expectAdditionalPropertyRejection(testCase);
 
-file_path = sys.argv[1]
-label = sys.argv[2]
-
-data = json.load(open(file_path))
-findings = data.get('findings', [])
-
-if len(findings) == 0:
-    print("FAIL:" + label + ": findings array is empty")
-    sys.exit(0)
-
-print("PASS:" + label + ": findings array has " + str(len(findings)) + " entries")
-
-valid_severities = {'critical', 'error', 'warning', 'info'}
-valid_categories = {'health', 'rbac', 'crud', 'schema', 'security', 'console', 'layout', 'i18n', 'network'}
-required_nullable_fields = ['endpoint', 'route', 'role', 'expected', 'actual', 'fileRef', 'fixSuggestion', 'breakpoint', 'screenshot']
-
-all_ok = True
-for i, f in enumerate(findings):
-    prefix = 'finding[' + str(i) + ']'
-
-    sev = f.get('severity')
-    if sev is None:
-        print("FAIL:" + label + ": " + prefix + ": missing severity")
-        all_ok = False
-    elif sev not in valid_severities:
-        print("FAIL:" + label + ": " + prefix + ": invalid severity \"" + str(sev) + "\"")
-        all_ok = False
-
-    cat = f.get('category')
-    if cat is None:
-        print("FAIL:" + label + ": " + prefix + ": missing category")
-        all_ok = False
-    elif cat not in valid_categories:
-        print("FAIL:" + label + ": " + prefix + ": invalid category \"" + str(cat) + "\"")
-        all_ok = False
-
-    msg = f.get('message')
-    if msg is None:
-        print("FAIL:" + label + ": " + prefix + ": missing message")
-        all_ok = False
-
-    for field in required_nullable_fields:
-        if field not in f:
-            print("FAIL:" + label + ": " + prefix + ": missing field \"" + field + "\"")
-            all_ok = False
-
-if all_ok:
-    print("PASS:" + label + ": all findings have required fields with valid values")
-PYEOF
-)
-
-  while IFS= read -r line; do
-    if [[ "$line" == PASS:* ]]; then
-      pass "${line#PASS:}"
-    elif [[ "$line" == FAIL:* ]]; then
-      fail "${line#FAIL:}"
-    fi
-  done <<< "$result"
-}
-
-echo "=== Findings JSON Schema Tests ==="
-echo ""
-
-# --- API findings fixture ---
-API_FIXTURE="$FIXTURES_DIR/sample-api-findings.json"
-echo "-- API findings fixture: $(basename "$API_FIXTURE") --"
-
-if [[ ! -f "$API_FIXTURE" ]]; then
-  fail "API fixture file not found: $API_FIXTURE"
-else
-  if check_valid_json "$API_FIXTURE" "api-findings"; then
-    check_metadata_field "$API_FIXTURE" "mode" "api-findings: metadata.mode exists"
-    check_metadata_value "$API_FIXTURE" "mode" "api" "api-findings: metadata.mode is 'api'"
-    check_metadata_field "$API_FIXTURE" "rolesTested" "api-findings: metadata.rolesTested exists"
-    check_metadata_field "$API_FIXTURE" "endpointsTested" "api-findings: metadata.endpointsTested exists"
-    check_metadata_field "$API_FIXTURE" "routesTested" "api-findings: metadata.routesTested exists"
-    check_metadata_field "$API_FIXTURE" "startedAt" "api-findings: metadata.startedAt exists"
-    check_metadata_field "$API_FIXTURE" "finishedAt" "api-findings: metadata.finishedAt exists"
-    validate_findings "$API_FIXTURE" "api-findings"
-  fi
-fi
-
-echo ""
-
-# --- Browser findings fixture ---
-BROWSER_FIXTURE="$FIXTURES_DIR/sample-browser-findings.json"
-echo "-- Browser findings fixture: $(basename "$BROWSER_FIXTURE") --"
-
-if [[ ! -f "$BROWSER_FIXTURE" ]]; then
-  fail "Browser fixture file not found: $BROWSER_FIXTURE"
-else
-  if check_valid_json "$BROWSER_FIXTURE" "browser-findings"; then
-    check_metadata_field "$BROWSER_FIXTURE" "mode" "browser-findings: metadata.mode exists"
-    check_metadata_value "$BROWSER_FIXTURE" "mode" "browser" "browser-findings: metadata.mode is 'browser'"
-    check_metadata_field "$BROWSER_FIXTURE" "rolesTested" "browser-findings: metadata.rolesTested exists"
-    check_metadata_field "$BROWSER_FIXTURE" "endpointsTested" "browser-findings: metadata.endpointsTested exists"
-    check_metadata_field "$BROWSER_FIXTURE" "routesTested" "browser-findings: metadata.routesTested exists"
-    check_metadata_field "$BROWSER_FIXTURE" "startedAt" "browser-findings: metadata.startedAt exists"
-    check_metadata_field "$BROWSER_FIXTURE" "finishedAt" "browser-findings: metadata.finishedAt exists"
-    validate_findings "$BROWSER_FIXTURE" "browser-findings"
-  fi
-fi
-
-# --- Summary ---
-echo ""
-echo "---"
-TOTAL=$((PASS + FAIL))
-echo -e "Schema tests: ${GREEN}${PASS} passed${NC}, ${RED}${FAIL} failed${NC} (${TOTAL} total)"
-
-exit "$FAIL"
+console.log(`Schema tests: 4 current v2 documents and ${cases.length} legacy-field rejections passed`);
+NODE

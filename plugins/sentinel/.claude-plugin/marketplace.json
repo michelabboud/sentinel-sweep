@@ -1,5 +1,6 @@
 {
   "name": "sentinel-marketplace",
+  "description": "Sentinel single-service trusted-core QA for OpenAPI 3.0/3.1 JSON, static literal Vue Router, bearer-token roles, and system Chrome/Chromium; coverage is complete, partial, or unsupported",
   "owner": {
     "name": "Michel Abboud",
     "email": "info@maicore.dev"
@@ -7,8 +8,8 @@
   "plugins": [
     {
       "name": "sentinel",
-      "description": "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to configure",
-      "version": "1.8.5",
+      "description": "Thin Claude host for Sentinel's single-service trusted core: OpenAPI 3.0/3.1 JSON, static literal Vue Router, bearer-token roles, and system Chrome/Chromium; coverage is complete, partial, or unsupported",
+      "version": "2.0.0",
       "author": {
         "name": "Michel Abboud",
         "email": "info@maicore.dev"

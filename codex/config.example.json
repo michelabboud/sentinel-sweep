@@ -1,28 +1,37 @@
 {
-  "severityPolicy": {
-    "minReportSeverity": "info"
-  },
-  "securityPolicy": {
-    "enabled": true,
-    "requireAuthForApi": true,
-    "blockDestructiveByDefault": true,
-    "allowDestructive": false,
-    "maxAllowedEndpointRisk": "high",
-    "allowNonLocalApiBase": false,
-    "allowedApiHosts": ["localhost", "127.0.0.1", "::1"]
-  },
-  "scoringPolicy": {
-    "methodWeights": {
-      "GET": 0,
-      "POST": 25,
-      "PUT": 30,
-      "PATCH": 30,
-      "DELETE": 60
+  "schemaVersion": "2.0",
+  "requireConfigPath": true,
+  "reportDir": "sentinel-reports",
+  "approvedOrigins": [
+    "http://127.0.0.1:3000"
+  ],
+  "roles": {
+    "admin": {
+      "tokenRef": "env:SENTINEL_ADMIN_TOKEN"
     },
-    "thresholds": {
-      "safeMax": 25,
-      "mediumMax": 50,
-      "highMax": 75
+    "user": {
+      "tokenRef": "env:SENTINEL_USER_TOKEN"
     }
+  },
+  "allowMutations": false,
+  "mutationAllowlist": [],
+  "allowNonLoopback": false,
+  "targetEnvironment": "development",
+  "requireCompleteCoverage": true,
+  "responseTimeoutMs": 5000,
+  "browserSettleMs": 500,
+  "viewports": [
+    375,
+    768,
+    1280
+  ],
+  "screenshotOnError": true,
+  "discovery": {
+    "openapi": [
+      "openapi.json"
+    ],
+    "vueRouter": [
+      "src/router/index.js"
+    ]
   }
 }

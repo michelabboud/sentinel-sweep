@@ -1,5 +1,14 @@
 # Sentinel — Automated QA Sweep Plugin for Claude Code
 
+> [!WARNING]
+> **SUPERSEDED 1.x DESIGN — historical evidence only.** This prompt-owned,
+> Playwright-MCP design is not current Sentinel 2.0 guidance and must not be used to
+> authorize execution or make product claims. Current authority is
+> [ADR 0001](adr/0001-deterministic-trusted-core.md), the approved
+> [Sentinel 2.0 design](superpowers/specs/2026-07-18-sentinel-2.0-goal-hardening-design.md),
+> and the approved
+> [Sentinel 2.0 implementation plan](superpowers/plans/2026-07-18-sentinel-2.0-goal-hardening.md).
+
 > **Status:** Design reviewed — ready for implementation planning
 > **Author:** Michel Abboud
 > **Date:** 2026-03-15

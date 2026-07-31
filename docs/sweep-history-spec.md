@@ -1,169 +1,236 @@
-# Sweep History Tracking Spec
+# Sentinel 2.0 Sweep History Specification
 
-## Overview
+## Purpose
 
-Sentinel accumulates summary data from each sweep run into a single JSON file, enabling cross-run trend analysis. After every sweep or API run completes report generation, the orchestrator appends a summary entry to `sentinel-reports/sweep-history.json`.
+Sweep history is a bounded, validated index of successfully published Sentinel 2.0
+runs. It supports `latest`, `trends`, `diff`, existing-run report/export operations,
+crash reconciliation, and transactional retention without treating directory names
+or old JSON as trusted.
 
----
+History is not a free-form analytics log and is never appended after an incomplete
+engine or failed artifact publication.
 
-## 1. File Format: `sweep-history.json`
+## Location and permissions
 
-Location: `{settings.reportDir}/sweep-history.json` (default: `sentinel-reports/sweep-history.json`)
+Trusted config supplies a relative `reportDir` beneath the target. The CLI appends
+`sentinel-v2` unless the final path segment is already `sentinel-v2`:
+
+```text
+<target>/<reportDir>/sentinel-v2/
+├── <UTC-run-id>/
+├── sweep-history.json
+└── latest -> <UTC-run-id>
+```
+
+The versioned report root and run directories must be owned by the current UID and
+mode `0700`. History and regular artifacts are mode `0600`. Safe history operations
+are Linux-only because they pin the report root and runs through procfs descriptor
+paths (`/proc/self/fd` or subprocess-stable `/proc/<pid>/fd`).
+
+## Public contract
+
+`sweep-history.json` validates against `schemas/sweep-history.schema.json` with:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | constant string | Always `"2.0"` |
+| `runs` | array, maximum 128 | Strictly increasing unique run records |
+| `pendingCleanup` | optional object | Durable internal recovery intent for transactional cleanup; operators must not edit it |
+
+Each run record contains:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `runId` | string | Valid filesystem-safe UTC run ID and direct child directory name |
+| `startedAt` | string | Canonical findings start timestamp |
+| `finishedAt` | string | Canonical findings finish timestamp |
+| `coverageStatus` | enum | `complete`, `partial`, or `unsupported` |
+| `summary` | object | Canonical `critical`, `error`, `warning`, `info`, and `skipped` counts |
+| `findingsDigest` | 64 lowercase hex characters | SHA-256 of canonical findings JSON |
+| `markerToken` | 64 lowercase hex characters | Private run-identity token bound to the published run marker |
+| `dev`, `ino`, `birthtimeNs`, `uid`, `mode` | decimal strings | Filesystem identity recorded for later revalidation |
+| `healthScore` | optional integer or null | Reserved compatible metric; 0 through 100 when present |
+| `commitSha` | optional string or null | Reserved source association when explicitly supplied by a future trusted path |
+
+Run IDs use this family:
+
+```text
+YYYY-MM-DDTHH-MM-SSZ
+YYYY-MM-DDTHH-MM-SS-mmmZ
+YYYY-MM-DDTHH-MM-SSZ-<8 lowercase hex>
+YYYY-MM-DDTHH-MM-SS-mmmZ-<8 lowercase hex>
+```
+
+New CLI runs use the millisecond-plus-entropy form so concurrent invocations do not
+collide.
+
+`pendingCleanup` contains a 24-hex transaction ID and a sorted set of exact run
+fingerprints plus deterministic tombstone names. It is an implementation-level
+recovery journal, not a user-editable API.
+
+## Canonical publication sequence
+
+For `api`, `browser`, or `sweep`, publication follows this order:
+
+1. Validate trusted config and pin the target/report boundaries.
+2. Generate a fresh strict manifest and complete execution plan.
+3. Reject the selected mode if it has no executable required work.
+4. Reserve a unique private staging directory and create a private run boundary.
+5. Write `sentinel-manifest.json`.
+6. Execute every required engine. For `sweep`, API and browser both must complete.
+7. Normalize, redact, deduplicate, and validate canonical findings.
+8. Render and write canonical artifacts:
+   `sentinel-findings.json`, `sweep.md`, `dashboard.html`, and `pr-comment.md`, plus
+   any configured failure screenshots.
+9. Validate the entire staged tree, write the private run identity marker, and
+   publish the run directory atomically.
+10. Under the history metadata lock, reread and validate the published artifacts,
+    append the exact history entry atomically, and durably update `latest`.
+11. Revalidate the report root and published run before returning success.
+
+If a required engine, redaction check, schema check, file write, durability check,
+or identity check fails, the run is not recorded as successful and `latest` does not
+advance.
+
+## Reconciliation and tamper detection
+
+History, directory names, markers, symlinks, and artifacts are untrusted when read
+back. `readSweepHistory` and `readPublishedRun` acquire the metadata lock and
+reconcile observable state before returning data. They verify:
+
+- private ownership/modes and non-symlink file types;
+- exact report-root and run descriptor identities;
+- unique/sorted run IDs, marker tokens, and filesystem identities;
+- the private run marker;
+- required artifact presence and bounded file size;
+- strict manifest/findings schemas;
+- canonical findings digest and summary agreement; and
+- exact rendered Markdown, dashboard, and PR-ready Markdown.
+
+A duplicate run ID is idempotent only when canonical content and identity match
+exactly. A same-ID run with different content fails with a duplicate/corruption
+error. Untracked run directories, missing tracked runs, unsafe tombstones, or an
+invalid `latest` pointer are not silently trusted.
+
+Crash recovery may adopt only a fully validated published/staged run that is bound
+to the exact transaction identity. Incomplete or ambiguous state remains a failure;
+recovery does not fabricate a successful run.
+
+## `latest`
+
+`latest` is a relative symlink whose target is the newest tracked run ID. It is
+replaced through a private temporary link only after history and run validation.
+Readers reconcile it under the same metadata lock. It is a convenience pointer, not
+authority; the tracked run is still opened and validated independently.
+
+## `trends`
+
+Invocation:
+
+```bash
+node runtime/cli.mjs trends --target <target> --config <external-config> --json
+```
+
+`computeTrends` returns canonical JSON shaped as:
 
 ```json
 {
   "runs": [
     {
-      "runId": "2026-03-15T14-30-00Z",
-      "mode": "browser + api",
-      "duration": "2m 34s",
-      "rolesTested": ["admin", "manager", "user"],
-      "routesTested": 24,
-      "endpointsTested": 84,
-      "findings": { "critical": 0, "error": 3, "warning": 7, "info": 12 },
-      "passed": 86,
-      "passRate": 96.6,
-      "sandboxMode": false,
-      "timestamp": "2026-03-15T14:30:00Z"
+      "runId": "2026-07-18T12-30-45-123Z-a1b2c3d4",
+      "coverageStatus": "complete",
+      "summary": {
+        "critical": 0,
+        "error": 1,
+        "warning": 2,
+        "info": 3,
+        "skipped": 4
+      }
     }
-  ]
+  ],
+  "latestSummary": {
+    "critical": 0,
+    "error": 1,
+    "warning": 2,
+    "info": 3,
+    "skipped": 4
+  },
+  "deltas": []
 }
 ```
 
-### Field definitions
+Runs are sorted by run ID. Each delta contains `fromRunId`, `toRunId`, and the
+newer-minus-older value for all five summary fields. Empty history returns an empty
+run/delta list and an all-zero `latestSummary`. Trends do not invent pass rates,
+durations, health scores, or resolved finding identities.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `runId` | string | Filesystem-safe ISO timestamp (matches the run directory name) |
-| `mode` | string | `"browser + api"` or `"api-only"` |
-| `duration` | string | Human-readable elapsed time (e.g., `"2m 34s"`, `"unknown"`) |
-| `rolesTested` | string[] | Deduplicated list of roles exercised in the run |
-| `routesTested` | number | Total browser routes tested |
-| `endpointsTested` | number | Total API endpoints tested |
-| `findings` | object | Counts keyed by severity: `critical`, `error`, `warning`, `info` |
-| `passed` | number | Checks that produced no critical/error/warning finding |
-| `passRate` | number | `passed / (passed + critical + error + warning) * 100`, rounded to 1 decimal |
-| `sandboxMode` | boolean | Whether `--sandbox` was active for this run |
-| `timestamp` | string | ISO 8601 UTC timestamp of when the run completed |
+## `diff`
 
----
+Invocation:
 
-## 2. Orchestrator Append Logic (Step R-6)
-
-After report generation (Step R-5), the orchestrator appends the current run's summary to `sweep-history.json`. The procedure is:
-
-1. **Read** the existing file at `{settings.reportDir}/sweep-history.json`. If the file does not exist or cannot be parsed, start with `{ "runs": [] }`.
-
-2. **Build** a new entry from the values already computed in Step R-1:
-   ```json
-   {
-     "runId": "{RUN_ID}",
-     "mode": "{mode}",
-     "duration": "{duration}",
-     "rolesTested": ["{...rolesTested array}"],
-     "routesTested": {routesTested},
-     "endpointsTested": {endpointsTested},
-     "findings": {
-       "critical": {countBySeverity.critical},
-       "error": {countBySeverity.error},
-       "warning": {countBySeverity.warning},
-       "info": {countBySeverity.info}
-     },
-     "passed": {passed},
-     "passRate": {passRate},
-     "sandboxMode": {sandboxMode},
-     "timestamp": "{ISO 8601 UTC timestamp}"
-   }
-   ```
-
-3. **Append** the new entry to the `runs` array.
-
-4. **Write** the updated JSON back to `{settings.reportDir}/sweep-history.json` using the Write tool, with 2-space indentation.
-
-No entries are ever removed by the orchestrator. Users may manually prune old entries or delete the file to reset history.
-
----
-
-## 3. Subcommand: `/sentinel trends`
-
-The `trends` subcommand reads `sweep-history.json` and displays cross-run trends.
-
-### Invocation
-
-```
-/sentinel trends
+```bash
+node runtime/cli.mjs diff \
+  --target <target> \
+  --config <external-config> \
+  --run <newer-run-id> \
+  --against <older-run-id> \
+  --json
 ```
 
-No flags are supported for this subcommand.
+Both runs must be tracked and fully valid. The result preserves each canonical
+summary and compares stable finding IDs:
 
-### Behavior
+- `added`: present only in the newer run;
+- `resolved`: present only in the older run; and
+- `persisting`: present in both.
 
-1. Read `{settings.reportDir}/sweep-history.json`. If the file does not exist or contains no runs, print:
-   ```
-   No sweep history found. Run /sentinel sweep or /sentinel api first.
-   ```
+This is an identity diff, not a fuzzy message comparison.
 
-2. Display the following sections:
+## Existing-run consumers
 
-#### Pass Rate Trend (last 5 runs)
+`report`, `dashboard`, and `export` require an exact tracked `--run`. Before writing
+an external output, they validate the run, canonical artifacts, and current secret
+redaction policy. Report/dashboard outputs are private atomic files. Export writes a
+private atomic tree and contains variable references, never resolved secret values.
 
-A table showing the pass rate for the most recent 5 runs (or fewer if less than 5 exist):
+## Retention and `clean`
 
-```
-Pass Rate Trend (last 5 runs)
------------------------------
-Run                     Mode            Pass Rate
-2026-03-15T14-30-00Z    browser + api    96.6%
-2026-03-14T09-15-00Z    api-only         94.2%
-2026-03-13T16-45-00Z    browser + api    91.0%
-2026-03-12T11-00-00Z    api-only         88.5%
-2026-03-11T08-20-00Z    browser + api    85.3%
-```
+History is capped at 128 runs. Sentinel does not silently discard evidence to make
+room; a new publication fails when the bound is exhausted until the operator runs
+cleanup.
 
-If there are at least 2 runs, append a sparkline-style trend indicator:
-
-```
-Trend: 85.3% -> 88.5% -> 91.0% -> 94.2% -> 96.6%  [improving]
+```bash
+node runtime/cli.mjs clean \
+  --target <target> \
+  --config <external-config> \
+  --keep 20 \
+  --json
 ```
 
-The label is `[improving]` if the latest pass rate is higher than the earliest in the window, `[declining]` if lower, and `[stable]` if equal.
+`--keep` accepts 1 through 128 at the CLI. Cleanup requires exact agreement between
+history and direct-child run directories. It pins every tracked run, validates its
+marker/tree, writes durable `pendingCleanup` intent, renames selected old runs to
+transaction-specific tombstones, removes only the exact bounded private tree, and
+then clears the intent atomically. A crash resumes from the persisted intent. Unsafe
+or changed state fails closed and may require operator investigation.
 
-#### Finding Count Trend by Severity
+Cleanup returns sorted `kept` and `removed` run ID arrays. Back up evidence before
+retention removes it.
 
-A table showing finding counts per severity for the last 5 runs:
+## Concurrency and limitations
 
-```
-Finding Counts (last 5 runs)
-----------------------------
-Run                     Critical  Error  Warning  Info
-2026-03-15T14-30-00Z           0      3        7    12
-2026-03-14T09-15-00Z           1      5        9    10
-2026-03-13T16-45-00Z           0      4       12    15
-2026-03-12T11-00-00Z           2      8       10     8
-2026-03-11T08-20-00Z           1      6       14    11
-```
+History publication and cleanup use an identity-bound, crash-recoverable metadata
+lock. Independent run staging remains isolated, while history/latest changes are
+serialized. Dead lock records are recovered only after process identity and Linux
+start markers prove the owner is gone.
 
-#### New vs Resolved Issues
+This model assumes cooperation among processes running as the same Unix UID. A
+malicious same-UID process with write access to the output parent is inside the
+principal boundary; POSIX path APIs cannot provide a universal sandbox against it.
+Isolate hostile target code under a separate user or stronger sandbox.
 
-Compare consecutive runs to show net change. For each adjacent pair of runs (N-1 to N), compute:
-- **Delta** per severity = `run[N].findings[severity] - run[N-1].findings[severity]`
-- Positive delta = new issues appeared; negative delta = issues resolved.
+## Compatibility
 
-Display for the last 4 transitions (last 5 runs):
-
-```
-Issue Delta (consecutive runs)
-------------------------------
-Transition                                   Critical  Error  Warning  Info
-T14-30-00Z vs T09-15-00Z                          -1     -2       -2    +2
-T09-15-00Z vs T16-45-00Z                          +1     +1       -3    -5
-T16-45-00Z vs T11-00-00Z                          -2     -4       +2    +7
-T11-00-00Z vs T08-20-00Z                          +1     +2       +4    -3
-```
-
-Positive values are prefixed with `+`, negative with `-`, zero shown as `0`.
-
-### Edge Cases
-
-- If only 1 run exists, show the pass rate table with that single entry and skip the delta section.
-- If `sweep-history.json` is corrupt or has an unexpected structure, print a warning and suggest deleting the file to reset.
+Sentinel 1.x history has a different shape and is not imported. Version 2 artifacts
+live in the `sentinel-v2` subroot so old evidence is preserved rather than silently
+rewritten. Migration starts with a fresh v2 config, manifest, and run history.

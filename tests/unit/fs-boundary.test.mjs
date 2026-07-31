@@ -1,0 +1,420 @@
+import assert from 'node:assert/strict';
+import fsPromises, {
+  chmod,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { RunBoundary, TargetBoundary } from '../../runtime/lib/fs-boundary.mjs';
+
+async function fixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sentinel-fs-boundary-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  return root;
+}
+
+test('TargetBoundary rejects a symlink target root', async (t) => {
+  const root = await fixture(t);
+  const target = path.join(root, 'target');
+  const symlinkRoot = path.join(root, 'target-link');
+  await mkdir(target);
+  await symlink(target, symlinkRoot, 'dir');
+
+  await assert.rejects(() => TargetBoundary.create(symlinkRoot), {
+    code: 'TARGET_ROOT_SYMLINK',
+  });
+});
+
+test('TargetBoundary rejects a target reached through a symlinked ancestor', async (t) => {
+  const root = await fixture(t);
+  const actualParent = path.join(root, 'actual');
+  const target = path.join(actualParent, 'target');
+  const aliasParent = path.join(root, 'alias');
+  await mkdir(target, { recursive: true });
+  await symlink(actualParent, aliasParent, 'dir');
+
+  await assert.rejects(() => TargetBoundary.create(path.join(aliasParent, 'target')), {
+    code: 'TARGET_ROOT_SYMLINK',
+  });
+});
+
+test('TargetBoundary reads regular files but rejects symlinks and escapes', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const outside = path.join(root, 'outside.json');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'openapi.json'), '{"openapi":"3.1.0"}\n');
+  await writeFile(outside, '{}\n');
+  await symlink(outside, path.join(targetRoot, 'linked-openapi.json'));
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  assert.equal(await boundary.readText('openapi.json'), '{"openapi":"3.1.0"}\n');
+  await assert.rejects(() => boundary.readText('linked-openapi.json'), {
+    code: 'INPUT_SYMLINK',
+  });
+  await assert.rejects(() => boundary.readText('../outside.json'), {
+    code: 'PATH_ESCAPE',
+  });
+});
+
+test('TargetBoundary readText rejects secret-bearing adapter inputs', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  const blockedInputs = [
+    '.env',
+    '.env.local',
+    'server.pem',
+    'private.key',
+    'credentials.json',
+    'service-account-credentials.yaml',
+  ];
+  await Promise.all(blockedInputs.map(
+    (name) => writeFile(path.join(targetRoot, name), 'must-not-be-read\n'),
+  ));
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  for (const name of blockedInputs) {
+    await assert.rejects(() => boundary.readText(name), { code: 'INPUT_TYPE_BLOCKED' });
+  }
+});
+
+test('TargetBoundary readText preserves approved OpenAPI and Vue adapter inputs', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'openapi.yaml'), 'openapi: 3.1.0\n');
+  await writeFile(path.join(targetRoot, 'AccountView.vue'), '<template />\n');
+  await writeFile(path.join(targetRoot, 'router.js'), 'export const routes = [];\n');
+  await writeFile(path.join(targetRoot, 'router.ts'), 'export const routes = [];\n');
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  assert.equal(await boundary.readText('openapi.yaml'), 'openapi: 3.1.0\n');
+  assert.equal(await boundary.readText('AccountView.vue'), '<template />\n');
+  assert.equal(await boundary.readText('router.js'), 'export const routes = [];\n');
+  assert.equal(await boundary.readText('router.ts'), 'export const routes = [];\n');
+});
+
+test('TargetBoundary source extensions do not override secret filename denials', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'credentials.js'), 'export default {};\n');
+  await writeFile(path.join(targetRoot, 'private-key.ts'), 'export default {};\n');
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  await assert.rejects(() => boundary.readText('credentials.js'), {
+    code: 'INPUT_TYPE_BLOCKED',
+  });
+  await assert.rejects(() => boundary.readText('private-key.ts'), {
+    code: 'INPUT_TYPE_BLOCKED',
+  });
+});
+
+test('TargetBoundary never accepts .env as an adapter input', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, '.env'), 'SENTINEL_ADMIN_TOKEN=top-secret\n');
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  await assert.rejects(() => boundary.resolveInput('.env'));
+});
+
+test('TargetBoundary resolves a regular supported adapter input inside the pinned root', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'openapi.yaml'), 'openapi: 3.1.0\n');
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  assert.equal(await boundary.resolveInput('openapi.yaml'), path.join(targetRoot, 'openapi.yaml'));
+});
+
+test('TargetBoundary never reads through a target-root replacement after pinning', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const displacedRoot = path.join(root, 'target-displaced');
+  const outsideRoot = path.join(root, 'outside');
+  await mkdir(targetRoot);
+  await mkdir(outsideRoot);
+  await writeFile(path.join(targetRoot, 'openapi.json'), '{"source":"target"}\n');
+  await writeFile(path.join(outsideRoot, 'openapi.json'), '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  fsPromises.open = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(targetRoot, displacedRoot);
+      await originalSymlink(outsideRoot, targetRoot, 'dir');
+    }
+    return originalOpen(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.readText('openapi.json'),
+      (error) => ['INPUT_CHANGED', 'TARGET_ROOT_CHANGED'].includes(error?.code),
+    );
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(path.join(outsideRoot, 'openapi.json'), 'utf8'), '{"source":"outside"}\n');
+});
+
+test('TargetBoundary never reads through an ancestor replacement after inspection', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const sourceRoot = path.join(targetRoot, 'spec');
+  const displacedRoot = path.join(root, 'spec-displaced');
+  const outsideRoot = path.join(root, 'outside');
+  await mkdir(sourceRoot, { recursive: true });
+  await mkdir(outsideRoot);
+  await writeFile(path.join(sourceRoot, 'openapi.json'), '{"source":"target"}\n');
+  await writeFile(path.join(outsideRoot, 'openapi.json'), '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  const originalSymlink = fsPromises.symlink;
+  let injected = false;
+  fsPromises.open = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(sourceRoot, displacedRoot);
+      await originalSymlink(outsideRoot, sourceRoot, 'dir');
+    }
+    return originalOpen(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.readText('spec/openapi.json'),
+      (error) => ['INPUT_CHANGED', 'INPUT_SYMLINK'].includes(error?.code),
+    );
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(path.join(outsideRoot, 'openapi.json'), 'utf8'), '{"source":"outside"}\n');
+});
+
+test('TargetBoundary rejects a regular-file replacement between inspection and open', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const targetInput = path.join(targetRoot, 'openapi.json');
+  const displacedInput = path.join(root, 'openapi-displaced.json');
+  const outsideInput = path.join(root, 'outside.json');
+  await mkdir(targetRoot);
+  await writeFile(targetInput, '{"source":"target"}\n');
+  await writeFile(outsideInput, '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.open = async (candidate, ...arguments_) => {
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(targetInput, displacedInput);
+      await originalRename(outsideInput, targetInput);
+    }
+    return originalOpen(candidate, ...arguments_);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.readText('openapi.json'),
+      (error) => error?.code === 'INPUT_CHANGED',
+    );
+  } finally {
+    fsPromises.open = originalOpen;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(targetInput, 'utf8'), '{"source":"outside"}\n');
+});
+
+test('TargetBoundary resolveInput rejects a file swapped after its initial identity check', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const targetInput = path.join(targetRoot, 'openapi.json');
+  const displacedInput = path.join(root, 'openapi-displaced.json');
+  const outsideInput = path.join(root, 'outside.json');
+  await mkdir(targetRoot);
+  await writeFile(targetInput, '{"source":"target"}\n');
+  await writeFile(outsideInput, '{"source":"outside"}\n');
+  const boundary = await TargetBoundary.create(targetRoot);
+
+  const originalLstat = fsPromises.lstat;
+  const originalRename = fsPromises.rename;
+  let injected = false;
+  fsPromises.lstat = async (candidate, ...arguments_) => {
+    const result = await originalLstat(candidate, ...arguments_);
+    if (!injected && path.basename(String(candidate)) === 'openapi.json') {
+      injected = true;
+      await originalRename(targetInput, displacedInput);
+      await originalRename(outsideInput, targetInput);
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      boundary.resolveInput('openapi.json'),
+      (error) => error?.code === 'INPUT_CHANGED',
+    );
+  } finally {
+    fsPromises.lstat = originalLstat;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, true);
+  assert.equal(await readFile(targetInput, 'utf8'), '{"source":"outside"}\n');
+});
+
+test('RunBoundary atomically replaces output symlinks and writes mode 0600', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  const victim = path.join(root, 'victim.txt');
+  await mkdir(runRoot);
+  await writeFile(victim, 'untouched\n');
+  await chmod(victim, 0o644);
+  await symlink(victim, path.join(runRoot, 'report.txt'));
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.writeText('report.txt', 'safe output\n');
+
+  const output = path.join(runRoot, 'report.txt');
+  const stat = await lstat(output);
+  assert.equal(stat.isSymbolicLink(), false);
+  assert.equal(stat.mode & 0o777, 0o600);
+  assert.equal(await readFile(output, 'utf8'), 'safe output\n');
+  assert.equal(await readFile(victim, 'utf8'), 'untouched\n');
+});
+
+test('RunBoundary rejects a symlinked ancestor without creating through it', async (t) => {
+  const root = await fixture(t);
+  const actual = path.join(root, 'actual');
+  const alias = path.join(root, 'alias');
+  await mkdir(actual, { mode: 0o700 });
+  await symlink(actual, alias, 'dir');
+
+  await assert.rejects(() => RunBoundary.create(path.join(alias, 'run')), {
+    code: 'RUN_ROOT_SYMLINK',
+  });
+  await assert.rejects(() => lstat(path.join(actual, 'run')), { code: 'ENOENT' });
+});
+
+test('RunBoundary writes canonical JSON with a final newline', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  await mkdir(runRoot);
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.writeJson('result.json', {
+    zebra: 1,
+    alpha: { two: 2, one: 1 },
+  });
+
+  assert.equal(
+    await readFile(path.join(runRoot, 'result.json'), 'utf8'),
+    '{\n  "alpha": {\n    "one": 1,\n    "two": 2\n  },\n  "zebra": 1\n}\n',
+  );
+  assert.equal((await lstat(path.join(runRoot, 'result.json'))).mode & 0o777, 0o600);
+});
+
+test('RunBoundary atomically writes exact binary bytes with mode 0600', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  const victim = path.join(root, 'victim.bin');
+  await mkdir(runRoot);
+  await writeFile(victim, Buffer.from([1, 2, 3]));
+  await symlink(victim, path.join(runRoot, 'browser.png'));
+  const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 128]);
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.writeBytes('browser.png', png);
+
+  const output = path.join(runRoot, 'browser.png');
+  assert.deepEqual(await readFile(output), Buffer.from(png));
+  assert.deepEqual(await readFile(victim), Buffer.from([1, 2, 3]));
+  assert.equal((await lstat(output)).isSymbolicLink(), false);
+  assert.equal((await lstat(output)).mode & 0o777, 0o600);
+  await assert.rejects(() => boundary.writeBytes('invalid.png', 'not bytes'), {
+    code: 'OUTPUT_BYTES_INVALID',
+  });
+});
+
+test('RunBoundary refuses output path escapes', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  await mkdir(runRoot);
+
+  const boundary = await RunBoundary.create(runRoot);
+  await assert.rejects(() => boundary.writeText('../outside.txt', 'blocked'), {
+    code: 'PATH_ESCAPE',
+  });
+});
+
+test('RunBoundary creates safe nested directories and synchronizes a binary artifact tree', async (t) => {
+  const root = await fixture(t);
+  const runRoot = path.join(root, 'run');
+  await mkdir(runRoot, { mode: 0o700 });
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.writeText('collections/bruno/request.bru', 'meta {\n  name: demo\n}\n');
+  await boundary.writeBytes('screenshots/failure.png', Uint8Array.from([137, 80, 78, 71]));
+  await boundary.syncTree();
+
+  assert.equal(
+    (await lstat(path.join(runRoot, 'collections'))).mode & 0o777,
+    0o700,
+  );
+  assert.equal(
+    (await lstat(path.join(runRoot, 'collections/bruno/request.bru'))).mode & 0o777,
+    0o600,
+  );
+  assert.deepEqual(
+    await readFile(path.join(runRoot, 'screenshots/failure.png')),
+    Buffer.from([137, 80, 78, 71]),
+  );
+});
+
+test('RunBoundary atomically replaces the latest symlink without following it', async (t) => {
+  const root = await fixture(t);
+  const reportRoot = path.join(root, 'reports');
+  const runId = '2026-07-18T05-46-00Z';
+  const runRoot = path.join(reportRoot, runId);
+  const victim = path.join(root, 'victim');
+  await mkdir(runRoot, { recursive: true });
+  await mkdir(victim);
+  await writeFile(path.join(victim, 'marker.txt'), 'untouched\n');
+  await symlink(victim, path.join(reportRoot, 'latest'), 'dir');
+
+  const boundary = await RunBoundary.create(runRoot);
+  await boundary.replaceLatest(reportRoot, runId);
+
+  const latest = path.join(reportRoot, 'latest');
+  assert.equal((await lstat(latest)).isSymbolicLink(), true);
+  assert.equal(await readFile(path.join(victim, 'marker.txt'), 'utf8'), 'untouched\n');
+  assert.equal(await readlink(latest), runId);
+});

@@ -16,6 +16,7 @@ FAILED_SUITES=0
 FAILED_NAMES=()
 
 TESTS=(
+  "run-node-tests.sh"
   "test-structure.sh"
   "test-frontmatter.sh"
   "test-manifest-schema.sh"
@@ -24,6 +25,7 @@ TESTS=(
   "test-runtime-behavior.sh"
   "test-bump-version.sh"
   "test-feature-coverage.sh"
+  "test-secret-scan.sh"
 )
 
 # Optional tests — run if available but don't fail the suite if runner is missing

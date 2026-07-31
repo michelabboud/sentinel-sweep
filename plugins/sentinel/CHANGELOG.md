@@ -2,6 +2,99 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [2.0.0] - 2026-07-31
+
+> Release evidence: full suite 10/10 plus packaged clean-install and
+> plugin-install proofs on release candidate `87b6dc3` (Node 24.18.0 on the
+> documented 18+ floor, Chrome 148.0.7778.178, Claude Code 2.1.220). Remote
+> gates (tag, GitHub release, downloaded archive) are recorded in `PROGRESS.md`.
+
+### Breaking changes
+
+- Replaced prompt-owned discovery, policy, HTTP, browser, secret handling, and
+  reporting with one dependency-free Node.js 18 core shared by Claude and Codex.
+- Replaced 1.x settings, manifest, findings, and history shapes with strict
+  `schemaVersion: "2.0"` contracts. Legacy manifests are rejected with migration
+  guidance instead of being silently interpreted.
+- Narrowed the deterministic execution matrix to OpenAPI 3.0/3.1 JSON, static
+  literal Vue Router routes, explicit bearer-token roles, system Chrome/Chromium,
+  Linux, and Node.js 18+.
+- Removed 1.x execution claims for broad framework source parsing, GraphQL/gRPC/
+  tRPC, ORM analysis, OAuth/cookie/API-key auth, automatic fixes, direct PR
+  mutation, Playwright MCP, and multi-service parallel execution.
+- Limited each invocation to at most one canonical approved origin and at most one
+  configured service. Zero origins supports discovery/readiness; executable work
+  requires exactly one. Multi-service projects now run one separately trusted
+  invocation per service.
+- Replaced permissive/implicit CLI behavior with explicit commands and flags:
+  `setup`, `manifest`, `api`, `browser`, `sweep`, `report`, `dashboard`, `export`,
+  `trends`, `diff`, and `clean`.
+- Changed output isolation to `<reportDir>/sentinel-v2/`, leaving 1.x artifacts and
+  history separate.
+
+### Added
+
+- Private external trusted-config loading with canonical path, current-owner,
+  `0600`/`0400`, one-hard-link, ancestor-identity, and strict schema checks.
+- Exact-origin policy, manual same-origin redirects, non-loopback opt-in, and
+  cross-origin credential blocking.
+- Environment-only secret references, transient resolution, recursive redaction,
+  secret-bearing output rejection, and current-secret revalidation for existing
+  artifacts.
+- Non-evaluating OpenAPI JSON and static Vue Router discovery with stable identities,
+  provenance, deterministic merging, and explicit complete/partial/unsupported
+  coverage.
+- Complete fail-closed execution plans. Every discovered operation/route records an
+  execute or skip decision; unknowns cannot disappear from the report.
+- Six-condition mutation approval: trusted enablement, exact allowlist identity,
+  known effects and rollback, development/test environment, exact origin, and
+  explicit sandbox acknowledgement.
+- Real built-in HTTP checks for response status, RBAC, content type, bounded bodies,
+  timeouts, JSON decoding, supported response schemas, and redirects.
+- Real headless Chrome checks over the bundled WebSocket/CDP implementation for
+  document/RBAC status, network failures, console errors, uncaught exceptions,
+  overflow, configured empty content, and error screenshots.
+- Canonical redacted findings that drive Markdown, a self-contained static HTML
+  dashboard, PR-ready Markdown, history, trends, diff, and exit status.
+- Transactional private run publication, descriptor-anchored target/report/history
+  access, crash recovery, concurrent-run isolation, validated `latest`, and bounded
+  transactional cleanup.
+- Credential-free Postman, Insomnia, and Bruno exports built from the validated
+  published manifest and current trusted config, never from findings or response
+  models.
+- Per-mode setup readiness: `apiReady`, `browserReady`, `sweepReady`, plus the
+  compatibility alias `executionReady === sweepReady`.
+- Unit, contract, adversarial, integration, clean-install, plugin-install, and real
+  API/Chrome goal-gate coverage.
+- Architecture, security, migration, sweep-history, ADR, progress, and canonical
+  28-issue review documentation.
+
+### Security
+
+- Target repositories, imported contracts, pages, responses, redirects, existing
+  artifacts, and host-visible target strings are untrusted data and cannot grant
+  policy authority.
+- Discovery no longer scans `.env`, seed, SSH, cloud, or arbitrary documentation
+  files and never imports target modules or invokes target-local executables.
+- Non-interactive mutation acknowledgement is bound to an explicit run ID through
+  `SENTINEL_CI_SANDBOX_ACK`.
+- Linux descriptor anchoring, no-follow/exclusive creation, private modes, identity
+  revalidation, and crash-recoverable publication close the known path and symlink
+  substitution failures. A malicious same-UID process with output-parent write
+  access remains outside the protection boundary and must be isolated operationally.
+
+### Migration
+
+- Create a new private v2 config outside the target; do not copy credentials from a
+  1.x manifest.
+- Run `setup` and inspect `apiReady`, `browserReady`, and `sweepReady`, then generate
+  a fresh v2 manifest and add only trusted stable-ID overrides.
+- Replace removed 1.x flags and orchestration with the explicit 2.0 CLI.
+- Run a separate config/invocation for each service.
+- Keep mutations disabled until every approval condition and rollback is proven in
+  a disposable environment.
+- See `docs/guides/migrating-to-2.0.md` for the complete sequence.
+
 ## [1.8.5] - 2026-03-28
 
 ### Removed

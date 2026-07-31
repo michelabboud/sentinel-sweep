@@ -1,0 +1,433 @@
+{
+  "count": 35,
+  "summary": {
+    "critical": 12,
+    "error": 17,
+    "warning": 0,
+    "info": 0,
+    "skipped": 6
+  },
+  "identities": [
+    {
+      "id": "1407630590cb90c495796087cdbb138253a5d013185f30a9c51507e42fb0355d",
+      "reasonCode": "MUTATION_BLOCKED_DISABLED",
+      "outcome": "skip",
+      "severity": "info",
+      "category": "policy",
+      "subject": {
+        "id": "ba648ce9e4c2473c032fae73a36fbb99c61824069ff713f4c83ea49599e0c53a",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "14e272586e72390efcd278466f2e6776aa80ac6c3c4cc99a64046e19dac66157",
+      "reasonCode": "NAVIGATION_ORIGIN_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "8ddb190237d2c48655db04ad8db96c729e1217dbdb0a308e4eb885a88f6b50ee",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "1d7a21bb677e884efe8772ad0e6c5127cc2821782cbb61cedcb3aa4351a624c2",
+      "reasonCode": "ROUTE_BLOCKED_UNKNOWN_AUTH",
+      "outcome": "skip",
+      "severity": "info",
+      "category": "policy",
+      "subject": {
+        "id": "0c48811fdb498f8fae1242cbc8b642c71601f95c9519a5e094422e9ff73e05dc",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "23138a33d1b0aaffa58f84cb26d172b77e5a04f88d64dab473c900cc482c1fc3",
+      "reasonCode": "CONSOLE_ERROR",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "console",
+      "subject": {
+        "id": "a8bee89b1786a13f5c87c4956d3b5231f76dc80d0d64077bf28231ae006b7444",
+        "type": "route"
+      },
+      "role": "admin"
+    },
+    {
+      "id": "25bdf80ca5e30a5b9f3464d40a756d04d5b48d341dea2987149049d999d73e67",
+      "reasonCode": "HORIZONTAL_OVERFLOW",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "layout",
+      "subject": {
+        "id": "729567eac682bae1dcfdb2a653a24671dad2e208405493a72775e78138d7156a",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "30806011c9f927cda6feb24650a349198789f250889f15cfbfc7462886df87e6",
+      "reasonCode": "REDIRECT_ORIGIN_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "5ba4a35b48a105610c3f1bb8daaf6a05b0217e6c57f23fd58b31ebbaa4ee69c7",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "3c53c2b565befc6af1af25af0d8deaf80887e8f29391493f53aa2f252a3e1537",
+      "reasonCode": "NAVIGATION_ORIGIN_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "4f249a5785b1d8160cfb0c14c8700fc056cee6f28aa5d41a319a3ed851fe2493",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "3ce2e42440dd09d23454a6730c96935f77fd79f46e8223a3af7c73210ae250ea",
+      "reasonCode": "DOCUMENT_STATUS_UNAVAILABLE",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "health",
+      "subject": {
+        "id": "4f249a5785b1d8160cfb0c14c8700fc056cee6f28aa5d41a319a3ed851fe2493",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "49c22e8152032cecefee5761bd135e5a604eec472ceb4ed78063734d0b5f65d5",
+      "reasonCode": "DOCUMENT_STATUS_UNAVAILABLE",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "health",
+      "subject": {
+        "id": "8ddb190237d2c48655db04ad8db96c729e1217dbdb0a308e4eb885a88f6b50ee",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "4de3403c2db2d23cb356d4d3c1e200bd8e9f77d8023fd75354b48b7f0fdc59cf",
+      "reasonCode": "RESOURCE_LOAD_FAILED",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "network",
+      "subject": {
+        "id": "f0cabe798713c6c13dc26ba5f42cdc6bdba376edae61abe2146802baaa7550df",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "55f817ddb7ca9af15e1a1d43f9bd0a5a96c5a91bf2639cc8a8461fc396a5b3e8",
+      "reasonCode": "UNCAUGHT_EXCEPTION",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "console",
+      "subject": {
+        "id": "52d22c4ed4bcd20e6d1c9e06a2ad031d568500d6958ea9ada06bdf22eef0e344",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "5dc5c3467a9313b8abd3431aeaf8b0a9e155179dd2ee8899141e551940d3fa07",
+      "reasonCode": "UNEXPECTED_TARGET_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "0544536606066443b461606ccca77a8d4da28e687b4ea3960d7b96f82f63ba51",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "726dd3b2dab1cf94849a054e42e67bef6b8af40b63fcd618e25c11e82b0ee91c",
+      "reasonCode": "NAVIGATION_TARGET_MISMATCH",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "security",
+      "subject": {
+        "id": "1b2f001157782ce46b563231e5eb54f562f26ece289a86cac8714b3f166b20f9",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "7abc1e1983f8ddd19eaac3a00afd671aadad518f97fa815ca8909ccb7633c53f",
+      "reasonCode": "JSON_RESPONSE_INVALID",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "schema",
+      "subject": {
+        "id": "a3db97393294242a4446dae2bc427f85ca708f01db8b6bc6cd5bb520990c477a",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "7bddb4c573a32d79d924f0ba2573222a1a2a559c040b0193bf811cd60710d46c",
+      "reasonCode": "UNCAUGHT_EXCEPTION",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "console",
+      "subject": {
+        "id": "214e8caee9194f03909593fb49c19d26a99d74c5d28ee85728f5c8e9a254c545",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "80fa5062815467bcaef5731fe698df08e8150591d0d6785c5dd5b375d4f3d68d",
+      "reasonCode": "SCHEMA_VIOLATION",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "schema",
+      "subject": {
+        "id": "7c276edef4130dbbf60d75fb1e9d32449d6858398f544baf214660a9b79491f5",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "810b7da57ad3018646aa17029d377504b239653ed9d1103e3e1a0ccf287dc7c5",
+      "reasonCode": "FRAME_MUTATION_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "f0cabe798713c6c13dc26ba5f42cdc6bdba376edae61abe2146802baaa7550df",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "8b39284f367bae68c2e7906e2f30b51c239f1bfa8ce95632e63d806958e313c4",
+      "reasonCode": "BROWSER_WEBSOCKET_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "214e8caee9194f03909593fb49c19d26a99d74c5d28ee85728f5c8e9a254c545",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "926c2cc1877c4ab30cd05532492d5157708d797201101d829818eedf1f8ec496",
+      "reasonCode": "BROWSER_MUTATION_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "964d6d3cd23ccb953ec538dcc990719b1db16be2954481369ec2a240a6273a65",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "97a42ab073edce7f917e9efd2c3c6b347ba6f91ee2cea88a66fc0ecc4470b789",
+      "reasonCode": "WORKER_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "52d22c4ed4bcd20e6d1c9e06a2ad031d568500d6958ea9ada06bdf22eef0e344",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "a28d9558b97fe851f9e6a24ac8d7a0e7c407dee10aaddff75c6204d436199d78",
+      "reasonCode": "RESOURCE_LOAD_FAILED",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "network",
+      "subject": {
+        "id": "3e00fabb5749a47a22ffd441e48481f3daa1b8d2b4c2d65636a0723562666718",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "a534a2078e58380d85a31a97f5421db7a0999b77160781c71c594f5a3dc767f1",
+      "reasonCode": "CONSOLE_ERROR",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "console",
+      "subject": {
+        "id": "92759b92e98281da2ff9a2985cedddf1f54e074acc26f1bc100fd9e133abee8e",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "af02949aee9a993824fa6317a832b6f961f7a29ff136bba95b8d8e8da8ee0b32",
+      "reasonCode": "RESOURCE_STATUS_ERROR",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "network",
+      "subject": {
+        "id": "24dcb369f16940fd5df78365212097bc90618c14557967e218aae3b0bb8d2596",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "b1d2d13968357a2c84ba3f6b0812a5464f9707b2fc081d35c5df5c4151fa5d29",
+      "reasonCode": "SERVICE_WORKER_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "d4aa922683d9b0fe89f08561a521bab6e7676a7bd88446fa65a862d880f8f62a",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "b84d6ee07d452fee169dae43637a34f98701f50cf01285943c0434363725a232",
+      "reasonCode": "WORKER_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "d00b79d461d489d66b4fe5a16d7bc3f934b998014ea8755b6df553c5e12d94e2",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "ba3084e6182ab07968deac94c8fb3eb32bbf0798db4fbb869a5d29042a840ef8",
+      "reasonCode": "RBAC_ACCESS_GRANTED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "rbac",
+      "subject": {
+        "id": "4ebcfbf48f6c96aeeb09c6a09bb2ae383d006ff8198a62c0fe6a1d3335c00acf",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "c73fc0c8d78a2b352d374f5be8060e30a8536ef2b7c2efaa2756422d07ecfbdf",
+      "reasonCode": "NAVIGATION_ORIGIN_BLOCKED",
+      "outcome": "fail",
+      "severity": "critical",
+      "category": "security",
+      "subject": {
+        "id": "361f1702d9c9fba497882abfe57318e11232dd21c82df4d87f54a307e2adcf5e",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "cf5fe506de5dc5f900b4bc60c36d93179d7b9f916b0a2ec1fd79ddc50c357e18",
+      "reasonCode": "ROUTE_BLOCKED_UNKNOWN_AUTH",
+      "outcome": "skip",
+      "severity": "info",
+      "category": "policy",
+      "subject": {
+        "id": "d62f0704a741dc86e94929cdcf2513253e2b1e1c91b730a10baee26008c3ce63",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "d2582326ee7c1fc064ac84385a1c69c79961d74969f98cb0101dc344b7e7bbfa",
+      "reasonCode": "UNCAUGHT_EXCEPTION",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "console",
+      "subject": {
+        "id": "d00b79d461d489d66b4fe5a16d7bc3f934b998014ea8755b6df553c5e12d94e2",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "d704bead36b85e70a3300528109e12c73193a6fb846030282e1b4d769931fb67",
+      "reasonCode": "RESPONSE_TOO_LARGE",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "network",
+      "subject": {
+        "id": "fb9e377e197cd1fee877aabb2f01474b1dc5a9c3f328fd13541b3a5e321b8893",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "f0062dcf85812f6d863a9bab9a884dc5b0541e92074c5d554ac122eec637cb0c",
+      "reasonCode": "RESOURCE_LOAD_FAILED",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "network",
+      "subject": {
+        "id": "964d6d3cd23ccb953ec538dcc990719b1db16be2954481369ec2a240a6273a65",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "f3a789b6bcc0eac71872e043e4b31115ac9ded628750554b5292fef89a911431",
+      "reasonCode": "ROUTE_BLOCKED_UNKNOWN_AUTH",
+      "outcome": "skip",
+      "severity": "info",
+      "category": "policy",
+      "subject": {
+        "id": "a55ba9363c46d172eca5e5cfe3b3522f80aa27ee8a49aa96e2dd9cc2ebc78f54",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "f64732157f05d4a1ba61e6b742d31389ee1b31d94ad954e93f0af871b903e1b4",
+      "reasonCode": "MUTATION_BLOCKED_DISABLED",
+      "outcome": "skip",
+      "severity": "info",
+      "category": "policy",
+      "subject": {
+        "id": "bb0d38b890c7bd06a0ac49ef9426106781c370a6d26af940b4209c4b4626dc19",
+        "type": "operation"
+      },
+      "role": null
+    },
+    {
+      "id": "fa6d4822228ede7953e477f27c8eeeadf66bcc86b5282eac0610cef121da7e1c",
+      "reasonCode": "EMPTY_CONTAINER",
+      "outcome": "fail",
+      "severity": "error",
+      "category": "content",
+      "subject": {
+        "id": "78fcb98cde28d0f9982bb733e73c4cd7564c9017e37597e4c453ba86b5f8b5be",
+        "type": "route"
+      },
+      "role": null
+    },
+    {
+      "id": "fd1ed637332b12e89dd1ba4e2b92f689e253ce3182e4b5875a11508916aadaa4",
+      "reasonCode": "ROUTE_BLOCKED_UNKNOWN_AUTH",
+      "outcome": "skip",
+      "severity": "info",
+      "category": "policy",
+      "subject": {
+        "id": "7b9bf97b401a4283c8aea2004d995d774faea945f8fe6c66e92248d49e585979",
+        "type": "route"
+      },
+      "role": null
+    }
+  ]
+}
+

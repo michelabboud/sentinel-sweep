@@ -1,0 +1,602 @@
+{
+  "schemaVersion": "2.0",
+  "target": {
+    "name": "discovery",
+    "root": "<target-root>"
+  },
+  "coverage": {
+    "status": "complete",
+    "diagnostics": [
+      {
+        "code": "OPENAPI_UNTRUSTED_EXTENSION_IGNORED",
+        "message": "Ignored untrusted source extension x-sentinel-allowed-roles",
+        "sourcePath": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1admin/get/x-sentinel-allowed-roles"
+      }
+    ]
+  },
+  "routes": [
+    {
+      "id": "0c48811fdb498f8fae1242cbc8b642c71601f95c9519a5e094422e9ff73e05dc",
+      "path": "/api/items",
+      "name": null,
+      "component": null,
+      "aliases": [],
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1items"
+      }
+    },
+    {
+      "id": "264b8645ebb67a5a705cbacca14728655bf142e8f832fc537a14db1156944f76",
+      "path": "/api/public",
+      "name": null,
+      "component": null,
+      "aliases": [],
+      "auth": {
+        "state": "public",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1public"
+      }
+    },
+    {
+      "id": "742112c462ea8411558cee29962f6bf9f351545f5e499eab088262440196f92b",
+      "path": "/admin/reports/{slug}",
+      "name": "admin-report",
+      "component": "ReportView",
+      "aliases": [],
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "parameters": [
+        {
+          "name": "slug",
+          "location": "path",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/router.js",
+        "pointer": "/routes/0/children/1"
+      }
+    },
+    {
+      "id": "7b9bf97b401a4283c8aea2004d995d774faea945f8fe6c66e92248d49e585979",
+      "path": "/api/admin",
+      "name": null,
+      "component": null,
+      "aliases": [],
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1admin"
+      }
+    },
+    {
+      "id": "86eecdc9b5b4601f3e861f7c676d5abbc634ca32f353d4fd4f9d86a64f35c964",
+      "path": "/about",
+      "name": "about",
+      "component": "AboutView",
+      "aliases": [],
+      "auth": {
+        "state": "public",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/public-router.ts",
+        "pointer": "/createRouter/0/routes/0"
+      }
+    },
+    {
+      "id": "9da4e79f7d4a7ea0a929eb3d01a973faccad0ff0b6be06b07a765c91cbcfd4c5",
+      "path": "/login",
+      "name": "login",
+      "component": "LoginView",
+      "aliases": [],
+      "auth": {
+        "state": "public",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/router.js",
+        "pointer": "/routes/0/children/2"
+      }
+    },
+    {
+      "id": "9e726f13d15a83063c404306518b734551ac80fceebb76c158e95cdb8103bd92",
+      "path": "/files/{pathMatch}",
+      "name": "files",
+      "component": "FilesView",
+      "aliases": [
+        "/assets/{pathMatch}"
+      ],
+      "auth": {
+        "state": "unknown",
+        "allowedRoles": []
+      },
+      "parameters": [
+        {
+          "name": "pathMatch",
+          "location": "path",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/public-router.ts",
+        "pointer": "/createRouter/0/routes/1"
+      }
+    },
+    {
+      "id": "9fce8a089929fb3b2fcd7c2b4f4dabd2aa5f0ad6581e4eb955b5308bfd0ad345",
+      "path": "/admin",
+      "name": "admin",
+      "component": "AdminLayout",
+      "aliases": [
+        "/control"
+      ],
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/router.js",
+        "pointer": "/routes/0"
+      }
+    },
+    {
+      "id": "a55ba9363c46d172eca5e5cfe3b3522f80aa27ee8a49aa96e2dd9cc2ebc78f54",
+      "path": "/api/items/{itemId}",
+      "name": null,
+      "component": null,
+      "aliases": [],
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "parameters": [
+        {
+          "name": "itemId",
+          "location": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "example": "known-item"
+        }
+      ],
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1items~1{itemId}"
+      }
+    },
+    {
+      "id": "b459b9064a0a1a184e5b5a05e92c60bf0d3c9f4ec40117154eb63d7ac6f5b1d7",
+      "path": "/admin/users/{id}",
+      "name": "admin-user",
+      "component": "UserView",
+      "aliases": [
+        "/admin/members/{id}",
+        "/users/{id}"
+      ],
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "location": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/router.js",
+        "pointer": "/routes/0/children/0"
+      }
+    },
+    {
+      "id": "df26ea9a375bf5e995fa5c8d03bd9fd49b5396bb5287d72eb13487c87e4f9d93",
+      "path": "/landing",
+      "name": "landing",
+      "component": "LandingView",
+      "aliases": [
+        "/home",
+        "/welcome"
+      ],
+      "auth": {
+        "state": "public",
+        "allowedRoles": []
+      },
+      "parameters": [],
+      "provenance": {
+        "adapter": "vue-router-static",
+        "file": "vue-complete/router.js",
+        "pointer": "/routes/1/children/0"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "id": "3836a1b4250fb823592a4d018239b35150663fc90e9129af456a4409b2cddc51",
+      "method": "GET",
+      "path": "/api/items/{itemId}",
+      "summary": null,
+      "parameters": [
+        {
+          "name": "itemId",
+          "location": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "example": "known-item"
+        },
+        {
+          "name": "includeDetails",
+          "location": "query",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          },
+          "example": true
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "contentType": "application/json",
+          "schemaId": "schema:openapi:Item"
+        }
+      },
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "targetModel": null,
+      "deleteMode": null,
+      "sideEffects": {
+        "state": "known",
+        "classes": []
+      },
+      "rollback": null,
+      "mutation": false,
+      "protocol": "http",
+      "sweepable": true,
+      "risk": {
+        "score": 0,
+        "level": "safe",
+        "reasons": []
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1items~1{itemId}/get"
+      }
+    },
+    {
+      "id": "38d4b36d715f9cbe5b243dd8fd7f32605bf5c3133749fa51bcca7b440ab95957",
+      "method": "GET",
+      "path": "/api/public",
+      "summary": null,
+      "parameters": [],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "contentType": "application/json",
+          "schemaId": null
+        }
+      },
+      "auth": {
+        "state": "public",
+        "allowedRoles": []
+      },
+      "targetModel": null,
+      "deleteMode": null,
+      "sideEffects": {
+        "state": "known",
+        "classes": []
+      },
+      "rollback": null,
+      "mutation": false,
+      "protocol": "http",
+      "sweepable": true,
+      "risk": {
+        "score": 0,
+        "level": "safe",
+        "reasons": []
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1public/get"
+      }
+    },
+    {
+      "id": "4ebcfbf48f6c96aeeb09c6a09bb2ae383d006ff8198a62c0fe6a1d3335c00acf",
+      "method": "GET",
+      "path": "/api/admin",
+      "summary": null,
+      "parameters": [],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "contentType": "application/json",
+          "schemaId": "schema:openapi:AdminStatus"
+        }
+      },
+      "auth": {
+        "state": "required",
+        "allowedRoles": [
+          "admin"
+        ]
+      },
+      "targetModel": "admin-read",
+      "deleteMode": null,
+      "sideEffects": {
+        "state": "known",
+        "classes": []
+      },
+      "rollback": null,
+      "mutation": false,
+      "protocol": "http",
+      "sweepable": true,
+      "risk": {
+        "score": 0,
+        "level": "safe",
+        "reasons": []
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1admin/get"
+      }
+    },
+    {
+      "id": "ba648ce9e4c2473c032fae73a36fbb99c61824069ff713f4c83ea49599e0c53a",
+      "method": "DELETE",
+      "path": "/api/items/{itemId}",
+      "summary": null,
+      "parameters": [
+        {
+          "name": "itemId",
+          "location": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "example": "known-item"
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "204": {
+          "contentType": null,
+          "schemaId": null
+        }
+      },
+      "auth": {
+        "state": "required",
+        "allowedRoles": [
+          "admin"
+        ]
+      },
+      "targetModel": null,
+      "deleteMode": "hard",
+      "sideEffects": {
+        "state": "known",
+        "classes": [
+          "data-delete"
+        ]
+      },
+      "rollback": null,
+      "mutation": true,
+      "protocol": "http",
+      "sweepable": false,
+      "risk": {
+        "score": 100,
+        "level": "critical",
+        "reasons": [
+          "mutation-side-effects-unknown"
+        ]
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1items~1{itemId}/delete"
+      }
+    },
+    {
+      "id": "bb0d38b890c7bd06a0ac49ef9426106781c370a6d26af940b4209c4b4626dc19",
+      "method": "POST",
+      "path": "/api/items",
+      "summary": null,
+      "parameters": [],
+      "requestBody": {
+        "required": true,
+        "contentType": "application/json",
+        "schemaId": "schema:openapi:ItemCreate"
+      },
+      "responses": {
+        "201": {
+          "contentType": "application/json",
+          "schemaId": "schema:openapi:Item"
+        }
+      },
+      "auth": {
+        "state": "required",
+        "allowedRoles": [
+          "editor"
+        ]
+      },
+      "targetModel": null,
+      "deleteMode": null,
+      "sideEffects": {
+        "state": "known",
+        "classes": [
+          "data-write"
+        ]
+      },
+      "rollback": "delete-created-item",
+      "mutation": true,
+      "protocol": "http",
+      "sweepable": false,
+      "risk": {
+        "score": 100,
+        "level": "critical",
+        "reasons": [
+          "mutation-side-effects-unknown"
+        ]
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1items/post"
+      }
+    },
+    {
+      "id": "f2c58703175807636ead65e2cdc38452cb172ed929d5bbd2d76c0e481b66cde3",
+      "method": "GET",
+      "path": "/api/items",
+      "summary": null,
+      "parameters": [
+        {
+          "name": "limit",
+          "location": "query",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "example": 25
+        }
+      ],
+      "requestBody": null,
+      "responses": {
+        "200": {
+          "contentType": "application/json",
+          "schemaId": null
+        }
+      },
+      "auth": {
+        "state": "required",
+        "allowedRoles": []
+      },
+      "targetModel": null,
+      "deleteMode": null,
+      "sideEffects": {
+        "state": "known",
+        "classes": []
+      },
+      "rollback": null,
+      "mutation": false,
+      "protocol": "http",
+      "sweepable": true,
+      "risk": {
+        "score": 0,
+        "level": "safe",
+        "reasons": []
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/paths/~1api~1items/get"
+      }
+    }
+  ],
+  "schemas": {
+    "schema:openapi:AdminStatus": {
+      "schema": {
+        "type": "object",
+        "required": [
+          "healthy"
+        ],
+        "properties": {
+          "healthy": {
+            "type": "boolean"
+          }
+        }
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/components/schemas/AdminStatus"
+      }
+    },
+    "schema:openapi:Item": {
+      "schema": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/components/schemas/Item"
+      }
+    },
+    "schema:openapi:ItemCreate": {
+      "schema": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "provenance": {
+        "adapter": "openapi-json",
+        "file": "openapi-complete.json",
+        "pointer": "#/components/schemas/ItemCreate"
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "sentinel",
-  "version": "1.8.5",
-  "description": "Automated QA sweep for web apps — run /sentinel:run sweep for full browser+API QA, /sentinel:run api for endpoint-only testing, /sentinel:run setup to configure",
+  "version": "2.0.0",
+  "description": "Thin Claude host for Sentinel's single-service trusted core: OpenAPI 3.0/3.1 JSON, static literal Vue Router, bearer-token roles, and system Chrome/Chromium; coverage is complete, partial, or unsupported",
   "author": {
     "name": "Michel Abboud",
     "email": "info@maicore.dev"
