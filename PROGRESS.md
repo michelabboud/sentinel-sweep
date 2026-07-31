@@ -2,7 +2,7 @@
 
 **Last documentation update:** 2026-07-31  
 **Release target:** 2.0.0  
-**Overall status:** 2.0.0 proven on `c62d1c1` — local AND remote CI green on the exact Node 18.20.8 floor (2026-07-31). Tag/release/downloaded-archive gates recorded below as they land.  
+**Overall status:** **2.0.0 RELEASED** (2026-07-31). Every gate below is closed on the released commit `22cff25` / tag `v2.0.0`, including the downloaded-archive proof.  
 **Canonical repository:** `/home/michel/projects/sentinel-sweep`
 
 This file is the restart point for the 2.0 goal-hardening work. A source module or
@@ -30,7 +30,7 @@ the exact commit that will be published.
 | CLI and thin Claude/Codex hosts | Implemented | Contract verification exists; clean plugin/Codex smoke pending | Explicit commands and 0/1/2 exits |
 | Real supported-target/adversarial E2E | Implemented | Complete — goal proof green in-tree and in-archive at `87b6dc3` | Ran API + real Chrome and proved canaries/counters |
 | Packaging, mirror, version, docs | Implemented | Complete — parity/version suites green; clean-install + plugin-install PASS at `87b6dc3` | Root/mirror parity, 2.0.0 consistency, clean archive/plugin install |
-| Remote release | In progress | CI green on pushed main `c62d1c1` (run 30661388309) | Tag, GitHub release, fresh archive remain |
+| Remote release | Complete | CI green on `22cff25` (run 30662224638); tag `v2.0.0`; release published; downloaded archive re-proven | github.com/michelabboud/sentinel-sweep/releases/tag/v2.0.0 |
 
 ## Product scope fixed for 2.0
 
@@ -60,9 +60,9 @@ reintroduce 1.x broad claims during release-note or mirror updates.
 | Node/runtime | Full suite, lint, and audit on the documented Node 18+ floor; zero dependencies | Complete | **CI run 30661388309 on exact Node 18.20.8**: suite 10/10, lint, audit (zero deps) inside clean-install at `c62d1c1`. Local proof additionally on Node 24.18.0. |
 | Packaging | Committed `git archive` clean install; Claude plugin and Codex wrapper smoke; root/mirror hashes | Complete | CI: `clean-install: PASS (c62d1c1, node 18.20.8)`, `plugin-install: PASS` (Claude Code 2.1.214) |
 | Local release candidate | Full gate on final release commit; clean diff/status except intended state | Complete | `c62d1c1`, clean status, 10/10 locally and on CI |
-| Remote CI | GitHub CI passes for exact pushed main SHA | Complete | run 30661388309, conclusion success, headSha c62d1c1 |
-| Tag/release | Annotated `v2.0.0` and GitHub release resolve to tested main SHA | Pending | Tag SHA and release URL |
-| Downloaded archive | Fresh GitHub source archive passes version, parity, install, and goal checks | Pending | Archive URL/hash/result |
+| Remote CI | GitHub CI passes for exact pushed main SHA | Complete | run 30662224638, success, headSha `22cff25` (the released commit) |
+| Tag/release | Annotated `v2.0.0` and GitHub release resolve to tested main SHA | Complete | annotated `v2.0.0` → `22cff25`; release at /releases/tag/v2.0.0 |
+| Downloaded archive | Fresh GitHub source archive passes version, parity, install, and goal checks | Complete | sha256 `4eac1db9f4ce445adaa846b25ab15d1b660730d5c95c2f3b68ef989e51f9aaa2`; VERSION+package 2.0.0; parity 48/48; version-consistency 27/27; suite **10/10**; lint clean; audit zero-deps; packaged CLI reports 2.0.0 |
 
 ## Release coordinates
 
