@@ -27,6 +27,18 @@ jobs:
         with:
           chrome-version: 148.0.7778.178
 
+      - name: Prepare the runner for Chrome and the secret scan
+        run: |
+          # ubuntu-24.04 runners restrict unprivileged user namespaces via
+          # AppArmor, which kills the downloaded Chrome's sandbox at launch
+          # (CHROME_EXITED_EARLY). Relax the runner rather than weakening the
+          # product's launcher with --no-sandbox.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # test-secret-scan.sh requires ripgrep, which the runner image lacks.
+          sudo apt-get update -q
+          sudo apt-get install -y -q ripgrep
+          rg --version | head -1
+
       - name: Verify mandatory runtimes
         env:
           SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
