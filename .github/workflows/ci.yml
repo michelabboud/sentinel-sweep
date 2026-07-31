@@ -34,8 +34,10 @@ jobs:
           test "$(node -p 'process.versions.node')" = "18.20.8"
           test -n "$SENTINEL_E2E_CHROME"
           test -x "$SENTINEL_E2E_CHROME"
+          # Chrome's --version emits a trailing space; anchor must tolerate it
+          # (verified with od -c on 148.0.7778.178).
           "$SENTINEL_E2E_CHROME" --version \
-            | grep -E '^(Google Chrome( for Testing)?|Chromium) 148\.0\.7778\.178$'
+            | grep -E '^(Google Chrome( for Testing)?|Chromium) 148\.0\.7778\.178[[:space:]]*$'
 
       - name: Run complete test suite with mandatory Chrome
         env:
