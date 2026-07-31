@@ -55,34 +55,53 @@ jobs:
         env:
           SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: |
-          # Launches Chrome the way runtime/browser/chrome.mjs does (replaced
-          # six-variable environment, fresh /tmp profile, headless CDP) and
+          # Launches Chrome the way runtime/browser/chrome.mjs does and
           # surfaces stderr + exit code, which CHROME_EXITED_EARLY hides.
-          PROFILE="$(mktemp -d /tmp/.chrome-smoke-XXXXXX)"
-          mkdir -p "$PROFILE/.config" "$PROFILE/.cache" "$PROFILE/.tmp" "$PROFILE/.crash-dumps"
-          set +e
-          env -i \
-            HOME="$PROFILE" XDG_CONFIG_HOME="$PROFILE/.config" \
-            XDG_CACHE_HOME="$PROFILE/.cache" TMPDIR="$PROFILE/.tmp" \
-            LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin \
-            "$SENTINEL_E2E_CHROME" --headless=new \
+          # Three variants bisect the runtime's launch recipe in one run:
+          #   full  = the exact runtime argument list
+          #   setsid= full + detached session (spawn {detached:true} replica)
+          #   min   = the reduced flag set proven alive on 2026-07-31
+          smoke() {
+            local label="$1"; shift
+            local use_setsid="$1"; shift
+            local PROFILE; PROFILE="$(mktemp -d "/tmp/.chrome-smoke-${label}-XXXXXX")"
+            mkdir -p "$PROFILE/.config" "$PROFILE/.cache" "$PROFILE/.tmp" "$PROFILE/.crash-dumps"
+            local RUNNER=(env -i
+              HOME="$PROFILE" XDG_CONFIG_HOME="$PROFILE/.config"
+              XDG_CACHE_HOME="$PROFILE/.cache" TMPDIR="$PROFILE/.tmp"
+              LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin)
+            [ "$use_setsid" = yes ] && RUNNER+=(setsid)
+            set +e
+            "${RUNNER[@]}" "$SENTINEL_E2E_CHROME" "$@" \
+              --user-data-dir="$PROFILE" \
+              --crash-dumps-dir="$PROFILE/.crash-dumps" about:blank \
+              > /dev/null 2> "$PROFILE/stderr.log" &
+            local CHROME_PID=$!
+            sleep 8
+            if kill -0 "$CHROME_PID" 2>/dev/null; then
+              echo "SMOKE[$label]: ALIVE"
+              kill "$CHROME_PID" 2>/dev/null; wait "$CHROME_PID" 2>/dev/null
+            else
+              wait "$CHROME_PID"; echo "SMOKE[$label]: DIED exit=$?"
+              echo "--- stderr[$label] (tail) ---"; tail -25 "$PROFILE/stderr.log" || true
+            fi
+            set -e
+            rm -rf "$PROFILE"
+          }
+          FULL_ARGS=(--headless=new
+            --remote-debugging-address=127.0.0.1 --remote-debugging-port=0
+            --no-first-run --no-default-browser-check
+            --disable-background-networking --disable-component-update
+            --disable-default-apps --disable-extensions --disable-popup-blocking
+            --disable-sync --disable-breakpad --disable-crash-reporter
+            --noerrdialogs --metrics-recording-only --disable-dev-shm-usage)
+          smoke full   no  "${FULL_ARGS[@]}"
+          smoke setsid yes "${FULL_ARGS[@]}"
+          smoke min    no  --headless=new \
             --remote-debugging-address=127.0.0.1 --remote-debugging-port=0 \
-            --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
+            --no-first-run --no-default-browser-check \
             --disable-background-networking --disable-breakpad \
-            --disable-crash-reporter --crash-dumps-dir="$PROFILE/.crash-dumps" \
-            --disable-dev-shm-usage about:blank \
-            > "$PROFILE/stdout.log" 2> "$PROFILE/stderr.log" &
-          CHROME_PID=$!
-          sleep 8
-          if kill -0 "$CHROME_PID" 2>/dev/null; then
-            echo "SMOKE: chrome is ALIVE after 8s"
-            kill "$CHROME_PID"; wait "$CHROME_PID" 2>/dev/null
-          else
-            wait "$CHROME_PID"; echo "SMOKE: chrome DIED, exit=$?"
-          fi
-          echo "--- stderr (tail) ---"; tail -40 "$PROFILE/stderr.log" || true
-          echo "--- stdout (tail) ---"; tail -10 "$PROFILE/stdout.log" || true
-          rm -rf "$PROFILE"
+            --disable-crash-reporter --disable-dev-shm-usage
 
       - name: Run complete test suite with mandatory Chrome
         env:
