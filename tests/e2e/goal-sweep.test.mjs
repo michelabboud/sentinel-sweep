@@ -501,7 +501,7 @@ test('proves the packaged Sentinel goal against real HTTP and mandatory Chrome',
     // count drift; the histogram names exactly which findings differ.
     const histogram = {};
     for (const finding of firstFindings.findings) {
-      const key = `${finding.source}:${finding.category}:${finding.reasonCode}:${finding.subjectId}`;
+      const key = `${finding.category}:${finding.reasonCode}:${finding.subject?.id?.slice(0, 8)}:${String(finding.actual ?? '').slice(0, 70)}`;
       histogram[key] = (histogram[key] ?? 0) + 1;
     }
     console.error(`finding histogram (${firstFindings.findings.length} findings):`, JSON.stringify(histogram, null, 1));

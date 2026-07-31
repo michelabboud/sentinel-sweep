@@ -132,6 +132,18 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+// Protocol + pathname only — classifies a target (application script vs
+// browser-internal page) without disclosing the origin or port.
+function describeTargetLocation(url) {
+  if (typeof url !== 'string' || url.length === 0) return 'location unknown';
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}${parsed.pathname}`.slice(0, 80);
+  } catch {
+    return 'location unparseable';
+  }
+}
+
 function evidence(route, fields = {}) {
   return deepFreeze({
     path: typeof fields.path === 'string'
@@ -683,7 +695,10 @@ async function runAttempt({
           category: 'security', severity: 'critical', outcome: 'fail',
           reasonCode: 'SERVICE_WORKER_BLOCKED',
           message: 'Browser closed a service-worker target before it could execute',
-          expected: 'no page-initiated service workers', actual: 'service worker target attempted',
+          expected: 'no page-initiated service workers',
+          // Protocol + pathname only: enough to tell an application worker
+          // from a browser-internal target, with no origin/port disclosure.
+          actual: `service worker target attempted (${describeTargetLocation(targetInfo.url)})`,
         });
         if (typeof targetInfo.targetId === 'string') {
           await client.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
