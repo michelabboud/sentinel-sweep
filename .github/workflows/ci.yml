@@ -127,6 +127,49 @@ jobs:
           await Promise.all(['c1', 'c2', 'c3'].map((label) => attempt(label)));
           NODE
 
+      - name: Node spawn-option bisect for the SIGTRAP
+        env:
+          SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          node --input-type=module - <<'NODE'
+          import { spawn } from 'node:child_process';
+          import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+          const chrome = process.env.SENTINEL_E2E_CHROME;
+          async function probe(label, options) {
+            const profile = await mkdtemp('/tmp/.chrome-bisect-');
+            for (const d of ['.config', '.cache', '.tmp', '.crash-dumps']) {
+              await mkdir(`${profile}/${d}`, { mode: 0o700 });
+            }
+            const minimalEnv = {
+              HOME: profile, XDG_CONFIG_HOME: `${profile}/.config`,
+              XDG_CACHE_HOME: `${profile}/.cache`, TMPDIR: `${profile}/.tmp`,
+              LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin',
+            };
+            const args = ['--headless=new', '--remote-debugging-address=127.0.0.1',
+              '--remote-debugging-port=0', `--user-data-dir=${profile}`,
+              '--no-first-run', '--no-default-browser-check',
+              '--disable-background-networking', '--disable-component-update',
+              '--disable-default-apps', '--disable-extensions',
+              '--disable-popup-blocking', '--disable-sync', '--disable-breakpad',
+              '--disable-crash-reporter', '--noerrdialogs',
+              `--crash-dumps-dir=${profile}/.crash-dumps`,
+              '--metrics-recording-only', '--disable-dev-shm-usage', 'about:blank'];
+            const resolved = { detached: true, env: minimalEnv, stdio: ['ignore', 'ignore', 'pipe'], ...options };
+            const child = spawn(chrome, args, resolved);
+            const verdict = await new Promise((resolve) => {
+              const timer = setTimeout(() => resolve('ALIVE'), 6000);
+              child.once('exit', (code, signal) => { clearTimeout(timer); resolve(`DIED code=${code} signal=${signal}`); });
+            });
+            console.log(`BISECT[${label}]: ${verdict}`);
+            try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+            await rm(profile, { recursive: true, force: true }).catch(() => {});
+          }
+          await probe('replica          ', {});
+          await probe('detached:false   ', { detached: false });
+          await probe('stdio:inherit    ', { stdio: 'inherit' });
+          await probe('env:full         ', { env: process.env });
+          NODE
+
       - name: Run complete test suite with mandatory Chrome
         env:
           SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
