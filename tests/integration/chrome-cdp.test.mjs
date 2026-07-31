@@ -209,9 +209,10 @@ test('launches a fresh Chrome profile, speaks CDP, captures PNG, and terminates 
     assert.equal(path.dirname(profileDir), '/tmp');
     assert.match(
       path.basename(profileDir),
-      new RegExp(`^\\.chrome-profile-${process.pid}-[a-f0-9]{32}$`, 'u'),
+      new RegExp(`^\\.chrome-profile-${process.pid}-[a-f0-9]{12}$`, 'u'),
     );
-    assert.ok(profileDir.length <= 96);
+    // 50 is the measured Chrome socket-path budget (see createFreshProfile).
+    assert.ok(profileDir.length <= 50);
     assert.equal(session.args.includes(`--user-data-dir=${profileDir}`), true);
     assert.equal(session.args.some((argument) => /bearer|authorization|secret/iu.test(argument)), false);
     await access(profileDir);

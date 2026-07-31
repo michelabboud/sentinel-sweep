@@ -140,7 +140,11 @@ async function createFreshProfile() {
   const parentIdentity = await validatedProfileParent();
   let suffix;
   try {
-    suffix = randomBytes(16).toString('hex');
+    // 12 hex chars (48 bits) keep the exclusive-create collision-safe while
+    // fitting the length budget below; the pid stays because the e2e suite
+    // attributes spawned Chrome processes by the `.chrome-profile-<pid>-`
+    // marker.
+    suffix = randomBytes(6).toString('hex');
   } catch {
     throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile name could not be generated');
   }
@@ -148,7 +152,12 @@ async function createFreshProfile() {
     CHROME_PROFILE_PARENT,
     `${CHROME_PROFILE_PREFIX}${process.pid}-${suffix}`,
   );
-  if (profile.length > 96) {
+  // Chrome binds a unix socket inside TMPDIR (= <profile>/.tmp); sun_path
+  // tops out at 108 bytes and Chrome CHECK-crashes with SIGTRAP when the
+  // combined path exceeds it. Measured on CI Chrome-for-Testing 148
+  // (2026-07-31): a 58-char profile path traps, 50 survives. 50 is the
+  // enforced budget; the generated shape above peaks at 41.
+  if (profile.length > 50) {
     throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile path is too long');
   }
   try {
