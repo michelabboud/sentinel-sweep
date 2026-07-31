@@ -4,10 +4,25 @@ All notable changes to Sentinel are documented in this file.
 
 ## [2.0.0] - 2026-07-31
 
-> Release evidence: full suite 10/10 plus packaged clean-install and
-> plugin-install proofs on release candidate `87b6dc3` (Node 24.18.0 on the
-> documented 18+ floor, Chrome 148.0.7778.178, Claude Code 2.1.220). Remote
-> gates (tag, GitHub release, downloaded archive) are recorded in `PROGRESS.md`.
+> Release evidence: **CI green on `c62d1c1`** (run 30661388309) — suite 10/10,
+> lint, audit, `clean-install: PASS (node 18.20.8)` and `plugin-install: PASS`,
+> all on the exact documented Node floor with Chrome 148.0.7778.178. Proven
+> locally as well on Node 24.18.0. Security seal: SEAL-WITH-NOTES, 0 critical /
+> 0 high (`docs/reports/2026-07-31-sentinel-2.0-seal-review.md`).
+
+### Fixed during release hardening (post-seal)
+
+- Chrome profile paths now fit the unix-socket `sun_path` budget. Chrome
+  CHECK-crashed with SIGTRAP before CDP readiness whenever the generated
+  profile path grew past ~58 characters, which made every browser check fail
+  on hosts with the previous 32-hex naming. Suffix is now 12 hex (48 bits),
+  budget enforced at 50.
+- `CHROME_EXITED_EARLY` now reports the exit code, signal, and Chrome's
+  pre-ready stderr tail; it previously carried no evidence at all.
+- Browser-internal (`chrome-extension:` / `chrome:`) service workers are no
+  longer treated as page-initiated. Chrome's own component-extension worker
+  respawned after each close, echoing a false `SERVICE_WORKER_BLOCKED` per
+  route. Page-initiated registration is still blocked and reported.
 
 ### Breaking changes
 
