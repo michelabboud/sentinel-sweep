@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "2.0",
+  "operations": [
+    {
+      "id": "op:delete:/api/items/{itemId}",
+      "method": "DELETE",
+      "path": "/api/items/{itemId}",
+      "sourceClaimsSafe": true,
+      "approved": true
+    }
+  ]
+}

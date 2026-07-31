@@ -225,6 +225,26 @@ test('setup reports missing discovery candidates as unavailable without publishi
   assert.deepEqual((await readdir(target)).sort(), ['openapi.json']);
 });
 
+test('process CLI exposes the documented multi-service config code end to end', async (t) => {
+  const { config, target } = await fixture(t, {
+    approvedOrigins: [
+      'http://127.0.0.1:41001',
+      'http://127.0.0.1:41002',
+    ],
+  });
+  const result = await spawnCli([
+    'setup', '--target', target, '--config', config, '--json',
+  ]);
+
+  assert.deepEqual(assertSingleJsonDocument(result, 1), {
+    ok: false,
+    code: 'CONFIG_MULTI_SERVICE_UNSUPPORTED',
+    message: 'Trusted config supports at most one canonical origin and one service per invocation',
+  });
+  assert.ok(!result.stdout.includes(config));
+  assert.ok(!result.stdout.includes(target));
+});
+
 test('setup readiness is derived from executable policy decisions for each mode', async (t) => {
   const app = await loopbackServer(t);
   const blocked = await fixture(t, {

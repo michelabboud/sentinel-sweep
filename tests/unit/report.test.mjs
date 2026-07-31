@@ -7,6 +7,7 @@ import test from 'node:test';
 import { exportCollection } from '../../runtime/export.mjs';
 import { appendHistory } from '../../runtime/history.mjs';
 import { findingId } from '../../runtime/lib/identity.mjs';
+import { createAvailableRedactor } from '../../runtime/lib/secrets.mjs';
 import {
   renderDashboard,
   renderMarkdown,
@@ -679,6 +680,23 @@ test('exports deterministic parseable Postman, Insomnia, and Bruno artifacts wit
         .every((entry) => /\{[\s\S]*\}/u.test(entry.content)));
     }
   }
+});
+
+test('keeps authenticated Bruno artifacts secret-free under the runtime redactor', () => {
+  const { manifest, config } = exportFixture();
+  const artifacts = exportCollection({ format: 'bruno', manifest, config });
+  const redact = createAvailableRedactor(
+    ['env:SENTINEL_ADMIN_TOKEN', 'env:SENTINEL_USER_TOKEN'],
+    {
+      SENTINEL_ADMIN_TOKEN: 'fixture-admin-secret-2026',
+      SENTINEL_USER_TOKEN: 'fixture-user-secret-2026',
+    },
+  );
+
+  for (const entry of artifacts) assert.equal(redact(entry.content), entry.content, entry.path);
+  const requests = artifacts.filter((entry) => entry.path.startsWith('requests/'));
+  assert.ok(requests.some((entry) => entry.content.includes('auth: bearer')));
+  assert.ok(requests.every((entry) => !entry.content.includes('Authorization: Bearer')));
 });
 
 test('rejects WebSocket operations instead of exporting them as HTTP and retains unsweepable HTTP', () => {

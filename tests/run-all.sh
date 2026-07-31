@@ -25,6 +25,7 @@ TESTS=(
   "test-runtime-behavior.sh"
   "test-bump-version.sh"
   "test-feature-coverage.sh"
+  "test-secret-scan.sh"
 )
 
 # Optional tests — run if available but don't fail the suite if runner is missing

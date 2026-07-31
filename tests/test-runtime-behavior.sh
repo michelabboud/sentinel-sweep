@@ -81,7 +81,7 @@ done
 echo ""
 echo "-- Exit and trust semantics --"
 require_fixed 'Exit code `0`' "exit 0 is documented"
-require_fixed 'Exit code `2` means completed-with-findings' "exit 2 is completed-with-findings"
+require_fixed 'Exit code `2` is returned only by `api`, `browser`, or `sweep`' "exit 2 is execution-only completed-with-findings"
 require_fixed 'Exit code `1` means usage, config, or runtime failure' "exit 1 is usage/config/runtime failure"
 require_fixed 'untrusted data' "target and artifact strings are untrusted"
 require_fixed 'Never interpolate' "shell-source interpolation is prohibited"

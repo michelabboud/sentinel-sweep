@@ -101,8 +101,8 @@ test('every supported host subcommand maps once to the exact core argv contract'
   assert.match(body, /`--run`[\s\S]{0,80}existing run/u);
   assert.match(body, /duplicate[\s\S]{0,80}flag[\s\S]{0,80}reject/iu);
   assert.match(body, /aliases[\s\S]{0,80}`--flag=value`[\s\S]{0,80}extra positional/iu);
-  assert.match(body, /exit code `0`[\s\S]{0,100}clean/iu);
-  assert.match(body, /exit code `2`[\s\S]{0,100}completed-with-findings/iu);
+  assert.match(body, /exit code `0`[\s\S]{0,180}clean execution result/iu);
+  assert.match(body, /exit code `2` is returned only[\s\S]{0,180}completed with critical\/error findings/iu);
   assert.match(body, /exit code `1`[\s\S]{0,100}usage[\s\S]{0,60}config[\s\S]{0,60}runtime/iu);
 });
 

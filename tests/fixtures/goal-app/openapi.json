@@ -1,0 +1,246 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Sentinel 2.0 goal fixture",
+    "version": "1.0.0"
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/public": {
+      "get": {
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Public status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "User profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Admin status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drift": {
+      "get": {
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Schema drift fixture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cross-origin": {
+      "get": {
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Cross-origin redirect must be blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/malformed": {
+      "get": {
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Malformed JSON fixture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/oversized": {
+      "get": {
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Oversized response fixture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/{itemId}": {
+      "parameters": [
+        {
+          "name": "itemId",
+          "in": "path",
+          "required": true,
+          "example": "fixture-item",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "responses": {
+          "204": {
+            "description": "Deleted item"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "PublicStatus": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "UserProfile": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "AdminStatus": {
+        "type": "object",
+        "properties": {
+          "healthy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "healthy"
+        ]
+      },
+      "ItemCreate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "Item": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      }
+    }
+  }
+}

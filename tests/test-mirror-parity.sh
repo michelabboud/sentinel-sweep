@@ -10,6 +10,13 @@ PASS=0
 FAIL=0
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MIRROR="$PROJECT_ROOT/plugins/sentinel"
+EXPECTED_INVENTORY="$(mktemp)"
+ACTUAL_INVENTORY="$(mktemp)"
+
+cleanup() {
+  rm -f -- "$EXPECTED_INVENTORY" "$ACTUAL_INVENTORY"
+}
+trap cleanup EXIT
 
 pass() {
   echo -e "  ${GREEN}PASS${NC} $1"
@@ -24,53 +31,98 @@ fail() {
 echo "=== Mirror Parity Tests ==="
 echo ""
 
-# Define pairs to compare: root-relative-path -> mirror-relative-path
-# Format: "root_path|mirror_path"
-PAIRS=(
-  "agents/manifest-generator.md|agents/manifest-generator.md"
-  "agents/api-sweeper.md|agents/api-sweeper.md"
-  "agents/browser-sweeper.md|agents/browser-sweeper.md"
-  "skills/run/SKILL.md|skills/run/SKILL.md"
-  "commands/sentinel.md|commands/sentinel.md"
-  "settings.json|settings.json"
-  "LICENSE|LICENSE"
-  "README.md|README.md"
+# Root is canonical. These directory trees and top-level assets are the complete
+# installable Claude plugin inventory. Codex assets remain root-only launchers.
+PARITY_DIRS=(
+  ".claude-plugin"
+  "agents"
+  "commands"
+  "runtime"
+  "schemas"
+  "skills"
 )
 
-for pair in "${PAIRS[@]}"; do
-  root_rel="${pair%%|*}"
-  mirror_rel="${pair##*|}"
+PARITY_FILES=(
+  "VERSION"
+  "package.json"
+  "settings.json"
+  "LICENSE"
+  "README.md"
+  "SECURITY.md"
+  "CONTRIBUTING.md"
+  "CHANGELOG.md"
+  "CLAUDE.md"
+  "ARCHITECTURE.md"
+)
+
+echo "-- Canonical inventory --"
+
+for dir in "${PARITY_DIRS[@]}"; do
+  if [[ ! -d "$PROJECT_ROOT/$dir" || -L "$PROJECT_ROOT/$dir" ]]; then
+    fail "$dir: canonical directory is missing or is a symlink"
+    continue
+  fi
+  if find "$PROJECT_ROOT/$dir" -type l -print -quit | grep -q .; then
+    fail "$dir: canonical directory contains a symlink"
+  fi
+  while IFS= read -r -d '' root_file; do
+    printf '%s\n' "${root_file#$PROJECT_ROOT/}" >> "$EXPECTED_INVENTORY"
+  done < <(find "$PROJECT_ROOT/$dir" -type f -print0)
+done
+
+for root_rel in "${PARITY_FILES[@]}"; do
+  if [[ ! -f "$PROJECT_ROOT/$root_rel" || -L "$PROJECT_ROOT/$root_rel" ]]; then
+    fail "$root_rel: canonical file is missing or is a symlink"
+    continue
+  fi
+  printf '%s\n' "$root_rel" >> "$EXPECTED_INVENTORY"
+done
+
+sort -u -o "$EXPECTED_INVENTORY" "$EXPECTED_INVENTORY"
+
+if [[ ! -d "$MIRROR" || -L "$MIRROR" ]]; then
+  fail "plugins/sentinel: mirror is missing or is a symlink"
+else
+  if find "$MIRROR" -type l -print -quit | grep -q .; then
+    fail "plugins/sentinel: mirror contains a symlink"
+  fi
+  while IFS= read -r -d '' mirror_file; do
+    printf '%s\n' "${mirror_file#$MIRROR/}" >> "$ACTUAL_INVENTORY"
+  done < <(find "$MIRROR" -type f -print0)
+fi
+
+sort -u -o "$ACTUAL_INVENTORY" "$ACTUAL_INVENTORY"
+
+if diff -u "$EXPECTED_INVENTORY" "$ACTUAL_INVENTORY" >/dev/null; then
+  pass "mirror file inventory exactly matches canonical shipped assets"
+else
+  fail "mirror file inventory differs from canonical shipped assets"
+  diff -u "$EXPECTED_INVENTORY" "$ACTUAL_INVENTORY" | sed -n '1,80p' | sed 's/^/    /' || true
+fi
+
+echo ""
+echo "-- Byte parity --"
+
+while IFS= read -r root_rel; do
+  [[ -n "$root_rel" ]] || continue
 
   root_file="$PROJECT_ROOT/$root_rel"
-  mirror_file="$MIRROR/$mirror_rel"
+  mirror_file="$MIRROR/$root_rel"
 
-  # Check both files exist
-  if [[ ! -f "$root_file" ]]; then
-    # Root file doesn't exist — skip (may be optional like commands/)
-    if [[ ! -f "$mirror_file" ]]; then
-      pass "$root_rel: neither root nor mirror exists (OK, optional)"
-    else
-      fail "$root_rel: exists in mirror but not in root"
-    fi
+  if [[ ! -f "$mirror_file" || -L "$mirror_file" ]]; then
+    fail "$root_rel: missing from mirror or is a symlink"
     continue
   fi
 
-  if [[ ! -f "$mirror_file" ]]; then
-    fail "$root_rel: exists in root but not in mirror ($mirror_rel)"
-    continue
-  fi
-
-  # Compare file contents
-  if diff -q "$root_file" "$mirror_file" > /dev/null 2>&1; then
+  if cmp -s "$root_file" "$mirror_file"; then
     pass "$root_rel matches mirror"
   else
     fail "$root_rel DIFFERS from mirror"
-    # Show first difference for debugging
     echo -e "    ${RED}First difference:${NC}"
-    diff --unified=1 "$root_file" "$mirror_file" | head -15 | sed 's/^/    /'
+    diff --unified=1 "$root_file" "$mirror_file" | head -15 | sed 's/^/    /' || true
     echo ""
   fi
-done
+done < "$EXPECTED_INVENTORY"
 
 # --- Summary ---
 echo ""

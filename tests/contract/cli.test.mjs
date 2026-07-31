@@ -13,6 +13,7 @@ import {
   loadBundledSchema,
   validateAgainstSchema,
 } from '../../runtime/lib/schema.mjs';
+import { SentinelError } from '../../runtime/lib/errors.mjs';
 
 const ROOT = new URL('../../', import.meta.url);
 const CLI = new URL('../../runtime/cli.mjs', import.meta.url);
@@ -412,6 +413,35 @@ test('emits one secret-free JSON document for parser and dispatched-command fail
   });
   assert.ok(!dispatchOut.read().includes('TOKEN-canary'));
   assert.ok(!dispatchOut.read().includes('TOKEN-dispatch-canary'));
+});
+
+test('surfaces only the documented multi-service domain code with a fixed safe message', async () => {
+  const canary = 'sentinel-domain-message-canary';
+  const stdout = capture();
+  const stderr = capture();
+  const exit = await runCli([
+    'setup', '--target', TARGET, '--config', CONFIG, '--json',
+  ], {
+    dispatch: async () => {
+      throw new SentinelError(
+        'CONFIG_MULTI_SERVICE_UNSUPPORTED',
+        `hostile message ${canary} /private/operator/config.json`,
+        { secret: canary, path: '/private/operator/config.json' },
+      );
+    },
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  assert.equal(exit, 1);
+  assert.equal(stderr.read(), '');
+  assert.deepEqual(JSON.parse(stdout.read()), {
+    ok: false,
+    code: 'CONFIG_MULTI_SERVICE_UNSUPPORTED',
+    message: 'Trusted config supports at most one canonical origin and one service per invocation',
+  });
+  assert.ok(!stdout.read().includes(canary));
+  assert.ok(!stdout.read().includes('/private/operator/config.json'));
 });
 
 test('top-level CLI help, version, and failures honor stable exit and output framing', async () => {

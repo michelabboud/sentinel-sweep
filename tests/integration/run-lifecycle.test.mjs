@@ -175,6 +175,24 @@ test('accepts canonical findings returned after run-scoped execution in hidden s
   assert.equal(await readlink(path.join(reportRoot, 'latest')), findings.runId);
 });
 
+test('exposes a subprocess-stable descriptor anchor for run-scoped execution', async (t) => {
+  const reportRoot = await temporaryRoot(t, 'sentinel-run-subprocess-anchor-');
+  const findings = findingsFor('2026-07-18T13-00-00-004Z');
+
+  await publishRun({
+    reportRoot,
+    runId: findings.runId,
+    findings,
+    writeArtifacts: async (boundary) => {
+      assert.match(
+        boundary.root,
+        new RegExp(`^/proc/${process.pid}/fd/[0-9]+/\\.sentinel-run-staging-`, 'u'),
+      );
+      await writeRequiredArtifacts(boundary, findings);
+    },
+  });
+});
+
 test('aborts staging on callback or required-artifact failure without metadata publication', async (t) => {
   const callbackRoot = await temporaryRoot(t, 'sentinel-run-abort-callback-');
   const callbackFindings = findingsFor('2026-07-18T13-00-01-000Z');

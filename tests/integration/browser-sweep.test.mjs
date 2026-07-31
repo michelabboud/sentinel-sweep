@@ -346,7 +346,7 @@ function browserManifest(routes) {
 function browserConfig(origin, chromePath, overrides = {}) {
   return {
     approvedOrigins: [origin],
-    services: [{ name: 'web', approvedOrigin: origin, sourcePath: '.' }],
+    services: [{ name: 'web', approvedOrigin: origin }],
     roles: {
       admin: { tokenRef: 'env:SENTINEL_BROWSER_ADMIN_TOKEN' },
       user: { tokenRef: 'env:SENTINEL_BROWSER_USER_TOKEN' },
@@ -364,7 +364,11 @@ function browserConfig(origin, chromePath, overrides = {}) {
 
 async function findChromeOrSkip(t) {
   try {
-    return await resolveChromeExecutable({});
+    const configured = process.env.SENTINEL_E2E_CHROME;
+    if (configured !== undefined && !path.isAbsolute(configured)) {
+      throw new Error('SENTINEL_E2E_CHROME must be an absolute executable path');
+    }
+    return await resolveChromeExecutable({ executablePath: configured });
   } catch (error) {
     if (error?.code === 'CHROME_NOT_FOUND'
         && process.env.SENTINEL_ALLOW_MISSING_CHROME_FOR_UNIT_TESTS === '1') {
@@ -444,6 +448,11 @@ test('runs real browser/RBAC/console/network/layout checks without leaking origi
     runBoundary,
     targetBoundary,
   });
+  assert.equal(
+    observations.some((entry) => entry.reasonCode === 'BROWSER_EVENT_HANDLER_FAILED'),
+    false,
+    JSON.stringify(observations),
+  );
 
   const ready = observationFor(observations, 'route:/ok', 'DOCUMENT_STATUS_EXPECTED');
   assert.ok(ready, JSON.stringify(observations));

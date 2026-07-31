@@ -31,6 +31,10 @@ require_in_file() {
   fi
 }
 
+contains_negation() {
+  grep -Eqi '\b(no|not|never|unsupported|does not|do not|cannot|can.t|reject(ed|s)?|obsolete|old|unproved|intentionally|outside|separate)\b'
+}
+
 echo "=== Sentinel 2.0 Feature Coverage Tests ==="
 echo ""
 
@@ -56,6 +60,110 @@ for file in "${CLAIM_FILES[@]}"; do
     pass "$rel avoids unsupported broad execution claims"
   fi
 done
+
+echo ""
+echo "-- Honest public root and Codex documentation --"
+PUBLIC_CLAIM_FILES=(
+  "$PROJECT_ROOT/README.md"
+  "$PROJECT_ROOT/ARCHITECTURE.md"
+  "$PROJECT_ROOT/CLAUDE.md"
+  "$PROJECT_ROOT/SECURITY.md"
+  "$PROJECT_ROOT/CONTRIBUTING.md"
+  "$PROJECT_ROOT/codex/CODEX.md"
+  "$PROJECT_ROOT/codex/README.md"
+  "$PROJECT_ROOT/codex/commands/sentinel.md"
+  "$PROJECT_ROOT/codex/agents/manifest-generator.md"
+  "$PROJECT_ROOT/codex/agents/api-sweeper.md"
+  "$PROJECT_ROOT/codex/agents/browser-sweeper.md"
+)
+
+for file in "${PUBLIC_CLAIM_FILES[@]}"; do
+  rel="${file#$PROJECT_ROOT/}"
+  if [[ ! -f "$file" ]]; then
+    fail "$rel is missing"
+    continue
+  fi
+
+  unsupported=false
+  while IFS= read -r line; do
+    if grep -Eqi '(14\+ frameworks|any web app|all frameworks|full parser)' <<< "$line"; then
+      if ! contains_negation <<< "$line"; then
+        unsupported=true
+      fi
+    fi
+    if grep -Eqi '\b(supports?|executes?|discovers?|parses?)\b[^.!]{0,100}\b(GraphQL|gRPC|tRPC|ORMs?|Playwright[- ]?MCP|multiple services|multi-service)\b' <<< "$line"; then
+      if ! contains_negation <<< "$line"; then
+        unsupported=true
+      fi
+    fi
+    if grep -Eqi '\b(supports?|performs?|provides?|creates?|opens?)\b[^.!]{0,100}(automatic(ally)? (fix|repair)|direct PR (creation|mutation)|a PR)|(automatic(ally)? (fix|repair)|direct PR (creation|mutation))[^.!]{0,40}\b(is|are) supported\b' <<< "$line"; then
+      if ! contains_negation <<< "$line"; then
+        unsupported=true
+      fi
+    fi
+    if grep -Eqi '(^|[[:space:]`/])sentinel[[:space:]:/]+(fix|review|init|pr)([[:space:]`]|$)|\|[[:space:]]*`(fix|review|init|pr)`[[:space:]]*\|' <<< "$line"; then
+      unsupported=true
+    fi
+  done < "$file"
+
+  if $unsupported; then
+    fail "$rel contains a current broad, multi-service, mutation, or unsupported-command claim"
+  else
+    pass "$rel keeps current claims within the tested Sentinel 2.0 slice"
+  fi
+done
+
+SINGLE_SERVICE_DOCS=(
+  "$PROJECT_ROOT/README.md"
+  "$PROJECT_ROOT/ARCHITECTURE.md"
+  "$PROJECT_ROOT/CLAUDE.md"
+  "$PROJECT_ROOT/codex/CODEX.md"
+  "$PROJECT_ROOT/codex/README.md"
+)
+for file in "${SINGLE_SERVICE_DOCS[@]}"; do
+  rel="${file#$PROJECT_ROOT/}"
+  if grep -Eqi 'one canonical (approved )?origin|one (configured )?service|one service per invocation|single-service' "$file"; then
+    pass "$rel states the one-service invocation boundary"
+  else
+    fail "$rel must state the one-service invocation boundary"
+  fi
+done
+
+# CHANGELOG is deliberately not part of PUBLIC_CLAIM_FILES: historical release
+# evidence may preserve superseded claims as long as current docs narrow them.
+pass "CHANGELOG historical evidence is excluded from current-claim enforcement"
+
+echo ""
+echo "-- Superseded and legacy documentation labels --"
+for rel in docs/2026-03-15-sentinel-design.md docs/2026-03-15-sentinel-plan.md; do
+  opening=$(head -n 20 "$PROJECT_ROOT/$rel")
+  if grep -Eqi 'SUPERSEDED 1\.x' <<< "$opening" \
+      && grep -qF 'adr/0001-deterministic-trusted-core.md' <<< "$opening" \
+      && grep -qF 'superpowers/specs/2026-07-18-sentinel-2.0-goal-hardening-design.md' <<< "$opening" \
+      && grep -qF 'superpowers/plans/2026-07-18-sentinel-2.0-goal-hardening.md' <<< "$opening"; then
+    pass "$rel is prominently superseded by the approved 2.0 design"
+  else
+    fail "$rel must open with linked SUPERSEDED 1.x guidance"
+  fi
+done
+
+for rel in docs/example-report/README.md docs/example-report/sweep.md; do
+  opening=$(head -n 16 "$PROJECT_ROOT/$rel")
+  if grep -Eqi 'LEGACY 1\.x EXAMPLE' <<< "$opening" \
+      && grep -Eqi 'not (a )?current Sentinel 2\.0' <<< "$opening"; then
+    pass "$rel is prominently labeled as non-current legacy output"
+  else
+    fail "$rel must open with a non-current LEGACY 1.x EXAMPLE label"
+  fi
+done
+
+if grep -RIEq --include='*.md' --include='*.sh' --include='*.py' \
+    -- '--dry-run|subagent-briefs|report-synthesizer' \
+    "$PROJECT_ROOT/codex"; then
+  fail "Codex delivery assets retain a removed 1.x command or brief flow"
+else
+  pass "Codex delivery assets contain no removed dry-run or subagent-brief flow"
+fi
 
 echo ""
 echo "-- Thin-host command surface --"

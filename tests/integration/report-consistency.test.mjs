@@ -919,7 +919,7 @@ test('bounds streamed report-root lock work without materializing every entry', 
   const originalOpendir = fsPromises.opendir;
   let intercepted = false;
   fsPromises.opendir = async (candidate, ...arguments_) => {
-    if (!intercepted && String(candidate).startsWith('/proc/self/fd/')) {
+    if (!intercepted && String(candidate).startsWith(`/proc/${process.pid}/fd/`)) {
       intercepted = true;
       let index = 0;
       return {
