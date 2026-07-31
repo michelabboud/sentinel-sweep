@@ -565,7 +565,14 @@ export async function launchChrome({
         else resolve(value);
       };
       const onError = () => finish(chromeError('CHROME_LAUNCH_FAILED', 'Chrome launch failed'));
-      const onExit = () => finish(chromeError('CHROME_EXITED_EARLY', 'Chrome exited before CDP was ready'));
+      // The exit code, signal, and Chrome's own stderr tail are the only
+      // evidence an early exit leaves behind; without them the failure is
+      // undiagnosable on remote hosts (proven on CI, 2026-07-31). Pre-ready
+      // stderr is Chrome's log output — credentials never appear in it.
+      const onExit = () => finish(chromeError(
+        'CHROME_EXITED_EARLY',
+        `Chrome exited before CDP was ready (exit=${child.exitCode ?? 'null'}, signal=${child.signalCode ?? 'null'}); stderr tail: ${stderr.slice(-600).trim() || '(empty)'}`,
+      ));
       const timeout = setTimeout(
         () => finish(chromeError('CHROME_LAUNCH_TIMEOUT', 'Chrome CDP readiness timed out')),
         timeoutMs,
