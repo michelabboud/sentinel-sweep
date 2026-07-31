@@ -103,6 +103,30 @@ jobs:
             --disable-background-networking --disable-breakpad \
             --disable-crash-reporter --disable-dev-shm-usage
 
+      - name: Runtime launchChrome smoke (standalone vs concurrent)
+        env:
+          SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          # Bisects harness-vs-runtime: does the runtime's own launcher die
+          # standalone, or only when several Chromes race (node --test runs
+          # test files concurrently)?
+          node --input-type=module - <<'NODE'
+          import { launchChrome } from './runtime/browser/chrome.mjs';
+          const chrome = process.env.SENTINEL_E2E_CHROME;
+          async function attempt(label) {
+            try {
+              const session = await launchChrome({ executablePath: chrome, headless: true, timeoutMs: 15_000 });
+              console.log(`RUNTIME-SMOKE[${label}]: ALIVE pid=${session.pid}`);
+              await session.close();
+              console.log(`RUNTIME-SMOKE[${label}]: closed cleanly`);
+            } catch (error) {
+              console.log(`RUNTIME-SMOKE[${label}]: FAILED ${error.code}: ${error.message.slice(0, 300)}`);
+            }
+          }
+          await attempt('standalone');
+          await Promise.all(['c1', 'c2', 'c3'].map((label) => attempt(label)));
+          NODE
+
       - name: Run complete test suite with mandatory Chrome
         env:
           SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
