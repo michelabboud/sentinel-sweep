@@ -1,6 +1,6 @@
 ---
 name: sentinel-codex-orchestrator
-version: 2.0.0-codex.1
+version: 2.0.1-codex.1
 description: Thin Codex host for Sentinel 2.0 deterministic QA through the fixed packaged trusted-core wrapper.
 ---
 

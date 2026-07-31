@@ -10,7 +10,6 @@ NC='\033[0m'
 PASS=0
 FAIL=0
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RELEASE_VERSION="2.0.0"
 
 pass() {
   echo -e "  ${GREEN}PASS${NC} $1"
@@ -72,10 +71,14 @@ else
   exit 1
 fi
 
-if [[ "$EXPECTED" == "$RELEASE_VERSION" ]]; then
-  pass "VERSION is the exact Sentinel 2.0.0 release version"
+# VERSION is the source of truth, so this suite validates its SHAPE and then holds
+# every other surface to it. A frozen literal here (it was pinned to 2.0.0) fails
+# every release after the one it was written for, which is a release blocker rather
+# than a safety property — the real guarantee is that nothing drifts from VERSION.
+if [[ "$EXPECTED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  pass "VERSION is valid semver ($EXPECTED)"
 else
-  fail "VERSION must be exactly $RELEASE_VERSION, got $EXPECTED"
+  fail "VERSION must be semver (for example, 2.0.1), got $EXPECTED"
 fi
 
 echo ""

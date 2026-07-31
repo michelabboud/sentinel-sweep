@@ -1,6 +1,10 @@
 import path from 'node:path';
 
 import { SentinelError } from '../lib/errors.mjs';
+import {
+  MAX_DISCOVERY_INPUT_BYTES,
+  MAX_VUE_LITERAL_DEPTH,
+} from './limits.mjs';
 
 const IDENTIFIER_START = /[A-Za-z_$]/u;
 const IDENTIFIER_PART = /[A-Za-z0-9_$]/u;
@@ -277,9 +281,9 @@ function tokenize(source) {
   return tokens;
 }
 
-function addGap(state, kind, file, pointer) {
+function addGap(state, kind, file, pointer, details = {}) {
   const gap = `${kind}:${file}#${pointer}`;
-  if (!state.gaps.has(gap)) state.gaps.set(gap, { kind, file, pointer });
+  if (!state.gaps.has(gap)) state.gaps.set(gap, { kind, file, pointer, ...details });
 }
 
 function gapKind(pointer) {
@@ -321,7 +325,7 @@ class LiteralParser {
     };
   }
 
-  parseValue(index, pointer, terminators = new Set([',', '}', ']'])) {
+  parseValue(index, pointer, terminators = new Set([',', '}', ']']), depth = 0) {
     const token = this.tokens[index];
     if (token === undefined) {
       addGap(this.state, 'unterminated-expression', this.file, pointer);
@@ -371,8 +375,20 @@ class LiteralParser {
         terminators,
       );
     }
-    if (token.value === '{') return this.parseObject(index, pointer);
-    if (token.value === '[') return this.parseArray(index, pointer);
+    if (token.value === '{' || token.value === '[') {
+      if (depth >= MAX_VUE_LITERAL_DEPTH) {
+        addGap(this.state, 'depth-limit', this.file, pointer, {
+          limit: MAX_VUE_LITERAL_DEPTH,
+        });
+        return {
+          node: { kind: 'unsupported', pointer },
+          next: skipExpression(this.tokens, index, terminators),
+        };
+      }
+      return token.value === '{'
+        ? this.parseObject(index, pointer, depth + 1)
+        : this.parseArray(index, pointer, depth + 1);
+    }
 
     const kind = token.type === 'invalid' ? 'invalid-literal' : gapKind(pointer);
     addGap(this.state, kind, this.file, pointer);
@@ -382,7 +398,7 @@ class LiteralParser {
     };
   }
 
-  parseArray(index, pointer) {
+  parseArray(index, pointer, depth = 1) {
     const items = [];
     let itemIndex = 0;
     let cursor = index + 1;
@@ -397,7 +413,7 @@ class LiteralParser {
         cursor = skipExpression(this.tokens, cursor + 1, new Set([',', ']']));
         items.push({ kind: 'unsupported', pointer: itemPointer });
       } else {
-        const parsed = this.parseValue(cursor, itemPointer, new Set([',', ']']));
+        const parsed = this.parseValue(cursor, itemPointer, new Set([',', ']']), depth);
         items.push(parsed.node);
         cursor = parsed.next;
       }
@@ -411,7 +427,7 @@ class LiteralParser {
     return { node: { kind: 'array', items, pointer }, next: cursor + 1 };
   }
 
-  parseObject(index, pointer) {
+  parseObject(index, pointer, depth = 1) {
     const entries = new Map();
     let cursor = index + 1;
     while (cursor < this.tokens.length && this.tokens[cursor].value !== '}') {
@@ -449,7 +465,12 @@ class LiteralParser {
         entries.set(key, { kind: 'unsupported', pointer: propertyPointer });
         cursor = skipExpression(this.tokens, cursor, new Set([',', '}']));
       } else {
-        const parsed = this.parseValue(cursor + 1, propertyPointer, new Set([',', '}']));
+        const parsed = this.parseValue(
+          cursor + 1,
+          propertyPointer,
+          new Set([',', '}']),
+          depth,
+        );
         entries.set(key, parsed.node);
         cursor = parsed.next;
       }
@@ -879,6 +900,22 @@ function parseRouterSource(source, file, state) {
 }
 
 function diagnosticForGap(gap) {
+  if (gap.kind === 'size-limit') {
+    return {
+      code: 'VUE_SIZE_LIMIT',
+      message: `Vue Router discovery input ${gap.file} exceeds the ${gap.limit}-byte limit`,
+      sourcePath: gap.file,
+      pointer: gap.pointer,
+    };
+  }
+  if (gap.kind === 'depth-limit') {
+    return {
+      code: 'VUE_DEPTH_LIMIT',
+      message: `Vue Router discovery input ${gap.file} exceeds the literal nesting limit of ${gap.limit}`,
+      sourcePath: gap.file,
+      pointer: gap.pointer,
+    };
+  }
   return {
     code: `VUE_${gap.kind.replaceAll('-', '_').toUpperCase()}`,
     message: `Vue Router discovery encountered unsupported ${gap.kind.replaceAll('-', ' ')}`,
@@ -896,7 +933,16 @@ export async function discoverVueRouter({ boundary, relativePaths } = {}) {
   const state = { gaps: new Map() };
   const records = [];
   for (const relativePath of [...new Set(relativePaths)].sort(compareText)) {
-    const source = await boundary.readText(relativePath);
+    let source;
+    try {
+      source = await boundary.readText(relativePath, { maxBytes: MAX_DISCOVERY_INPUT_BYTES });
+    } catch (error) {
+      if (!(error instanceof SentinelError) || error.code !== 'INPUT_SIZE_LIMIT') throw error;
+      addGap(state, 'size-limit', relativePath, '/', {
+        limit: MAX_DISCOVERY_INPUT_BYTES,
+      });
+      continue;
+    }
     const arrays = parseRouterSource(source, relativePath, state);
     for (const array of arrays) {
       collectRouteRecords(array, '', 'unknown', state, relativePath, records);

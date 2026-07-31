@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { SentinelError } from '../lib/errors.mjs';
+import { MAX_DISCOVERY_INPUT_BYTES } from './limits.mjs';
 
 const METHOD_ORDER = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE'];
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -306,11 +307,35 @@ export async function discoverOpenApi({ boundary, relativePath }) {
     throw discoveryError('OPENAPI_BOUNDARY_INVALID', 'A TargetBoundary is required');
   }
 
+  let source;
+  try {
+    source = await boundary.readText(relativePath, { maxBytes: MAX_DISCOVERY_INPUT_BYTES });
+  } catch (error) {
+    if (error instanceof SentinelError && error.code === 'INPUT_SIZE_LIMIT') {
+      return {
+        coverage: {
+          adapter: 'openapi-json',
+          status: 'partial',
+          gaps: [`size-limit:${relativePath}`],
+        },
+        diagnostics: [{
+          code: 'OPENAPI_SIZE_LIMIT',
+          message: `OpenAPI discovery input ${relativePath} exceeds the ${MAX_DISCOVERY_INPUT_BYTES}-byte limit`,
+          sourcePath: relativePath,
+          pointer: '/',
+        }],
+        routes: [],
+        operations: [],
+        schemas: [],
+      };
+    }
+    if (error instanceof SentinelError) throw error;
+    throw discoveryError('OPENAPI_PARSE_FAILED', 'OpenAPI input must contain valid JSON');
+  }
   let document;
   try {
-    document = JSON.parse(await boundary.readText(relativePath));
-  } catch (error) {
-    if (error instanceof SentinelError) throw error;
+    document = JSON.parse(source);
+  } catch {
     throw discoveryError('OPENAPI_PARSE_FAILED', 'OpenAPI input must contain valid JSON');
   }
   if (!isObject(document)

@@ -6,9 +6,11 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { discoverOpenApi } from '../../runtime/discovery/openapi.mjs';
+import { SentinelError } from '../../runtime/lib/errors.mjs';
 import { TargetBoundary } from '../../runtime/lib/fs-boundary.mjs';
 
 const fixtureDirectory = fileURLToPath(new URL('../fixtures/discovery/', import.meta.url));
+const DISCOVERY_INPUT_LIMIT = 16 * 1024 * 1024;
 
 async function fixtureBoundary() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sentinel-openapi-'));
@@ -54,6 +56,51 @@ test('keeps proven operations while reporting unsupported OpenAPI patterns as st
     'non-json-content:#/paths/~1api~1events/post/requestBody/content/text~1plain',
     'webhook:#/webhooks/newEvent'
   ]);
+});
+
+test('bounds OpenAPI reads and reports an oversized input as coverage evidence', async () => {
+  let observedOptions;
+  const complete = await discoverOpenApi({
+    boundary: {
+      async readText(relativePath, options) {
+        assert.equal(relativePath, 'openapi.json');
+        observedOptions = options;
+        return '{"openapi":"3.1.0","paths":{}}';
+      },
+    },
+    relativePath: 'openapi.json',
+  });
+  assert.deepEqual(observedOptions, { maxBytes: DISCOVERY_INPUT_LIMIT });
+  assert.equal(complete.coverage.status, 'complete');
+
+  const oversized = await discoverOpenApi({
+    boundary: {
+      async readText(relativePath, options) {
+        assert.equal(relativePath, 'oversized.json');
+        assert.deepEqual(options, { maxBytes: DISCOVERY_INPUT_LIMIT });
+        throw new SentinelError(
+          'INPUT_SIZE_LIMIT',
+          'Input exceeds the configured read limit',
+          { maxBytes: DISCOVERY_INPUT_LIMIT },
+        );
+      },
+    },
+    relativePath: 'oversized.json',
+  });
+  assert.deepEqual(oversized.coverage, {
+    adapter: 'openapi-json',
+    status: 'partial',
+    gaps: ['size-limit:oversized.json'],
+  });
+  assert.deepEqual(oversized.diagnostics, [{
+    code: 'OPENAPI_SIZE_LIMIT',
+    message: `OpenAPI discovery input oversized.json exceeds the ${DISCOVERY_INPUT_LIMIT}-byte limit`,
+    sourcePath: 'oversized.json',
+    pointer: '/',
+  }]);
+  assert.deepEqual(oversized.routes, []);
+  assert.deepEqual(oversized.operations, []);
+  assert.deepEqual(oversized.schemas, []);
 });
 
 test('rejects unsupported OpenAPI versions and unsafe document paths', async () => {

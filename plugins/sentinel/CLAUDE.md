@@ -6,7 +6,7 @@ before making release or architecture claims.
 
 ## Product contract
 
-Sentinel 2.0.0 is a deterministic QA runner with a narrow, testable goal:
+Sentinel 2.0.1 is a deterministic QA runner with a narrow, testable goal:
 
 > From a private trusted config, safely discover supported OpenAPI and Vue Router
 > surfaces in an untrusted target, execute only policy-approved API and browser

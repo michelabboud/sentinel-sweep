@@ -5,7 +5,6 @@ import fsPromises, {
   mkdtemp,
   mkdir,
   readFile,
-  readlink,
   rm,
   symlink,
   writeFile,
@@ -67,6 +66,26 @@ test('TargetBoundary reads regular files but rejects symlinks and escapes', asyn
   await assert.rejects(() => boundary.readText('../outside.json'), {
     code: 'PATH_ESCAPE',
   });
+});
+
+test('TargetBoundary readText accepts an exact byte cap and rejects one byte beyond it', async (t) => {
+  const root = await fixture(t);
+  const targetRoot = path.join(root, 'target');
+  const exact = Buffer.from('{"ok":true}\n');
+  await mkdir(targetRoot);
+  await writeFile(path.join(targetRoot, 'exact.json'), exact);
+  await writeFile(path.join(targetRoot, 'oversized.json'), Buffer.concat([exact, Buffer.from(' ')]));
+
+  const boundary = await TargetBoundary.create(targetRoot);
+  assert.equal(
+    await boundary.readText('exact.json', { maxBytes: exact.length }),
+    exact.toString('utf8'),
+  );
+  await assert.rejects(
+    boundary.readText('oversized.json', { maxBytes: exact.length }),
+    (error) => error?.code === 'INPUT_SIZE_LIMIT'
+      && error?.details?.maxBytes === exact.length,
+  );
 });
 
 test('TargetBoundary readText rejects secret-bearing adapter inputs', async (t) => {
@@ -397,24 +416,4 @@ test('RunBoundary creates safe nested directories and synchronizes a binary arti
     await readFile(path.join(runRoot, 'screenshots/failure.png')),
     Buffer.from([137, 80, 78, 71]),
   );
-});
-
-test('RunBoundary atomically replaces the latest symlink without following it', async (t) => {
-  const root = await fixture(t);
-  const reportRoot = path.join(root, 'reports');
-  const runId = '2026-07-18T05-46-00Z';
-  const runRoot = path.join(reportRoot, runId);
-  const victim = path.join(root, 'victim');
-  await mkdir(runRoot, { recursive: true });
-  await mkdir(victim);
-  await writeFile(path.join(victim, 'marker.txt'), 'untouched\n');
-  await symlink(victim, path.join(reportRoot, 'latest'), 'dir');
-
-  const boundary = await RunBoundary.create(runRoot);
-  await boundary.replaceLatest(reportRoot, runId);
-
-  const latest = path.join(reportRoot, 'latest');
-  assert.equal((await lstat(latest)).isSymbolicLink(), true);
-  assert.equal(await readFile(path.join(victim, 'marker.txt'), 'utf8'), 'untouched\n');
-  assert.equal(await readlink(latest), runId);
 });

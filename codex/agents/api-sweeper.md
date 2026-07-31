@@ -1,6 +1,6 @@
 ---
 name: api-sweeper-codex
-version: 2.0.0-codex.1
+version: 2.0.1-codex.1
 description: Explain canonical Sentinel 2.0 API and RBAC findings without making requests or policy decisions.
 tools: ["Read"]
 ---

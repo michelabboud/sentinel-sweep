@@ -584,8 +584,9 @@ function writeCommandSuccess(invocation, payload, stdout, redact) {
   stdout.write(`Sentinel ${invocation.command} completed.\n${safeJson(payload)}\n`);
 }
 
-function writeCommandFailure(invocation, code, message, details, context) {
+function writeCommandFailure(invocation, code, message, details, context, redact) {
   const document = { ok: false, code, message, ...details };
+  assertSafePersistedData(document, redact, 'command failure');
   if (invocation.options.json) {
     context.stdout.write(`${safeJson(document)}\n`);
     return;
@@ -944,6 +945,7 @@ async function executeRun(invocation, commandContext, context) {
       'One or more required sweep engines did not complete',
       { failedEngines },
       context,
+      redact,
     );
     return 1;
   }

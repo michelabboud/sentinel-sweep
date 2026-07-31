@@ -1181,6 +1181,30 @@ test('preserves finite machine reason codes when a secret has the same text', ()
   assert.equal(findings.coverage.diagnostics[0].code, 'VUE_DYNAMIC_ROUTE');
 });
 
+test('preserves registered discovery bound reason codes when a secret has the same text', () => {
+  for (const code of ['OPENAPI_SIZE_LIMIT', 'VUE_DEPTH_LIMIT', 'VUE_SIZE_LIMIT']) {
+    const coverage = {
+      status: 'partial',
+      diagnostics: [{
+        code,
+        message: 'Discovery stopped at a configured bound',
+        sourcePath: 'src/router.js',
+        pointer: '/',
+      }],
+    };
+    const findings = build({
+      coverage,
+      redact: createRedactor(['env:SENTINEL_BOUND_REASON'], {
+        SENTINEL_BOUND_REASON: code,
+      }),
+    });
+
+    assert.equal(findings.coverage.diagnostics[0].code, code);
+    assert.equal(findings.findings.some((entry) => entry.reasonCode === code), true);
+    assert.doesNotThrow(() => validateCanonicalFindings(findings));
+  }
+});
+
 test('accepts a legitimate percentile mean above nearest-rank p99', () => {
   const { manifest, plan } = fixture();
   plan.mode = 'browser';

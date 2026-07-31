@@ -170,6 +170,15 @@ if [[ "$CHANGELOG_FIRST" != "$OLD_VERSION" && "$CHANGELOG_FIRST" != "$NEW_VERSIO
   die "CHANGELOG.md first release must be $OLD_VERSION or $NEW_VERSION"
 fi
 
+# Below, a top entry still headed OLD_VERSION is renamed to NEW_VERSION — correct
+# when that entry is the unreleased one being shipped, but destructive once
+# OLD_VERSION has actually shipped: it would rewrite published release history in
+# place. An existing tag is the evidence that it shipped.
+if [[ "$CHANGELOG_FIRST" == "$OLD_VERSION" ]] \
+  && git -C "$PROJECT_ROOT" rev-parse -q --verify "refs/tags/v${OLD_VERSION}" >/dev/null 2>&1; then
+  die "CHANGELOG.md's top entry is the released v${OLD_VERSION}. Add the ${NEW_VERSION} entry above it first, then re-run this script."
+fi
+
 if [[ "$OLD_VERSION" == "$NEW_VERSION" ]]; then
   echo "Already at version $NEW_VERSION; verifying and repairing mirror parity"
 else

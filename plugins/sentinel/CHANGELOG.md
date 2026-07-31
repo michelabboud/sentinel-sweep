@@ -2,6 +2,50 @@
 
 All notable changes to Sentinel are documented in this file.
 
+## [2.0.1] - 2026-08-01
+
+Post-release hardening: the three LOW findings and one observation from the 2.0.0
+merge-gate seal, plus two release-tooling defects found while shipping this patch.
+No feature work; no change to the supported matrix.
+
+> Release evidence: full suite **10/10** host-side and on CI (exact Node 18.20.8,
+> Chrome 148.0.7778.178), mirror parity 49/49, `clean-install` and `plugin-install`
+> PASS. Independently sealed: **SHIP-2.0.1, 6/6 confirmed safe, 0 defects** — report
+> appended to `docs/reports/2026-07-31-sentinel-2.0-seal-review.md`.
+
+### Changed — one observable behavior change
+
+- **Discovery inputs are now bounded at 16 MiB.** A `.js`/`.json` discovery source
+  larger than that previously got an unbounded read (a multi-gigabyte target file
+  could exhaust process memory); it now yields an `OPENAPI_SIZE_LIMIT` or
+  `VUE_SIZE_LIMIT` coverage diagnostic naming the file and the limit, and coverage
+  goes `partial`. **Under `requireCompleteCoverage` that blocks readiness** — the
+  only way a 2.0.0 sweep's outcome can differ on 2.0.1.
+
+### Fixed
+
+- **Vue Router literal nesting is bounded** (`MAX_VUE_LITERAL_DEPTH`, 64 containers
+  counted from the parse root). Deeply nested literals previously overflowed the V8
+  stack and surfaced as an opaque `CLI_COMMAND_FAILED`; they now degrade to
+  `unsupported` with a `VUE_DEPTH_LIMIT` diagnostic. Fail-closed either way — the
+  improvement is that an operator can now see why.
+- **Removed a dead, weaker `RunBoundary.replaceLatest`.** It was unreachable (the
+  live implementation lives in `history.mjs`) but skipped that path's run-marker and
+  fingerprint checks — a trap for anyone who later wired it up believing the two
+  equivalent. Its coverage was retargeted at the live publication path.
+- **`writeCommandFailure` now redacts internally.** It was the one CLI output sink
+  without its own guard; both existing callers were safe by construction, so this
+  closes a latent gap rather than a live leak. A hostile dynamic detail is now
+  rejected before either stream is written.
+- **`scripts/bump-version.sh` can no longer rewrite a published release entry.**
+  The script renames the CHANGELOG's top heading from the old version to the new
+  one — correct while that entry is unreleased, destructive once it has shipped. It
+  now refuses when a `v<old>` tag exists and tells you to add the new entry first.
+- **`tests/test-version-consistency.sh` no longer pins a frozen release number.**
+  It hardcoded `2.0.0` and failed on any other value, contradicting its own stated
+  contract ("source of truth: VERSION") and blocking every subsequent release. It
+  now validates VERSION's shape and holds every other surface to it.
+
 ## [2.0.0] - 2026-07-31
 
 > Release evidence: **CI green on `c62d1c1`** (run 30661388309) — suite 10/10,

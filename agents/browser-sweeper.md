@@ -3,7 +3,7 @@ name: browser-sweeper
 description: "Explain canonical Sentinel 2.0 browser findings without navigating, executing, or changing target data"
 model: sonnet
 tools: ["Read"]
-version: 2.0.0
+version: 2.0.1
 ---
 
 # Canonical browser findings explainer

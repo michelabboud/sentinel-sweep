@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { MAX_VUE_LITERAL_DEPTH } from '../../runtime/discovery/limits.mjs';
 import { discoverVueRouter } from '../../runtime/discovery/vue-router.mjs';
+import { SentinelError } from '../../runtime/lib/errors.mjs';
 import { TargetBoundary } from '../../runtime/lib/fs-boundary.mjs';
 
 const fixtureDirectory = fileURLToPath(new URL('../fixtures/discovery/', import.meta.url));
+const DISCOVERY_INPUT_LIMIT = 16 * 1024 * 1024;
 
 async function fixtureBoundary() {
   return TargetBoundary.create(fixtureDirectory);
@@ -188,6 +191,98 @@ test('keeps proven literal Vue routes and reports every unsupported route expres
       },
     ],
   );
+});
+
+test('bounds Vue Router reads and reports an oversized input as coverage evidence', async () => {
+  const observed = [];
+  const result = await discoverVueRouter({
+    boundary: {
+      async readText(relativePath, options) {
+        observed.push([relativePath, options]);
+        if (relativePath === 'oversized.js') {
+          throw new SentinelError(
+            'INPUT_SIZE_LIMIT',
+            'Input exceeds the configured read limit',
+            { maxBytes: DISCOVERY_INPUT_LIMIT },
+          );
+        }
+        return 'export const routes = [{ path: "/bounded", meta: { public: true } }];';
+      },
+    },
+    relativePaths: ['bounded.js', 'oversized.js'],
+  });
+
+  assert.deepEqual(observed, [
+    ['bounded.js', { maxBytes: DISCOVERY_INPUT_LIMIT }],
+    ['oversized.js', { maxBytes: DISCOVERY_INPUT_LIMIT }],
+  ]);
+  assert.deepEqual(result.routes.map((route) => route.path), ['/bounded']);
+  assert.deepEqual(result.coverage, {
+    adapter: 'vue-router-static',
+    status: 'partial',
+    gaps: ['size-limit:oversized.js#/'],
+  });
+  assert.deepEqual(result.diagnostics, [{
+    code: 'VUE_SIZE_LIMIT',
+    message: `Vue Router discovery input oversized.js exceeds the ${DISCOVERY_INPUT_LIMIT}-byte limit`,
+    sourcePath: 'oversized.js',
+    pointer: '/',
+  }]);
+});
+
+test('bounds literal nesting with a VUE_DEPTH_LIMIT coverage diagnostic', async () => {
+  const nestedArrays = (depth) => `${'['.repeat(depth)}null${']'.repeat(depth)}`;
+  const sources = new Map([
+    ['bounded.js', `export const routes = [{ path: '/bounded', meta: { public: true, data: ${nestedArrays(32)} } }];`],
+    ['too-deep.js', `export const routes = [{ path: '/too-deep', meta: { public: true, data: ${nestedArrays(128)} } }];`],
+  ]);
+  const result = await discoverVueRouter({
+    boundary: {
+      async readText(relativePath) {
+        return sources.get(relativePath);
+      },
+    },
+    relativePaths: ['bounded.js', 'too-deep.js'],
+  });
+
+  assert.deepEqual(result.routes.map((route) => route.path), ['/bounded', '/too-deep']);
+  assert.equal(result.diagnostics.some((diagnostic) => (
+    diagnostic.code === 'VUE_DEPTH_LIMIT'
+      && diagnostic.sourcePath === 'too-deep.js'
+      && diagnostic.message.includes('64')
+  )), true);
+  assert.equal(result.diagnostics.some((diagnostic) => (
+    diagnostic.code === 'VUE_DEPTH_LIMIT' && diagnostic.sourcePath === 'bounded.js'
+  )), false);
+});
+
+test('pins the exact literal-nesting boundary at the documented limit', async () => {
+  // The limit bounds TOTAL nesting from the parse root, which is what actually
+  // protects the stack — so the enclosing structure spends part of the budget:
+  // the routes array, the route object, and `meta` are three containers deep
+  // before a value in `meta` is even reached. Pinning both sides of the real
+  // boundary means a future tweak to MAX_VUE_LITERAL_DEPTH cannot drift silently.
+  const ENCLOSING_CONTAINERS = 3;
+  const affordable = MAX_VUE_LITERAL_DEPTH - ENCLOSING_CONTAINERS;
+  const nestedArrays = (depth) => `${'['.repeat(depth)}null${']'.repeat(depth)}`;
+  const sources = new Map([
+    ['at-limit.js', `export const routes = [{ path: '/at-limit', meta: { public: true, data: ${nestedArrays(affordable)} } }];`],
+    ['over-limit.js', `export const routes = [{ path: '/over-limit', meta: { public: true, data: ${nestedArrays(affordable + 1)} } }];`],
+  ]);
+  const result = await discoverVueRouter({
+    boundary: {
+      async readText(relativePath) {
+        return sources.get(relativePath);
+      },
+    },
+    relativePaths: ['at-limit.js', 'over-limit.js'],
+  });
+
+  const limited = (file) => result.diagnostics.some((diagnostic) => (
+    diagnostic.code === 'VUE_DEPTH_LIMIT' && diagnostic.sourcePath === file
+  ));
+  assert.equal(limited('at-limit.js'), false, 'exactly the limit must parse');
+  assert.equal(limited('over-limit.js'), true, 'one past the limit must degrade');
 });
 
 test('rejects implicit, absolute, URL-like, and non-source Vue Router inputs', async () => {

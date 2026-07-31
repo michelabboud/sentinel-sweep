@@ -1,6 +1,6 @@
 ---
 name: run
-version: 2.0.0
+version: 2.0.1
 description: "Sentinel 2.0 thin Claude host for deterministic OpenAPI and Vue Router QA through the packaged trusted core"
 argument-hint: <setup|manifest|api|browser|sweep|report|dashboard|export|trends|diff|clean> --target <path> --config <path> [documented core options]
 allowed-tools: ["Read"]

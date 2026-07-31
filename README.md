@@ -7,7 +7,7 @@ OpenAPI operations and Vue Router routes, applies a fail-closed execution policy
 runs real API and headless-Chrome checks, and publishes one canonical set of
 redacted findings.
 
-Sentinel 2.0.0 is a breaking replacement for the prompt-owned 1.x execution model.
+Sentinel 2.0.1 is a breaking replacement for the prompt-owned 1.x execution model.
 The current implementation and release-evidence status are tracked in
 [PROGRESS.md](PROGRESS.md). Do not treat source completion alone as proof that the
 release goal has passed; the real API/Chrome, packaging, exact-commit CI, tag, and

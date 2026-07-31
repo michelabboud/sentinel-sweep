@@ -8,7 +8,6 @@ import {
   realpath,
   rename,
   rmdir,
-  symlink,
   unlink,
 } from 'node:fs/promises';
 import path from 'node:path';
@@ -225,7 +224,30 @@ async function verifyPinnedTargetRoot(root, pinned, expected) {
   }
 }
 
-async function accessPinnedTargetInput(root, expectedRoot, candidate, { readContents = false } = {}) {
+async function boundedReadText(handle, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  while (total <= maxBytes) {
+    const remaining = (maxBytes + 1) - total;
+    const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
+    const result = await handle.read(buffer, 0, buffer.length, total);
+    if (result.bytesRead === 0) return Buffer.concat(chunks, total).toString('utf8');
+    chunks.push(buffer.subarray(0, result.bytesRead));
+    total += result.bytesRead;
+  }
+  throw boundaryError(
+    'INPUT_SIZE_LIMIT',
+    'Input exceeds the configured read limit',
+    { maxBytes },
+  );
+}
+
+async function accessPinnedTargetInput(
+  root,
+  expectedRoot,
+  candidate,
+  { readContents = false, maxBytes = null } = {},
+) {
   const relative = path.relative(root, candidate);
   const segments = relative.split(path.sep);
   let pinnedRoot;
@@ -286,7 +308,19 @@ async function accessPinnedTargetInput(root, expectedRoot, candidate, { readCont
     if (!samePinnedFile(initial, opened)) {
       throw boundaryError('INPUT_CHANGED', 'Input changed before descriptor pinning');
     }
-    const contents = readContents ? await fileHandle.readFile('utf8') : null;
+    if (maxBytes !== null && opened.size > BigInt(maxBytes)) {
+      throw boundaryError(
+        'INPUT_SIZE_LIMIT',
+        'Input exceeds the configured read limit',
+        { maxBytes },
+      );
+    }
+    let contents = null;
+    if (readContents) {
+      contents = maxBytes === null
+        ? await fileHandle.readFile('utf8')
+        : await boundedReadText(fileHandle, maxBytes);
+    }
     const after = await fileHandle.stat({ bigint: true });
     const current = await lstat(input, { bigint: true });
     if (!samePinnedFile(opened, after) || !samePinnedFile(after, current)) {
@@ -643,10 +677,16 @@ export class TargetBoundary {
     this.#identity = identity;
   }
 
-  async readText(relativePath) {
+  async readText(relativePath, { maxBytes = null } = {}) {
+    if (maxBytes !== null && (!Number.isSafeInteger(maxBytes) || maxBytes < 1)) {
+      throw boundaryError('INPUT_LIMIT_INVALID', 'Input read limit must be a positive safe integer');
+    }
     const candidate = resolveRelative(this.root, relativePath);
     validateInputType(candidate);
-    return accessPinnedTargetInput(this.root, this.#identity, candidate, { readContents: true });
+    return accessPinnedTargetInput(this.root, this.#identity, candidate, {
+      readContents: true,
+      maxBytes,
+    });
   }
 
   async resolveInput(relativePath) {
@@ -906,48 +946,6 @@ export class RunBoundary {
       }
       if (error instanceof SentinelError) throw error;
       throw boundaryError('RUN_ABORT_FAILED', 'Run staging directory could not be aborted safely');
-    }
-  }
-
-  async replaceLatest(reportRoot, runId) {
-    if (typeof runId !== 'string'
-        || runId.length === 0
-        || runId === '.'
-        || runId === '..'
-        || path.basename(runId) !== runId
-        || runId.includes('\0')) {
-      throw boundaryError('RUN_ID_INVALID', 'Run identifier must be a single path segment');
-    }
-
-    const canonicalReportRoot = await canonicalDirectory(reportRoot, {
-      symlinkCode: 'REPORT_ROOT_SYMLINK',
-      invalidCode: 'REPORT_ROOT_INVALID',
-    });
-    const runPath = path.join(canonicalReportRoot, runId);
-    let runStat;
-    try {
-      runStat = await lstat(runPath);
-    } catch {
-      throw boundaryError('RUN_NOT_FOUND', 'Latest run does not exist');
-    }
-    if (runStat.isSymbolicLink() || !runStat.isDirectory()) {
-      throw boundaryError('RUN_INVALID', 'Latest run must be a regular directory');
-    }
-    if (!isWithin(canonicalReportRoot, await realpath(runPath))) {
-      throw boundaryError('PATH_ESCAPE', 'Latest run escapes the report root');
-    }
-
-    const temporary = path.join(
-      canonicalReportRoot,
-      `.latest.${process.pid}.${randomBytes(12).toString('hex')}.tmp`,
-    );
-    try {
-      await symlink(runId, temporary, 'dir');
-      await rename(temporary, path.join(canonicalReportRoot, 'latest'));
-      return path.join(canonicalReportRoot, 'latest');
-    } catch (error) {
-      await unlink(temporary).catch(() => {});
-      throw boundaryError('LATEST_REPLACE_FAILED', 'Latest run pointer could not be replaced');
     }
   }
 }

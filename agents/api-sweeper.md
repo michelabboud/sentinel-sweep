@@ -3,7 +3,7 @@ name: api-sweeper
 description: "Explain canonical Sentinel 2.0 API and RBAC findings without making requests or policy decisions"
 model: sonnet
 tools: ["Read"]
-version: 2.0.0
+version: 2.0.1
 ---
 
 # Canonical API findings explainer

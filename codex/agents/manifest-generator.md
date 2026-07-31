@@ -1,6 +1,6 @@
 ---
 name: manifest-generator-codex
-version: 2.0.0-codex.1
+version: 2.0.1-codex.1
 description: Explain a canonical Sentinel 2.0 manifest without discovering or changing target data.
 tools: ["Read"]
 ---
