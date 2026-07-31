@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sentinel-findings-v2",
+  "title": "Sentinel 2.0 canonical findings",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "runId",
+    "startedAt",
+    "finishedAt",
+    "requireCompleteCoverage",
+    "coverage",
+    "summary",
+    "findings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "runId": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "minLength": 1 },
+    "finishedAt": { "type": "string", "minLength": 1 },
+    "manifestGeneratedAt": { "type": ["string", "null"] },
+    "requireCompleteCoverage": { "type": "boolean" },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "responseTimePercentiles": { "$ref": "#/$defs/percentiles" },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "coverage": {
+      "type": "object",
+      "required": ["status", "diagnostics"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "partial", "unsupported"]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": ["string", "null"] },
+        "pointer": { "type": ["string", "null"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["critical", "error", "warning", "info", "skipped"],
+      "additionalProperties": false,
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "reasonCode",
+        "outcome",
+        "severity",
+        "category",
+        "message",
+        "subject",
+        "role",
+        "evidence",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "reasonCode": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["fail", "skip"]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "error", "warning", "info"]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "health",
+            "rbac",
+            "schema",
+            "security",
+            "policy",
+            "coverage",
+            "configuration",
+            "console",
+            "network",
+            "layout",
+            "content",
+            "visual",
+            "runtime"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "service": { "type": ["string", "null"] },
+        "subject": { "$ref": "#/$defs/subject" },
+        "role": { "type": ["string", "null"] },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "provenance": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/provenance" }
+        }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["operation", "route", "run", "configuration"]
+        },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expected": { "type": "string" },
+        "actual": { "type": "string" },
+        "statusCode": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "viewport": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "screenshotPath": {
+          "type": "string",
+          "pattern": "^browser-[a-f0-9]{24}\\.png$"
+        }
+      }
+    },
+    "percentiles": {
+      "type": "object",
+      "required": ["p50", "p95", "p99", "average"],
+      "additionalProperties": false,
+      "properties": {
+        "p50": { "type": "number", "minimum": 0 },
+        "p95": { "type": "number", "minimum": 0 },
+        "p99": { "type": "number", "minimum": 0 },
+        "average": { "type": "number", "minimum": 0 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["manifest", "policy", "api", "browser", "runtime"]
+        },
+        "sourcePath": { "type": ["string", "null"] },
+        "pointer": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

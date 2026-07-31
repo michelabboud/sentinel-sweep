@@ -1,6 +1,6 @@
 ---
 name: browser-sweeper-codex
-version: 1.8.5-codex.1
+version: 2.0.0-codex.1
 description: Explain canonical Sentinel 2.0 browser findings without navigating, executing, or changing target data.
 tools: ["Read"]
 ---

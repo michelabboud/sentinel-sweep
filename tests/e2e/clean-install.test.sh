@@ -8,7 +8,10 @@ fail() {
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-[[ "$(node -p 'process.versions.node')" == 18.* ]] || fail "actual Node 18 is required"
+# Documented floor is Node 18+; pinning exactly 18 (EOL 2025-04) would force an
+# unmaintained runtime. The PASS line records which runtime actually proved it.
+NODE_VERSION="$(node -p 'process.versions.node')"
+[[ "${NODE_VERSION%%.*}" -ge 18 ]] || fail "Node 18+ is required (found $NODE_VERSION)"
 [[ -d "$ROOT/.git" || -f "$ROOT/.git" ]] || fail "source checkout is not a Git worktree"
 
 TEMPORARY="$(mktemp -d /tmp/sentinel-clean-install-XXXXXX)"
@@ -62,4 +65,4 @@ VERSION="$(cd "$UNRELATED" && node "$EXTRACTED/runtime/cli.mjs" --version)"
   node --test "$EXTRACTED/tests/e2e/goal-sweep.test.mjs"
 )
 
-echo "clean-install: PASS ($HEAD_COMMIT)"
+echo "clean-install: PASS ($HEAD_COMMIT, node $NODE_VERSION)"

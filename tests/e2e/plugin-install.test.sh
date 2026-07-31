@@ -12,7 +12,11 @@ MIRROR="$ROOT/plugins/sentinel"
 CLAUDE_BIN="${SENTINEL_CLAUDE_BIN:-$(command -v claude || true)}"
 ORIGINAL_PATH="$PATH"
 [[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] || fail "Claude Code is unavailable"
-[[ "$($CLAUDE_BIN --version)" == 2.1.214* ]] || fail "Claude Code 2.1.214 is required"
+# 2.1.214 is the floor the install flow was proven against; an exact pin would
+# rot with every Claude Code release. sort -V picks the older of (floor, found).
+CLAUDE_VERSION="$($CLAUDE_BIN --version)"
+[[ "$(printf '%s\n' 2.1.214 "${CLAUDE_VERSION%% *}" | sort -V | head -1)" == "2.1.214" ]] \
+  || fail "Claude Code 2.1.214+ is required (found $CLAUDE_VERSION)"
 [[ -d "$MIRROR" && ! -L "$MIRROR" ]] || fail "installable plugin mirror is unavailable"
 
 TEMPORARY="$(mktemp -d /tmp/sentinel-plugin-install-XXXXXX)"

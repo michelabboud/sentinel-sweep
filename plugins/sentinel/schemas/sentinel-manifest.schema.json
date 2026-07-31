@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sentinel-manifest-v2",
+  "title": "Sentinel 2.0 deterministic manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "target",
+    "coverage",
+    "routes",
+    "operations",
+    "schemas"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "target": { "$ref": "#/$defs/target" },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/route" }
+    },
+    "operations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/operation" }
+    },
+    "schemas": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/schemaRecord" }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": ["name", "root"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "root": { "type": "string", "minLength": 1 }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["status", "diagnostics"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "partial", "unsupported"]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": ["string", "null"] },
+        "pointer": { "type": ["string", "null"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["adapter", "file", "pointer"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": ["openapi-json", "vue-router-static"]
+        },
+        "file": { "type": "string", "minLength": 1 },
+        "pointer": { "type": "string" }
+      }
+    },
+    "operationAuth": {
+      "type": "object",
+      "required": ["state", "allowedRoles"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["public", "required", "unknown"]
+        },
+        "allowedRoles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["name", "location", "required", "schema"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "location": {
+          "type": "string",
+          "enum": ["path", "query", "header", "cookie"]
+        },
+        "required": { "type": "boolean" },
+        "schema": { "$ref": "#/$defs/schemaNode" },
+        "example": {}
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["id", "path", "auth", "parameters", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "pattern": "^/" },
+        "name": { "type": ["string", "null"] },
+        "component": { "type": ["string", "null"] },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^/" }
+        },
+        "auth": { "$ref": "#/$defs/operationAuth" },
+        "parameters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameter" }
+        },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": ["method", "mutation"],
+          "properties": {
+            "method": { "enum": ["GET", "HEAD", "OPTIONS"] },
+            "mutation": { "const": false }
+          }
+        },
+        {
+          "required": ["method", "mutation"],
+          "properties": {
+            "method": { "enum": ["POST", "PUT", "PATCH", "DELETE", "TRACE"] },
+            "mutation": { "const": true }
+          }
+        }
+      ],
+      "required": [
+        "id",
+        "method",
+        "path",
+        "parameters",
+        "requestBody",
+        "responses",
+        "auth",
+        "targetModel",
+        "deleteMode",
+        "sideEffects",
+        "rollback",
+        "mutation",
+        "protocol",
+        "sweepable",
+        "risk",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "TRACE"]
+        },
+        "path": { "type": "string", "pattern": "^/" },
+        "summary": { "type": ["string", "null"] },
+        "parameters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameter" }
+        },
+        "requestBody": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/requestBody" }
+          ]
+        },
+        "responses": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/response" }
+        },
+        "auth": { "$ref": "#/$defs/operationAuth" },
+        "targetModel": { "type": ["string", "null"] },
+        "deleteMode": {
+          "type": ["string", "null"],
+          "enum": ["soft", "hard", "unknown", null]
+        },
+        "sideEffects": { "$ref": "#/$defs/sideEffects" },
+        "rollback": {
+          "type": ["string", "null"],
+          "pattern": "\\S"
+        },
+        "mutation": { "type": "boolean" },
+        "protocol": {
+          "type": "string",
+          "enum": ["http", "websocket"]
+        },
+        "sweepable": { "type": "boolean" },
+        "risk": { "$ref": "#/$defs/risk" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "requestBody": {
+      "type": "object",
+      "required": ["required", "contentType", "schemaId"],
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "boolean" },
+        "contentType": { "type": "string", "minLength": 1 },
+        "schemaId": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["contentType", "schemaId"],
+      "additionalProperties": false,
+      "properties": {
+        "contentType": { "type": ["string", "null"] },
+        "schemaId": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "required": ["state", "classes"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["known", "unknown"]
+        },
+        "classes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "required": ["score", "level", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "level": {
+          "type": "string",
+          "enum": ["safe", "medium", "high", "critical"]
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "schemaRecord": {
+      "type": "object",
+      "required": ["schema", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/schemaNode" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "schemaNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "$ref": { "type": "string", "minLength": 1 },
+        "type": {
+          "anyOf": [
+            { "type": "string" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          ]
+        },
+        "const": {},
+        "enum": { "type": "array", "items": {} },
+        "required": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/schemaNode" }
+        },
+        "$defs": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/schemaNode" }
+        },
+        "additionalProperties": {
+          "anyOf": [
+            { "type": "boolean" },
+            { "$ref": "#/$defs/schemaNode" }
+          ]
+        },
+        "items": { "$ref": "#/$defs/schemaNode" },
+        "minItems": { "type": "integer", "minimum": 0 },
+        "minLength": { "type": "integer", "minimum": 0 },
+        "pattern": { "type": "string" },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "anyOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/schemaNode" }
+        },
+        "oneOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/schemaNode" }
+        },
+        "allOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/schemaNode" }
+        }
+      }
+    }
+  }
+}

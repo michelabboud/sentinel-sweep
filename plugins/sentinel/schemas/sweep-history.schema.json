@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sentinel-history-v2",
+  "title": "Sentinel 2.0 sweep history",
+  "type": "object",
+  "required": ["schemaVersion", "runs"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "runs": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/run" }
+    },
+    "pendingCleanup": { "$ref": "#/$defs/pendingCleanup" }
+  },
+  "$defs": {
+    "pendingCleanup": {
+      "type": "object",
+      "required": ["transactionId", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "transactionId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{24}$"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/pendingCleanupEntry" }
+        }
+      }
+    },
+    "pendingCleanupEntry": {
+      "type": "object",
+      "required": [
+        "runId",
+        "tombstone",
+        "markerToken",
+        "dev",
+        "ino",
+        "birthtimeNs",
+        "uid",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]{3})?Z(-[a-f0-9]{8})?$"
+        },
+        "tombstone": {
+          "type": "string",
+          "pattern": "^\\.sentinel-clean-[a-f0-9]{24}-[0-9]{4}$"
+        },
+        "markerToken": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dev": { "type": "string", "pattern": "^[0-9]+$" },
+        "ino": { "type": "string", "pattern": "^[0-9]+$" },
+        "birthtimeNs": { "type": "string", "pattern": "^[0-9]+$" },
+        "uid": { "type": "string", "pattern": "^[0-9]+$" },
+        "mode": { "type": "string", "pattern": "^[0-9]+$" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "runId",
+        "startedAt",
+        "finishedAt",
+        "coverageStatus",
+        "summary",
+        "findingsDigest",
+        "markerToken",
+        "dev",
+        "ino",
+        "birthtimeNs",
+        "uid",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}(-[0-9]{3})?Z(-[a-f0-9]{8})?$"
+        },
+        "startedAt": { "type": "string", "minLength": 1 },
+        "finishedAt": { "type": "string", "minLength": 1 },
+        "coverageStatus": {
+          "type": "string",
+          "enum": ["complete", "partial", "unsupported"]
+        },
+        "summary": { "$ref": "#/$defs/summary" },
+        "findingsDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "markerToken": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dev": { "type": "string", "pattern": "^[0-9]+$" },
+        "ino": { "type": "string", "pattern": "^[0-9]+$" },
+        "birthtimeNs": { "type": "string", "pattern": "^[0-9]+$" },
+        "uid": { "type": "string", "pattern": "^[0-9]+$" },
+        "mode": { "type": "string", "pattern": "^[0-9]+$" },
+        "healthScore": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+        "commitSha": { "type": ["string", "null"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["critical", "error", "warning", "info", "skipped"],
+      "additionalProperties": false,
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sentinel-settings-v2",
+  "title": "Sentinel 2.0 trusted settings",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "requireConfigPath",
+    "reportDir",
+    "approvedOrigins",
+    "roles",
+    "allowMutations",
+    "mutationAllowlist",
+    "allowNonLoopback",
+    "targetEnvironment",
+    "requireCompleteCoverage",
+    "responseTimeoutMs",
+    "browserSettleMs",
+    "viewports"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "requireConfigPath": { "const": true },
+    "reportDir": { "type": "string", "minLength": 1 },
+    "approvedOrigins": {
+      "description": "After origin canonicalization and duplicate removal, Sentinel 2.0 accepts at most one distinct approved origin per invocation. Canonically equivalent duplicate entries remain valid.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^https?://[^/?#]+$"
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    },
+    "allowMutations": { "type": "boolean" },
+    "mutationAllowlist": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "allowNonLoopback": { "type": "boolean" },
+    "targetEnvironment": {
+      "type": "string",
+      "enum": ["unknown", "development", "test", "staging", "production"]
+    },
+    "requireCompleteCoverage": { "type": "boolean" },
+    "responseTimeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120000
+    },
+    "browserSettleMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "viewports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000
+      }
+    },
+    "chromePath": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "emptyContainerSelectors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "screenshotOnError": { "type": "boolean" },
+    "maxResponseBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 104857600
+    },
+    "discovery": {
+      "$ref": "#/$defs/discovery"
+    },
+    "trustedOverrides": {
+      "$ref": "#/$defs/trustedOverrides"
+    },
+    "services": {
+      "description": "After service origins are canonicalized, Sentinel 2.0 accepts at most one service per invocation. This semantic limit is enforced after schema validation so duplicate-name and origin-consistency errors retain their stable ordering.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "role": {
+      "type": "object",
+      "required": ["tokenRef"],
+      "additionalProperties": false,
+      "properties": {
+        "tokenRef": {
+          "type": "string",
+          "pattern": "^env:[A-Z][A-Z0-9_]{1,127}$"
+        }
+      }
+    },
+    "roleNames": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "openapi": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "vueRouter": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "trustedOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operations": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/operationOverride" }
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/routeOverride" }
+        }
+      }
+    },
+    "operationOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedRoles": { "$ref": "#/$defs/roleNames" },
+        "parameterExamples": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameterExample" }
+        },
+        "targetModel": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "deleteMode": {
+          "type": ["string", "null"],
+          "enum": ["soft", "hard", "unknown", null]
+        },
+        "sideEffects": { "$ref": "#/$defs/sideEffects" },
+        "rollback": {
+          "type": ["string", "null"],
+          "pattern": ".*\\S.*"
+        }
+      }
+    },
+    "routeOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedRoles": { "$ref": "#/$defs/roleNames" },
+        "parameterExamples": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameterExample" }
+        }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "required": ["classes"],
+      "additionalProperties": false,
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "parameterExample": {
+      "type": "object",
+      "required": ["location", "name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "type": "string",
+          "enum": ["path", "query", "header"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!(?:password|token)$).+"
+        },
+        "value": {
+          "type": ["string", "number", "integer", "boolean"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["name", "approvedOrigin"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "approvedOrigin": {
+          "type": "string",
+          "pattern": "^https?://[^/?#]+$"
+        },
+        "sourcePath": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

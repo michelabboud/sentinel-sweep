@@ -3,7 +3,7 @@ name: manifest-generator
 description: "Explain a canonical Sentinel 2.0 manifest artifact without discovering or changing target data"
 model: sonnet
 tools: ["Read"]
-version: 1.8.5
+version: 2.0.0
 ---
 
 # Canonical manifest explainer
