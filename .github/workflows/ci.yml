@@ -6,59 +6,74 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      # Run the full integration test suite
-      # Covers: structure, frontmatter, schema, mirror parity, version consistency
-      - name: Run integration tests
-        run: ./tests/run-all.sh
+      - name: Set up exact Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.20.8
 
-      # JSON validation (catches files outside tests/ scope)
-      - name: Validate all JSON files
+      - name: Set up exact Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
+        with:
+          chrome-version: 148.0.7778.178
+
+      - name: Verify mandatory runtimes
+        env:
+          SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          test "$(node -p 'process.versions.node')" = "18.20.8"
+          test -n "$SENTINEL_E2E_CHROME"
+          test -x "$SENTINEL_E2E_CHROME"
+          "$SENTINEL_E2E_CHROME" --version \
+            | grep -E '^(Google Chrome( for Testing)?|Chromium) 148\.0\.7778\.178$'
+
+      - name: Run complete test suite with mandatory Chrome
+        env:
+          SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          unset SENTINEL_ALLOW_MISSING_CHROME_FOR_UNIT_TESTS
+          npm test
+          npm run lint
+          npm run audit
+
+      - name: Prove clean Git archive installation
+        env:
+          SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: bash tests/e2e/clean-install.test.sh
+
+      - name: Install exact Claude Code
+        run: |
+          npm install --global @anthropic-ai/claude-code@2.1.214
+          claude --version | grep -E '^2\.1\.214([[:space:]]|$)'
+
+      - name: Prove isolated Claude and Codex installations
+        run: bash tests/e2e/plugin-install.test.sh
+
+      - name: Validate every JSON document
         run: |
           errors=0
-          while IFS= read -r f; do
-            if ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
-              echo "FAIL: $f"
+          while IFS= read -r -d '' file; do
+            if ! node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "$file"; then
+              echo "FAIL: $file"
               errors=$((errors + 1))
             fi
-          done < <(find . -name '*.json' -not -path './.git/*' -not -path './tests/*')
-          if [ "$errors" -gt 0 ]; then
-            echo "::error::$errors JSON file(s) failed validation"
-            exit 1
-          fi
-          echo "All JSON files valid."
+          done < <(find . -type f -name '*.json' -not -path './.git/*' -print0)
+          test "$errors" -eq 0
 
-      # YAML frontmatter validation
-      - name: Validate YAML frontmatter
+      - name: Validate frontmatter and mirror parity explicitly
         run: |
-          errors=0
-          for dir in agents skills; do
-            while IFS= read -r f; do
-              if ! head -1 "$f" | grep -q '^---$'; then
-                echo "FAIL: $f — missing opening ---"
-                errors=$((errors + 1))
-                continue
-              fi
-              close_line=$(awk 'NR>1 && /^---$/ { print NR; exit }' "$f")
-              if [ -z "$close_line" ]; then
-                echo "FAIL: $f — missing closing ---"
-                errors=$((errors + 1))
-                continue
-              fi
-              frontmatter=$(sed -n "2,$((close_line - 1))p" "$f")
-              if ! echo "$frontmatter" | python3 -c "import yaml, sys; yaml.safe_load(sys.stdin)" 2>/dev/null; then
-                echo "FAIL: $f — invalid YAML"
-                errors=$((errors + 1))
-              fi
-            done < <(find "$dir" -name '*.md' -type f 2>/dev/null)
-          done
-          if [ "$errors" -gt 0 ]; then
-            echo "::error::$errors file(s) with invalid YAML frontmatter"
-            exit 1
-          fi
-          echo "All frontmatter valid."
+          bash tests/test-frontmatter.sh
+          bash tests/test-mirror-parity.sh
+
+      - name: Reject secret material and unexpected canary copies
+        run: bash tests/test-secret-scan.sh
