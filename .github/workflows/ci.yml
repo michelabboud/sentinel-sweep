@@ -51,6 +51,39 @@ jobs:
           "$SENTINEL_E2E_CHROME" --version \
             | grep -E '^(Google Chrome( for Testing)?|Chromium) 148\.0\.7778\.178[[:space:]]*$'
 
+      - name: Chrome launch smoke (mirrors the runtime's scrubbed environment)
+        env:
+          SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          # Launches Chrome the way runtime/browser/chrome.mjs does (replaced
+          # six-variable environment, fresh /tmp profile, headless CDP) and
+          # surfaces stderr + exit code, which CHROME_EXITED_EARLY hides.
+          PROFILE="$(mktemp -d /tmp/.chrome-smoke-XXXXXX)"
+          mkdir -p "$PROFILE/.config" "$PROFILE/.cache" "$PROFILE/.tmp" "$PROFILE/.crash-dumps"
+          set +e
+          env -i \
+            HOME="$PROFILE" XDG_CONFIG_HOME="$PROFILE/.config" \
+            XDG_CACHE_HOME="$PROFILE/.cache" TMPDIR="$PROFILE/.tmp" \
+            LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/bin:/bin \
+            "$SENTINEL_E2E_CHROME" --headless=new \
+            --remote-debugging-address=127.0.0.1 --remote-debugging-port=0 \
+            --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
+            --disable-background-networking --disable-breakpad \
+            --disable-crash-reporter --crash-dumps-dir="$PROFILE/.crash-dumps" \
+            --disable-dev-shm-usage about:blank \
+            > "$PROFILE/stdout.log" 2> "$PROFILE/stderr.log" &
+          CHROME_PID=$!
+          sleep 8
+          if kill -0 "$CHROME_PID" 2>/dev/null; then
+            echo "SMOKE: chrome is ALIVE after 8s"
+            kill "$CHROME_PID"; wait "$CHROME_PID" 2>/dev/null
+          else
+            wait "$CHROME_PID"; echo "SMOKE: chrome DIED, exit=$?"
+          fi
+          echo "--- stderr (tail) ---"; tail -40 "$PROFILE/stderr.log" || true
+          echo "--- stdout (tail) ---"; tail -10 "$PROFILE/stdout.log" || true
+          rm -rf "$PROFILE"
+
       - name: Run complete test suite with mandatory Chrome
         env:
           SENTINEL_E2E_CHROME: ${{ steps.chrome.outputs.chrome-path }}
