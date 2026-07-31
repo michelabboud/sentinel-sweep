@@ -82,6 +82,14 @@ const ERROR_MESSAGES = Object.freeze({
   CLI_COMMAND_FAILED: 'Command failed',
 });
 
+// This is intentionally narrower than the internal SentinelError namespace.
+// Public messages are static so exception text/details can never disclose target
+// paths, config paths, credentials, or attacker-controlled target content.
+const PUBLIC_DOMAIN_ERROR_MESSAGES = Object.freeze({
+  CONFIG_MULTI_SERVICE_UNSUPPORTED:
+    'Trusted config supports at most one canonical origin and one service per invocation',
+});
+
 export class CliArgumentError extends Error {
   constructor(code) {
     super(ERROR_MESSAGES[code] ?? ERROR_MESSAGES.CLI_ARGUMENTS_INVALID);
@@ -470,8 +478,33 @@ function writeFailure({ code, json, message, stderr, stdout, usage }) {
 }
 
 function normalizedFailure(error, fallbackCode) {
-  if (error instanceof CliArgumentError && HAS_OWN(ERROR_MESSAGES, error.code)) {
-    return { code: error.code, message: ERROR_MESSAGES[error.code] };
+  try {
+    if (error instanceof CliArgumentError) {
+      const descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+      if (descriptor !== undefined
+          && HAS_OWN(descriptor, 'value')
+          && typeof descriptor.value === 'string'
+          && HAS_OWN(ERROR_MESSAGES, descriptor.value)) {
+        return {
+          code: descriptor.value,
+          message: ERROR_MESSAGES[descriptor.value],
+        };
+      }
+    }
+    if (error instanceof SentinelError) {
+      const descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+      if (descriptor !== undefined
+          && HAS_OWN(descriptor, 'value')
+          && typeof descriptor.value === 'string'
+          && HAS_OWN(PUBLIC_DOMAIN_ERROR_MESSAGES, descriptor.value)) {
+        return {
+          code: descriptor.value,
+          message: PUBLIC_DOMAIN_ERROR_MESSAGES[descriptor.value],
+        };
+      }
+    }
+  } catch {
+    // Hostile and proxy throwables are contained by the generic public wrapper.
   }
   return { code: fallbackCode, message: ERROR_MESSAGES[fallbackCode] };
 }
@@ -1106,8 +1139,8 @@ export async function runCli(argv, {
       return 1;
     }
     return exitCode;
-  } catch {
-    const failure = normalizedFailure(null, 'CLI_COMMAND_FAILED');
+  } catch (error) {
+    const failure = normalizedFailure(error, 'CLI_COMMAND_FAILED');
     writeFailure({ ...failure, json: invocation.options.json, stderr, stdout, usage: false });
     return 1;
   }

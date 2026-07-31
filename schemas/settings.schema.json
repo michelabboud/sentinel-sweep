@@ -24,6 +24,7 @@
     "requireConfigPath": { "const": true },
     "reportDir": { "type": "string", "minLength": 1 },
     "approvedOrigins": {
+      "description": "After origin canonicalization and duplicate removal, Sentinel 2.0 accepts at most one distinct approved origin per invocation. Canonically equivalent duplicate entries remain valid.",
       "type": "array",
       "items": {
         "type": "string",
@@ -86,6 +87,7 @@
       "$ref": "#/$defs/trustedOverrides"
     },
     "services": {
+      "description": "After service origins are canonicalized, Sentinel 2.0 accepts at most one service per invocation. This semantic limit is enforced after schema validation so duplicate-name and origin-consistency errors retain their stable ordering.",
       "type": "array",
       "items": { "$ref": "#/$defs/service" }
     }

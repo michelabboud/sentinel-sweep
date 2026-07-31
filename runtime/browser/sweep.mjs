@@ -1,5 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
-import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { SentinelError } from '../lib/errors.mjs';
 import {
@@ -506,6 +505,7 @@ async function runAttempt({
   let screenshotBytes = null;
   let screenshotPath = null;
   const controlledSessions = new Set();
+  const containedSessions = new Set();
   const sessionTargetIds = new Map();
   const sessionTargetTypes = new Map();
   const unsubscriptions = [];
@@ -548,10 +548,22 @@ async function runAttempt({
       return true;
     };
     const closeControlledSession = async (controlledSessionId) => {
+      containedSessions.add(controlledSessionId);
       const controlledTargetId = sessionTargetIds.get(controlledSessionId);
       if (controlledTargetId !== undefined && controlledTargetId !== targetId) {
         await client.send('Target.closeTarget', { targetId: controlledTargetId }).catch(() => {});
       }
+    };
+    const failRequestForContainment = async (requestId, controlledSessionId) => {
+      containedSessions.add(controlledSessionId);
+      void client.send('Fetch.failRequest', {
+        requestId,
+        errorReason: 'BlockedByClient',
+      }, controlledSessionId).catch(() => {
+        // Once this session is terminal, the request remains paused until
+        // attempt cleanup closes the isolated target. Chrome may retire it
+        // before sending the failRequest acknowledgement.
+      });
     };
     const recordEventHandlerFailure = async (controlledSessionId) => {
       recordOnce(records, {
@@ -564,11 +576,15 @@ async function runAttempt({
       await closeControlledSession(controlledSessionId);
       settleNavigation('event-failed');
     };
-    const scoped = (handler, { mainOnly = false } = {}) => async (params, metadata) => {
+    const scoped = (
+      handler,
+      { mainOnly = false, skipContained = false } = {},
+    ) => async (params, metadata) => {
       const controlledSessionId = metadata.sessionId;
       if (!attemptActive
           || controlledSessionId === null
           || !controlledSessions.has(controlledSessionId)
+          || (skipContained && containedSessions.has(controlledSessionId))
           || (mainOnly && controlledSessionId !== sessionId)) return;
       noteActivity();
       try {
@@ -730,6 +746,7 @@ async function runAttempt({
       noteActivity();
       if (typeof params?.sessionId === 'string') {
         controlledSessions.delete(params.sessionId);
+        containedSessions.delete(params.sessionId);
         sessionTargetIds.delete(params.sessionId);
         sessionTargetTypes.delete(params.sessionId);
       }
@@ -751,12 +768,7 @@ async function runAttempt({
             : 'Browser blocked a page-initiated mutation before dispatch',
           expected: 'GET, HEAD, or OPTIONS', actual: 'mutation method',
         });
-        await client.send('Fetch.failRequest', {
-          requestId: params.requestId,
-          errorReason: 'BlockedByClient',
-        }, controlledSessionId);
-        await stopMainLoading();
-        await closeControlledSession(controlledSessionId);
+        await failRequestForContainment(params.requestId, controlledSessionId);
         settleNavigation('mutation-blocked');
         return;
       }
@@ -770,12 +782,7 @@ async function runAttempt({
           message: 'Browser blocked a request outside the exact approved origin',
           expected: 'exact approved origin', actual: 'unapproved origin',
         });
-        await client.send('Fetch.failRequest', {
-          requestId: params.requestId,
-          errorReason: 'BlockedByClient',
-        }, controlledSessionId);
-        await stopMainLoading();
-        await closeControlledSession(controlledSessionId);
+        await failRequestForContainment(params.requestId, controlledSessionId);
         settleNavigation('blocked');
         return;
       }
@@ -786,17 +793,14 @@ async function runAttempt({
       if (classification === 'approved'
           && mainDocument
           && await bindNavigationTarget(params?.request?.url)) {
-        await client.send('Fetch.failRequest', {
-          requestId: params.requestId,
-          errorReason: 'BlockedByClient',
-        }, controlledSessionId);
+        await failRequestForContainment(params.requestId, controlledSessionId);
         return;
       }
       await client.send('Fetch.continueRequest', {
         requestId: params.requestId,
         headers: requestHeaders(params?.request?.headers, classification === 'approved' ? token : null),
       }, controlledSessionId);
-    })));
+    }), { skipContained: true }));
     unsubscriptions.push(client.on('Network.requestWillBeSent', scoped(async (params, controlledSessionId) => {
       const requestKey = `${controlledSessionId}:${params.requestId}`;
       const origin = exactNetworkOrigin(params?.request?.url, approvedOrigin);
@@ -1275,13 +1279,8 @@ export async function sweepBrowser({
   validateBrowserTiming(config);
   const decisionsById = new Map(decisions.map((decision) => [decision.subjectId, decision]));
   const observations = [];
-  const profileDir = path.join(
-    runBoundary.root,
-    `.chrome-profile-${process.pid}-${randomBytes(8).toString('hex')}`,
-  );
   const chrome = await launchChrome({
     executablePath: config?.chromePath ?? undefined,
-    profileDir,
     targetRoot: targetBoundary.root,
     headless: true,
     timeoutMs: config?.responseTimeoutMs,

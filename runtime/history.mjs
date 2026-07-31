@@ -410,7 +410,10 @@ async function openReportRoot(reportRoot) {
         'Safe report-root descriptor pinning is unavailable on this platform',
       );
     }
-    const anchor = `/proc/self/fd/${handle.fd}`;
+    // This spelling must remain valid when a run-scoped path is handed to a
+    // child process such as Chrome. `/proc/self` would resolve against the
+    // child's descriptor table instead of this pinned report-root handle.
+    const anchor = `/proc/${process.pid}/fd/${handle.fd}`;
     const anchored = await lstat(`${anchor}/.`, { bigint: true });
     const current = await lstat(publicPath, { bigint: true });
     const anchoredCanonical = await realpath(anchor);

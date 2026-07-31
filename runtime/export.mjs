@@ -941,10 +941,12 @@ function requestShape(operation, manifest, secrets, budget) {
       break;
     }
   }
+  let authVariable = null;
   if (configuredRole !== undefined) {
+    authVariable = secrets.byRole[configuredRole];
     append(headers, {
       name: 'Authorization',
-      value: `Bearer {{${secrets.byRole[configuredRole]}}}`,
+      value: `Bearer {{${authVariable}}}`,
     });
   }
   const body = requestBody(operation, manifest, budget);
@@ -960,6 +962,7 @@ function requestShape(operation, manifest, secrets, budget) {
     headers: sortedHeaders,
     body,
     variables: sortedCopy(variables, compareCodeUnits),
+    authVariable,
   };
 }
 
@@ -1192,6 +1195,7 @@ function brunoEnvironment(variables) {
 
 function brunoRequest(request, index) {
   const method = asciiLower(request.method);
+  const authMode = request.authVariable === null ? 'none' : 'bearer';
   let output = 'meta {'
     + `\n  name: ${requireBrunoScalar(request.name)}`
     + '\n  type: http'
@@ -1199,14 +1203,22 @@ function brunoRequest(request, index) {
     + `\n}\n\n${method} {`
     + `\n  url: ${requireBrunoScalar(request.url)}`;
   if (request.body !== null) output += '\n  body: json';
-  output += '\n  auth: none\n}';
-  if (request.headers.length > 0) {
+  output += `\n  auth: ${authMode}\n}`;
+  let emittedHeaders = 0;
+  for (let index = 0; index < request.headers.length; index += 1) {
+    if (request.headers[index].name !== 'Authorization') emittedHeaders += 1;
+  }
+  if (emittedHeaders > 0) {
     output += '\n\nheaders {';
     for (let index = 0; index < request.headers.length; index += 1) {
       const header = request.headers[index];
+      if (header.name === 'Authorization') continue;
       output += `\n  ${requireBrunoScalar(header.name)}: ${requireBrunoScalar(header.value)}`;
     }
     output += '\n}';
+  }
+  if (request.authVariable !== null) {
+    output += `\n\nauth:bearer {\n  token: {{${requireBrunoScalar(request.authVariable)}}}\n}`;
   }
   if (request.body !== null) {
     output += `\n\nbody:json {\n${JSON.stringify(request.body.value, null, 2)}\n}`;

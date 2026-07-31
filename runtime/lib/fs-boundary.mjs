@@ -28,7 +28,14 @@ const DIRECTORY_FLAGS = READ_FLAGS | (fsConstants.O_DIRECTORY ?? 0);
 const INPUT_EXTENSIONS = new Set(['.har', '.js', '.json', '.ts', '.vue', '.yaml', '.yml']);
 const BLOCKED_INPUT_NAME = /(?:^|[._-])(?:credential|credentials|secret|secrets|private[-_]?key)(?:[._-]|$)/u;
 const STAGING_NAME = /^\.sentinel-run-staging-([a-f0-9]{64})$/u;
-const PINNED_DIRECTORY = /^\/proc\/self\/fd\/[0-9]+$/u;
+const PINNED_DIRECTORY = new RegExp(
+  `^/proc/(?:self|${process.pid})/fd/[0-9]+$`,
+  'u',
+);
+const PINNED_PATH = new RegExp(
+  `^/proc/(?:self|${process.pid})/fd/[0-9]+(?:/|$)`,
+  'u',
+);
 const RUN_MARKER_NAME = '.sentinel-run-identity-v2';
 const MARKER_TOKEN = /^[a-f0-9]{64}$/u;
 const MAX_TREE_NODES = 4096;
@@ -406,7 +413,7 @@ async function verifyOutputParent(root, destination) {
   let handle;
   try {
     initial = await lstat(parent);
-    const allowExistingRootMode = parent === root && !root.startsWith('/proc/self/fd/');
+    const allowExistingRootMode = parent === root && !PINNED_PATH.test(root);
     const validDirectory = (stat) => (
       allowExistingRootMode
         ? stat.isDirectory() && !stat.isSymbolicLink()

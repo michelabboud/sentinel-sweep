@@ -1,8 +1,12 @@
 import { constants as fsConstants } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import {
   access,
+  chmod,
   lstat,
   mkdir,
+  readFile,
+  readdir,
   realpath,
   rm,
   stat,
@@ -19,6 +23,8 @@ const SYSTEM_CANDIDATES = Object.freeze([
   '/usr/bin/chromium-browser',
   '/opt/google/chrome/google-chrome',
 ]);
+const CHROME_PROFILE_PARENT = '/tmp';
+const CHROME_PROFILE_PREFIX = '.chrome-profile-';
 
 function chromeError(code, message) {
   return new SentinelError(code, message);
@@ -98,29 +104,229 @@ export async function resolveChromeExecutable({ executablePath, targetRoot } = {
   throw chromeError('CHROME_NOT_FOUND', 'No allowlisted system Chrome executable was found');
 }
 
-async function createFreshProfile(profileDir) {
-  if (typeof profileDir !== 'string'
-      || profileDir.length === 0
-      || !path.isAbsolute(profileDir)
-      || path.basename(path.resolve(profileDir)) === path.parse(profileDir).root) {
-    throw chromeError('CHROME_PROFILE_INVALID', 'Chrome profile path must be a specific absolute path');
+function sameIdentity(left, right) {
+  return BigInt(left.dev) === BigInt(right.dev) && BigInt(left.ino) === BigInt(right.ino);
+}
+
+async function validatedProfileParent() {
+  if (process.platform !== 'linux' || typeof process.geteuid !== 'function') {
+    throw chromeError(
+      'CHROME_PROFILE_PLATFORM_UNSUPPORTED',
+      'Secure Chrome profile isolation requires Linux process identity support',
+    );
   }
-  const resolved = path.resolve(profileDir);
+  let initial;
+  let canonical;
   try {
-    await lstat(resolved);
-    throw chromeError('CHROME_PROFILE_NOT_FRESH', 'Chrome profile must not already exist');
-  } catch (error) {
-    if (error instanceof SentinelError) throw error;
-    if (error?.code !== 'ENOENT') {
-      throw chromeError('CHROME_PROFILE_INVALID', 'Chrome profile path is invalid');
-    }
+    initial = await lstat(CHROME_PROFILE_PARENT, { bigint: true });
+    canonical = await realpath(CHROME_PROFILE_PARENT);
+  } catch {
+    throw chromeError('CHROME_PROFILE_PARENT_INVALID', 'Chrome profile parent is unavailable');
+  }
+  if (canonical !== CHROME_PROFILE_PARENT
+      || initial.isSymbolicLink()
+      || !initial.isDirectory()
+      || initial.uid !== 0n
+      || (initial.mode & 0o7777n) !== 0o1777n) {
+    throw chromeError(
+      'CHROME_PROFILE_PARENT_INVALID',
+      'Chrome profile parent is not the canonical system temporary directory',
+    );
+  }
+  return initial;
+}
+
+async function createFreshProfile() {
+  const parentIdentity = await validatedProfileParent();
+  let suffix;
+  try {
+    suffix = randomBytes(16).toString('hex');
+  } catch {
+    throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile name could not be generated');
+  }
+  const profile = path.join(
+    CHROME_PROFILE_PARENT,
+    `${CHROME_PROFILE_PREFIX}${process.pid}-${suffix}`,
+  );
+  if (profile.length > 96) {
+    throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile path is too long');
   }
   try {
-    await mkdir(resolved, { mode: 0o700 });
+    await mkdir(profile, { mode: 0o700 });
   } catch {
     throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile could not be created');
   }
-  return resolved;
+
+  let created;
+  try {
+    created = await lstat(profile, { bigint: true });
+    const [currentParent, canonical] = await Promise.all([
+      validatedProfileParent(),
+      realpath(profile),
+    ]);
+    if (canonical !== profile
+        || !created.isDirectory()
+        || created.isSymbolicLink()
+        || created.uid !== BigInt(process.geteuid())
+        || (created.mode & 0o7777n) !== 0o700n
+        || !sameIdentity(parentIdentity, currentParent)) {
+      throw chromeError(
+        'CHROME_PROFILE_CREATE_FAILED',
+        'Chrome profile identity could not be verified',
+      );
+    }
+    return Object.freeze({ path: profile, identity: created, parentIdentity });
+  } catch (error) {
+    if (created?.isDirectory()
+        && !created.isSymbolicLink()
+        && created.uid === BigInt(process.geteuid())) {
+      await removeFreshProfile(
+        { path: profile, identity: created, parentIdentity },
+        { repairMode: true },
+      ).catch(() => {});
+    }
+    if (error instanceof SentinelError) throw error;
+    throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile identity could not be verified');
+  }
+}
+
+async function removeFreshProfile(record, { repairMode = false } = {}) {
+  try {
+    const [current, parent, canonical] = await Promise.all([
+      lstat(record.path, { bigint: true }),
+      validatedProfileParent(),
+      realpath(record.path),
+    ]);
+    if (canonical !== record.path
+        || current.isSymbolicLink()
+        || !current.isDirectory()
+        || current.uid !== BigInt(process.geteuid())
+        || !sameIdentity(current, record.identity)
+        || !sameIdentity(parent, record.parentIdentity)) {
+      throw chromeError('CHROME_PROFILE_CHANGED', 'Chrome profile identity changed before cleanup');
+    }
+    if ((current.mode & 0o7777n) !== 0o700n) {
+      if (!repairMode) {
+        throw chromeError('CHROME_PROFILE_CHANGED', 'Chrome profile mode changed before cleanup');
+      }
+      await chmod(record.path, 0o700);
+      const repaired = await lstat(record.path, { bigint: true });
+      if (repaired.isSymbolicLink()
+          || !repaired.isDirectory()
+          || repaired.uid !== BigInt(process.geteuid())
+          || (repaired.mode & 0o7777n) !== 0o700n
+          || !sameIdentity(repaired, record.identity)) {
+        throw chromeError('CHROME_PROFILE_CHANGED', 'Chrome profile identity changed before cleanup');
+      }
+    }
+    await rm(record.path, { recursive: true, force: false });
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    if (error?.code === 'ENOENT' || error?.code === 'ELOOP') {
+      throw chromeError('CHROME_PROFILE_CHANGED', 'Chrome profile identity changed before cleanup');
+    }
+    throw chromeError('CHROME_PROFILE_CLEANUP_FAILED', 'Chrome profile could not be removed');
+  }
+}
+
+async function createChromeEnvironment(profile) {
+  const config = path.join(profile, '.config');
+  const cache = path.join(profile, '.cache');
+  const temporary = path.join(profile, '.tmp');
+  const crashDumps = path.join(profile, '.crash-dumps');
+  try {
+    await Promise.all([
+      mkdir(config, { mode: 0o700 }),
+      mkdir(cache, { mode: 0o700 }),
+      mkdir(temporary, { mode: 0o700 }),
+      mkdir(crashDumps, { mode: 0o700 }),
+    ]);
+  } catch {
+    throw chromeError('CHROME_PROFILE_CREATE_FAILED', 'Chrome profile state could not be isolated');
+  }
+  return Object.freeze({
+    HOME: profile,
+    XDG_CONFIG_HOME: config,
+    XDG_CACHE_HOME: cache,
+    TMPDIR: temporary,
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    PATH: '/usr/bin:/bin',
+  });
+}
+
+async function profileCrashpadProcesses(profile, executable) {
+  if (process.platform !== 'linux') return [];
+  const currentUid = typeof process.geteuid === 'function' ? process.geteuid() : null;
+  if (currentUid === null) {
+    throw chromeError('CHROME_CRASHPAD_CONTAINMENT_FAILED', 'Crash reporter ownership is unavailable');
+  }
+  const executableDirectory = path.dirname(executable);
+  const entries = await readdir('/proc', { withFileTypes: true });
+  const matches = [];
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory() || !/^[0-9]+$/u.test(entry.name)) return;
+    const processRoot = path.join('/proc', entry.name);
+    try {
+      const command = await readFile(path.join(processRoot, 'cmdline'));
+      const arguments_ = command.toString('utf8').split('\0').filter((value) => value !== '');
+      const database = arguments_.find((value) => value.startsWith('--database='));
+      if (database === undefined
+          || !isWithin(profile, database.slice('--database='.length))) return;
+      const processIdentity = await lstat(processRoot);
+      const processExecutable = await realpath(path.join(processRoot, 'exe'));
+      if (processIdentity.uid !== currentUid
+          || path.dirname(processExecutable) !== executableDirectory
+          || !/^\w*chrome\w*_crashpad_handler$/u.test(path.basename(processExecutable))) {
+        throw chromeError(
+          'CHROME_CRASHPAD_CONTAINMENT_FAILED',
+          'Chrome crash reporter identity could not be verified',
+        );
+      }
+      matches.push(Number(entry.name));
+    } catch (error) {
+      if (error instanceof SentinelError) throw error;
+      if (!['ENOENT', 'ESRCH', 'EACCES'].includes(error?.code)) {
+        throw chromeError(
+          'CHROME_CRASHPAD_CONTAINMENT_FAILED',
+          'Chrome crash reporter could not be inspected',
+        );
+      }
+    }
+  }));
+  return matches;
+}
+
+async function containCrashpadHandlers(profile, executable) {
+  if (process.platform !== 'linux') return;
+  const deadline = Date.now() + 1500;
+  let quietSince = null;
+  while (Date.now() < deadline) {
+    const handlers = await profileCrashpadProcesses(profile, executable);
+    if (handlers.length === 0) {
+      if (quietSince === null) quietSince = Date.now();
+      if (Date.now() - quietSince >= 250) return;
+    } else {
+      quietSince = null;
+      for (const pid of handlers) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch (error) {
+          if (error?.code !== 'ESRCH') {
+            throw chromeError(
+              'CHROME_CRASHPAD_CONTAINMENT_FAILED',
+              'Chrome crash reporter could not be terminated',
+            );
+          }
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw chromeError(
+    'CHROME_CRASHPAD_CONTAINMENT_FAILED',
+    'Chrome crash reporter did not remain terminated',
+  );
 }
 
 function validatedDevToolsUrl(value) {
@@ -212,14 +418,37 @@ export async function launchChrome({
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
     throw chromeError('CHROME_TIMEOUT_INVALID', 'Chrome launch timeout is invalid');
   }
+  if (profileDir !== undefined) {
+    throw chromeError(
+      'CHROME_PROFILE_CALLER_PATH_FORBIDDEN',
+      'Chrome profile paths are generated only by Sentinel',
+    );
+  }
 
   const executable = await resolveChromeExecutable({ executablePath, targetRoot });
-  const profile = await createFreshProfile(profileDir);
+  const profileRecord = await createFreshProfile();
+  const profile = profileRecord.path;
+  let environmentProfile;
+  let environment;
+  try {
+    environmentProfile = await realpath(profile);
+    environment = await createChromeEnvironment(environmentProfile);
+  } catch (error) {
+    try {
+      await removeFreshProfile(profileRecord);
+    } catch {
+      // Preserve the primary environment-isolation failure.
+    }
+    throw error;
+  }
   const args = Object.freeze([
     '--headless=new',
     '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=0',
-    `--user-data-dir=${profile}`,
+    // Chrome passes this path to sandboxed descendants. Sentinel generated and
+    // identity-verified this exact private /tmp directory; artifact writes use
+    // their separately pinned run boundary.
+    `--user-data-dir=${environmentProfile}`,
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
@@ -228,28 +457,43 @@ export async function launchChrome({
     '--disable-extensions',
     '--disable-popup-blocking',
     '--disable-sync',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--noerrdialogs',
+    `--crash-dumps-dir=${path.join(environmentProfile, '.crash-dumps')}`,
     '--metrics-recording-only',
     '--disable-dev-shm-usage',
     'about:blank',
   ]);
-
   let child;
   try {
     child = spawn(executable, args, {
       detached: process.platform !== 'win32',
+      env: environment,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
   } catch {
-    await rm(profile, { recursive: true, force: true });
+    try {
+      await removeFreshProfile(profileRecord);
+    } catch {
+      // Preserve the primary process-spawn failure.
+    }
     throw chromeError('CHROME_LAUNCH_FAILED', 'Chrome could not be launched');
   }
 
-  const exitPromise = new Promise((resolve) => child.once('exit', resolve));
+  const exitPromise = new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode);
+    else {
+      child.once('exit', resolve);
+      child.once('error', resolve);
+    }
+  });
   let closed = false;
   const terminate = async () => {
     if (closed) return;
     closed = true;
     let terminated = false;
+    let terminationError = null;
     try {
       if (process.platform === 'win32') {
         await killWindowsProcessTree(child.pid);
@@ -267,23 +511,44 @@ export async function launchChrome({
         }
         await waitForExit(exitPromise, 2000);
       }
-    } catch {
+    } catch (error) {
+      terminationError = error;
       try {
         signalProcessGroup(child, 'SIGKILL');
-      } catch {
-        child.kill('SIGKILL');
+      } catch (signalError) {
+        try {
+          child.kill('SIGKILL');
+        } catch (killError) {
+          terminationError = killError ?? signalError;
+        }
       }
       terminated = process.platform === 'win32'
         ? await waitForExit(exitPromise, 2000)
         : await waitForProcessGroupExit(child.pid, 2000).catch(() => false);
       await waitForExit(exitPromise, 2000);
-    } finally {
-      child.stderr?.destroy();
-      await rm(profile, { recursive: true, force: true });
+      if (terminated) terminationError = null;
     }
+
+    child.stderr?.destroy();
+    let containmentError = null;
+    let profileCleanupError = null;
+    try {
+      await containCrashpadHandlers(environmentProfile, executable);
+    } catch (error) {
+      containmentError = error;
+    }
+    try {
+      await removeFreshProfile(profileRecord);
+    } catch (error) {
+      profileCleanupError = error;
+    }
+
     if (!terminated) {
       throw chromeError('CHROME_TERMINATION_FAILED', 'Chrome process tree did not terminate');
     }
+    if (terminationError !== null) throw terminationError;
+    if (containmentError !== null) throw containmentError;
+    if (profileCleanupError !== null) throw profileCleanupError;
   };
 
   try {
@@ -308,6 +573,7 @@ export async function launchChrome({
       timeout.unref?.();
       child.once('error', onError);
       child.once('exit', onExit);
+      if (child.exitCode !== null || child.signalCode !== null) onExit();
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk) => {
         stderr = `${stderr}${chunk}`.slice(-65_536);
@@ -318,14 +584,20 @@ export async function launchChrome({
       });
     });
 
+    await containCrashpadHandlers(environmentProfile, executable);
     return Object.freeze({
       pid: child.pid,
       args,
+      profileDir: profile,
       webSocketUrl,
       close: terminate,
     });
   } catch (error) {
-    await terminate();
+    try {
+      await terminate();
+    } catch {
+      // A launch/readiness failure is primary; cleanup failures must not replace it.
+    }
     throw error;
   }
 }
