@@ -164,10 +164,36 @@ jobs:
             try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
             await rm(profile, { recursive: true, force: true }).catch(() => {});
           }
-          await probe('replica          ', {});
-          await probe('detached:false   ', { detached: false });
-          await probe('stdio:inherit    ', { stdio: 'inherit' });
-          await probe('env:full         ', { env: process.env });
+          const { realpathSync } = await import('node:fs');
+          console.log(`BISECT[path] given=${chrome}`);
+          console.log(`BISECT[path] canonical=${realpathSync(chrome)}`);
+          await probe('replica-symlink  ', {});
+          const canonical = realpathSync(chrome);
+          async function probeCanonical(label) {
+            const original = chrome;
+            // probe() closes over `chrome`; spawn the canonical path instead.
+            const child = await import('node:child_process');
+            const { mkdtemp: mkTemp, mkdir: mkDir, rm: rmDir } = await import('node:fs/promises');
+            const profile = await mkTemp('/tmp/.chrome-canon-');
+            for (const d of ['.config', '.cache', '.tmp', '.crash-dumps']) {
+              await mkDir(`${profile}/${d}`, { mode: 0o700 });
+            }
+            const env = { HOME: profile, XDG_CONFIG_HOME: `${profile}/.config`,
+              XDG_CACHE_HOME: `${profile}/.cache`, TMPDIR: `${profile}/.tmp`,
+              LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' };
+            const proc = child.spawn(canonical, ['--headless=new',
+              '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+              `--user-data-dir=${profile}`, '--no-first-run', '--disable-dev-shm-usage',
+              'about:blank'], { detached: true, env, stdio: ['ignore', 'ignore', 'pipe'] });
+            const verdict = await new Promise((resolve) => {
+              const timer = setTimeout(() => resolve('ALIVE'), 6000);
+              proc.once('exit', (code, signal) => { clearTimeout(timer); resolve(`DIED code=${code} signal=${signal}`); });
+            });
+            console.log(`BISECT[${label}]: ${verdict}`);
+            try { process.kill(-proc.pid, 'SIGKILL'); } catch { try { proc.kill('SIGKILL'); } catch {} }
+            await rmDir(profile, { recursive: true, force: true }).catch(() => {});
+          }
+          await probeCanonical('canonical-path   ');
           NODE
 
       - name: Run complete test suite with mandatory Chrome
