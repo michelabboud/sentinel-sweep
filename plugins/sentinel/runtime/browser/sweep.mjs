@@ -691,12 +691,21 @@ async function runAttempt({
         return;
       }
       if (targetType === 'service_worker') {
+        const location = describeTargetLocation(targetInfo.url);
+        // Chrome ships component extensions whose MV3 service workers spawn
+        // inside every session (CI Chrome-for-Testing 148:
+        // chrome-extension:/thunk.js — and closing it makes Chrome respawn it
+        // on the next navigation, echoing one false finding per route). A web
+        // page cannot create a chrome-extension: worker, so these are browser
+        // infrastructure, not target behavior: leave them untouched. Unknown
+        // or unparseable locations stay blocked and recorded — fail closed.
+        if (location.startsWith('chrome-extension:') || location.startsWith('chrome:')) return;
         recordOnce(records, {
           category: 'security', severity: 'critical', outcome: 'fail',
           reasonCode: 'SERVICE_WORKER_BLOCKED',
           // Protocol + pathname only: enough to tell an application worker
           // from a browser-internal target, with no origin/port disclosure.
-          message: `Browser closed a service-worker target before it could execute (${describeTargetLocation(targetInfo.url)})`,
+          message: `Browser closed a service-worker target before it could execute (${location})`,
           expected: 'no page-initiated service workers',
           actual: 'service worker target attempted',
         });

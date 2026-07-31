@@ -990,7 +990,10 @@ test('cleans up a timed-out attempt and continues with the next route', async (t
     targetBoundary,
   });
 
-  assert.ok(performance.now() - startedAt < 2500, JSON.stringify(observations));
+  // A hang guard, not a latency benchmark: the route timeout is ~600ms, so a
+  // sweep stuck in cleanup takes far longer than 10s, while a loaded host
+  // (concurrent test files, CI runners) can legitimately exceed 2.5s.
+  assert.ok(performance.now() - startedAt < 10_000, JSON.stringify(observations));
   assert.equal(
     observationFor(observations, 'route:/slow-navigation', 'BROWSER_TIMEOUT').outcome,
     'fail',
